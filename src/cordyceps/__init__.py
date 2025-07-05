@@ -4,6 +4,5 @@ from .cordyceps import (
     Transition,
     PetriNet,
     Interface,
-    ArcBasedTransition,
     Arc,
 )

@@ -3,7 +3,7 @@ Pytest-based test for guard functionality.
 """
 
 import pytest
-from cordyceps import Token, Place, ArcBasedTransition, PetriNet, Arc
+from cordyceps import Token, Place, Transition, PetriNet, Arc
 
 class TestToken(Token):
     def __init__(self, data):
@@ -12,7 +12,7 @@ class TestToken(Token):
 class TestPlace(Place):
     pass
 
-class TestTransition(ArcBasedTransition):
+class TestTransition(Transition):
     INPUT_ARCS = {"input": Arc(TestPlace)}
     OUTPUT_ARCS = {}
     def fire(self, ctx, consumed, produce):
@@ -22,7 +22,7 @@ class TestTransition(ArcBasedTransition):
 class TestNet(PetriNet):
     class TestPlace(TestPlace):
         pass
-    class TestTransition(ArcBasedTransition):
+    class TestTransition(Transition):
         INPUT_ARCS = {}
         OUTPUT_ARCS = {}
         def __init__(self):

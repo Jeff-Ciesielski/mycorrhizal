@@ -8,7 +8,7 @@ This example demonstrates:
 3. Timer interface with proper token-based cancellation
 """
 
-from cordyceps import Token, Place, ArcBasedTransition, Interface, PetriNet, Arc
+from cordyceps import Token, Place, Transition, Interface, PetriNet, Arc
 import threading
 import time
 
@@ -69,7 +69,7 @@ class TimerInterface(Interface):
     class CancelledPlace(Place): pass
     class ExternalTimerPlace(Place): pass  # IO boundary
     
-    class StartTimerTransition(ArcBasedTransition):
+    class StartTimerTransition(Transition):
         def input_arcs(self):
             return {"request": Arc(TimerInterface.RequestPlace)}
         
@@ -87,7 +87,7 @@ class TimerInterface(Interface):
             # Send to external timer system
             produce.key["external"]([request])
     
-    class CancelTimerTransition(ArcBasedTransition):
+    class CancelTimerTransition(Transition):
         def input_arcs(self):
             return {"active": Arc(TimerInterface.ActivePlace), "cancel": Arc(TimerInterface.CancelPlace)}
         
@@ -112,7 +112,7 @@ class TimerInterface(Interface):
             cancelled = TimerCancelledToken(timer.timer_id)
             produce.key["cancelled"]([cancelled])
     
-    class TimeoutTransition(ArcBasedTransition):
+    class TimeoutTransition(Transition):
         def input_arcs(self):
             return {"active": Arc(TimerInterface.ActivePlace)}
         
@@ -139,7 +139,7 @@ class TimerInterface(Interface):
 class NetworkInterface(Interface):
     class OutputPlace(Place): pass  # IO boundary
     
-    class SendMessageTransition(ArcBasedTransition):
+    class SendMessageTransition(Transition):
         def input_arcs(self):
             return [Arc(Place)]  # Will be fixed by parent system
         
@@ -175,7 +175,7 @@ class RobotSystem(PetriNet):
     class CommandPlace(Place): pass
     class StatusPlace(Place): pass
     
-    class ProcessCommandTransition(ArcBasedTransition):
+    class ProcessCommandTransition(Transition):
         def input_arcs(self):
             return {"command": Arc(RobotSystem.CommandPlace)}
         

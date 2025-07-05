@@ -424,181 +424,69 @@ class OutputMultiArcProducer:
 class Transition(ABC):
     """
     Base class for all transitions in the Petri net system.
-    
     Transitions consume tokens from input places and produce tokens to output places
     when their conditions are met. They encapsulate the business logic of the system.
+    Now also provides declarative arc definitions and automatic token handling.
     """
-    
     PRIORITY: int = 0  # Higher values fire first
-    
+
     def __init__(self):
         self._fire_count = 0
         self._last_fired = None
-    
-    @property
-    def fire_count(self) -> int:
-        """Returns the number of times this transition has fired."""
-        return self._fire_count
-    
-    @property
-    def last_fired(self) -> Optional[datetime]:
-        """Returns the timestamp when this transition last fired."""
-        return self._last_fired
-    
-    @abstractmethod
-    def can_fire(self, ctx: 'PetriNetContext') -> bool:
-        """
-        Determines if this transition can fire given the current net state.
-        
-        Args:
-            ctx: The Petri net context providing access to places and tokens
-            
-        Returns:
-            True if the transition can fire, False otherwise
-        """
-        pass
-    
-    @abstractmethod
-    def fire(self, ctx: 'PetriNetContext'):
-        """
-        Executes the transition logic.
-        
-        Args:
-            ctx: The Petri net context providing access to places and tokens
-        """
-        pass
-    
-    def _execute_fire(self, ctx: 'PetriNetContext'):
-        """
-        Internal method that handles the firing mechanics.
-        """
-        self.on_before_fire(ctx)
-        self.fire(ctx)
-        self._fire_count += 1
-        self._last_fired = datetime.now()
-        self.on_after_fire(ctx)
-    
-    def on_before_fire(self, ctx: 'PetriNetContext'):
-        """Called just before the transition fires."""
-        pass
-    
-    def on_after_fire(self, ctx: 'PetriNetContext'):
-        """Called just after the transition fires."""
-        pass
-    
-    def __repr__(self):
-        return f"{self.__class__.__name__}(fired={self.fire_count})"
-
-
-class ArcBasedTransition(Transition):
-    """Transition with declarative arc definitions and automatic token handling."""
-    
-    def __init__(self):
-        super().__init__()
         self._peeked_tokens = {}      # arc_label -> List[Token]
         self._consumed_tokens = {}    # arc_label -> List[Token]
-    
+
     def input_arcs(self):
         """
         Override this method to define input arcs.
-        
         Can return either:
         - Dict[str, Arc]: {"label": Arc(Place)}
         - List[Arc]: [Arc(Place1), Arc(Place2)]
         """
         return {}
-    
+
     def output_arcs(self):
         """
         Override this method to define output arcs.
-        
         Can return either:
         - Dict[str, Arc]: {"label": Arc(Place)}
         - List[Arc]: [Arc(Place1), Arc(Place2)]
         """
         return {}
-    
+
     def _get_input_arcs(self):
-        """Get input arcs, calling the function if needed."""
         return self.input_arcs()
-    
+
     def _get_output_arcs(self):
-        """Get output arcs, calling the function if needed."""
         return self.output_arcs()
-    
-    def peek(self, arc_label: str) -> List[Token]:
-        """
-        Peek at tokens for the specified arc label without consuming them.
-        
-        Args:
-            arc_label: The arc identifier (dict key or index as string)
-            
-        Returns:
-            List of tokens currently available for this arc
-        """
+
+    def peek(self, arc_label: str) -> list:
         if arc_label not in self._peeked_tokens:
             try:
                 arc = self._get_arc_by_label(arc_label, self._get_input_arcs())
                 place = self._get_place_for_arc(arc)
                 self._peeked_tokens[arc_label] = place.tokens.copy()
-            except Exception as e:
+            except Exception:
                 self._peeked_tokens[arc_label] = []
         return self._peeked_tokens[arc_label]
-    
-    def consume(self, arc_label: str, token: Token):
-        """
-        Mark a specific token for consumption during guard evaluation.
-        
-        Args:
-            arc_label: The arc identifier
-            token: The specific token to consume
-        """
+
+    def consume(self, arc_label: str, token):
         if arc_label not in self._consumed_tokens:
             self._consumed_tokens[arc_label] = []
-        
-        # Verify token is actually available
         available_tokens = self.peek(arc_label)
         if token not in available_tokens:
             raise InsufficientTokens(f"Token {token} not available for arc {arc_label}")
-        
         self._consumed_tokens[arc_label].append(token)
-    
-    def consume_matching(self, arc_label: str, predicate) -> Token:
-        """
-        Consume the first token matching the given predicate.
-        
-        Args:
-            arc_label: The arc identifier
-            predicate: Function that takes a token and returns True if it should be consumed
-            
-        Returns:
-            The consumed token
-            
-        Raises:
-            InsufficientTokens: If no matching token is found
-        """
+
+    def consume_matching(self, arc_label: str, predicate) -> object:
         available_tokens = self.peek(arc_label)
         for token in available_tokens:
             if predicate(token):
                 self.consume(arc_label, token)
                 return token
         raise InsufficientTokens(f"No matching token for arc {arc_label}")
-    
+
     def consume_matching_pair(self, arc1_label: str, arc2_label: str, matcher) -> tuple:
-        """
-        Helper for consuming matching token pairs from two different arcs.
-        
-        Args:
-            arc1_label: First arc identifier
-            arc2_label: Second arc identifier
-            matcher: Function that takes (token1, token2) and returns True if they match
-            
-        Returns:
-            Tuple of (token1, token2) that were consumed
-            
-        Raises:
-            InsufficientTokens: If no matching pair is found
-        """
         for token1 in self.peek(arc1_label):
             for token2 in self.peek(arc2_label):
                 if matcher(token1, token2):
@@ -606,155 +494,106 @@ class ArcBasedTransition(Transition):
                     self.consume(arc2_label, token2)
                     return (token1, token2)
         raise InsufficientTokens(f"No matching pair found between {arc1_label} and {arc2_label}")
-    
+
     def _clear_peek_consume_state(self):
-        """Clear internal peek/consume state."""
         self._peeked_tokens.clear()
         self._consumed_tokens.clear()
-    
+
     def _get_arc_by_label(self, label: str, arcs):
-        """Get arc by label from either dict or list format."""
         if isinstance(arcs, dict):
             return arcs[label]
-        else:  # list format
+        else:
             try:
                 index = int(label)
                 return arcs[index]
             except (ValueError, IndexError):
                 raise KeyError(f"Invalid arc label: {label}")
-    
-    def _get_place_for_arc(self, arc: Arc):
-        """Get the place instance for an arc."""
-        # This will be filled in with proper implementation
-        # For now, assume we have access to the context
+
+    def _get_place_for_arc(self, arc):
         return self._current_ctx._net._get_place(arc.place)
-    
+
     def _normalize_arcs_for_processing(self, arcs):
-        """Convert list or dict of arcs to consistent dict format for processing."""
         if isinstance(arcs, list):
             return {str(i): arc for i, arc in enumerate(arcs)}
         return arcs
-    
-    def can_fire(self, ctx) -> bool:
-        """Legacy method for compatibility with Transition base class."""
-        return self._guard(ctx)
-    
+
+    @property
+    def fire_count(self) -> int:
+        return self._fire_count
+
+    @property
+    def last_fired(self) -> Optional['datetime']:
+        return self._last_fired
+
     def fire(self, ctx):
-        """Legacy method for compatibility with Transition base class."""
-        # This will be overridden by _execute_fire
         pass
-    
-    def _guard(self, ctx):
-        """
-        Internal guard method that handles context management and calls user guard.
-        
-        This ensures _current_ctx is always set properly before calling the user's
-        guard() method, regardless of whether they override it or not.
-        """
+
+    def can_fire(self, ctx):
         self._current_ctx = ctx
-        # Clear any previous peek state
         self._clear_peek_consume_state()
         try:
             return self.guard(ctx)
         finally:
-            # Keep context available for fire() method if transition will fire
             pass
-    
+
     def guard(self, ctx):
-        """
-        Determines if this transition can fire and performs selective consumption.
-        
-        Override this method to implement custom guard logic with selective
-        token consumption. Use peek(), consume(), and consume_matching() methods
-        to examine and selectively consume tokens.
-        
-        Default implementation checks if all input arcs have sufficient tokens.
-        
-        Args:
-            ctx: The Petri net context
-            
-        Returns:
-            True if the transition can fire, False otherwise
-        """
-        # Default: check if all input arcs have sufficient tokens
         input_arcs = self._normalize_arcs_for_processing(self._get_input_arcs())
         for label, arc in input_arcs.items():
             if len(self.peek(label)) < arc.weight:
                 return False
         return True
-    
+
     def _execute_fire(self, ctx):
-        """Execute fire with automatic token consumption and state management."""
-        # Store context for arc resolution
         self._current_ctx = ctx
-        
         try:
-            # Clear any previous state
             self._clear_peek_consume_state()
-            
-            # Check if transition can fire (this may consume tokens selectively)
-            if not self._guard(ctx):
+            if not self.can_fire(ctx):
                 return False
-            
-            # Actually consume tokens from places
             consumed_for_fire = {}
             for arc_label, tokens in self._consumed_tokens.items():
                 arc = self._get_arc_by_label(arc_label, self._get_input_arcs())
                 place = self._get_place_for_arc(arc)
                 consumed_for_fire[arc_label] = []
                 for token in tokens:
-                    # Remove from actual place
                     if token in place._tokens:
                         place._tokens.remove(token)
                         token.on_consumed()
                         consumed_for_fire[arc_label].append(token)
-            
-            # If no selective consumption happened, do default consumption
             if not self._consumed_tokens:
                 consumed_for_fire = self._default_consume(ctx)
-            
-            # Create output producer
             output_producer = OutputProducer(ctx, self._get_output_arcs())
-            
-            # Call fire with consumed tokens
             self.on_before_fire(ctx)
             self.fire(ctx, consumed_for_fire, output_producer)
             self._fire_count += 1
             self._last_fired = datetime.now()
             self.on_after_fire(ctx)
-            
             return True
-            
         finally:
-            # Always clean up state, even if exceptions occur
             self._clear_peek_consume_state()
             self._current_ctx = None
-    
+
     def _default_consume(self, ctx):
-        """Default token consumption when no selective consumption occurred."""
         input_arcs = self._normalize_arcs_for_processing(self._get_input_arcs())
         consumed_tokens_raw = {}
-        
         for label, arc in input_arcs.items():
             tokens = []
             for _ in range(arc.weight):
                 token = ctx.consume_token(arc.place, arc.token_type)
                 tokens.append(token)
             consumed_tokens_raw[label] = tokens
-        
         return consumed_tokens_raw
-    
-    def fire(self, ctx, consumed_tokens: Dict[str, List[Token]], produce: OutputProducer):
-        """
-        User implements this - receives consumed tokens and flexible output producer.
-        
-        Args:
-            ctx: Petri net context
-            consumed_tokens: Dict mapping arc labels to lists of consumed tokens
-            produce: Output producer for sending tokens to output arcs
-        """
+
+    def fire(self, ctx, consumed_tokens: dict, produce):
         pass
 
+    def on_before_fire(self, ctx):
+        pass
+
+    def on_after_fire(self, ctx):
+        pass
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(fired={self.fire_count})"
 
 # Context and Messaging
 @dataclass
@@ -1087,15 +926,9 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         # Find fireable transitions
         fireable_transitions = []
         for transition in self._transitions:
-            try:
-                if hasattr(transition, '_guard'):
-                    # Use _guard method for ArcBasedTransitions (handles context internally)
-                    if transition._guard(self._ctx):
-                        fireable_transitions.append(transition)
-                else:
-                    # Use can_fire for basic transitions
-                    if transition.can_fire(self._ctx):
-                        fireable_transitions.append(transition)
+            try:               
+                if transition.can_fire(self._ctx):
+                    fireable_transitions.append(transition)
             except Exception as e:
                 self.log(f"Error checking if {transition} can fire: {e}")
                 # Clear any partial context that might have been set
@@ -1248,8 +1081,8 @@ class PetriNet(metaclass=DeclarativeABCMeta):
             # Use rectangle syntax for transitions
             lines.append(f'    {transition_name}["{transition_name}<br/>(fired {fire_count}x)"]')
             
-            # Add connections if this is an ArcBasedTransition
-            if isinstance(transition, ArcBasedTransition):
+            # Add connections if this is a Transition
+            if isinstance(transition, Transition):
                 # Input arcs
                 input_arcs = transition._normalize_arcs_for_processing(transition.input_arcs())
                 for label, arc in input_arcs.items():
