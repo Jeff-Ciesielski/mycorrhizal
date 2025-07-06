@@ -667,21 +667,23 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         self._transitions: List[Transition] = []
         self._io_input_places: List[IOInputPlace] = []
         self._io_output_places: List[IOOutputPlace] = []
-        
+        # Place -> Transition (input) mapping for efficient firing
+        self._place_to_transition: Dict[Place, Transition] = {}
+
         self._log_fn = log_fn or (lambda x: None)
-        
+
         self._is_running = False
         self._is_finished = False
         self._firing_log = []
-        
+
         # Event handling
         self._transition_check_queue = asyncio.Queue()
         self._running_tasks = set()
-        
+
         # Tracking for qualified names and interface boundaries
         self._qualified_name_registry: Dict[str, Any] = {}
         self._interface_hierarchy: Dict[str, List[str]] = {}
-        
+
         self._auto_build()
     
     def _auto_build(self):
@@ -837,43 +839,55 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         return False
     
     def _instantiate_components(self):
-        """Instantiate all registered components."""
+        """Instantiate all registered components and build place->transition mapping."""
         # Instantiate places
         for qualified_name, component in self._qualified_name_registry.items():
             if inspect.isclass(component) and issubclass(component, Place):
                 place_instance = component()
                 place_instance._set_qualified_name(qualified_name)
                 place_instance._attach_to_net(self)
-                
+
                 # Track IO places separately
                 if isinstance(place_instance, IOInputPlace):
                     self._io_input_places.append(place_instance)
                 elif isinstance(place_instance, IOOutputPlace):
                     self._io_output_places.append(place_instance)
-                
+
                 self._places_by_type[component] = place_instance
                 self._places_by_qualified_name[qualified_name] = place_instance
                 self.log(f"Added place: {qualified_name}")
-        
+
         # Instantiate transitions
         for qualified_name, component in self._qualified_name_registry.items():
             if inspect.isclass(component) and issubclass(component, Transition):
                 transition_instance = component()
                 transition_instance._set_qualified_name(qualified_name)
-                
+
                 # Find interface path for boundary checking
                 interface_path = None
                 for interface_name, components in self._interface_hierarchy.items():
                     if qualified_name in components:
                         interface_path = interface_name
                         break
-                
+
                 if interface_path:
                     transition_instance._set_interface_path(interface_path)
-                
+
                 transition_instance._attach_to_net(self)
                 self._transitions.append(transition_instance)
                 self.log(f"Added transition: {qualified_name}")
+
+        # Build place->transition mapping (enforce only one transition per input place)
+        for transition in self._transitions:
+            input_arcs = transition._normalize_arcs(transition.input_arcs())
+            for label, arc in input_arcs.items():
+                place = self._resolve_place_from_arc(arc)
+                if place in self._place_to_transition:
+                    raise ArcValidationError(
+                        f"Place '{place.qualified_name}' is used as input for more than one transition: "
+                        f"{self._place_to_transition[place].qualified_name} and {transition.qualified_name}"
+                    )
+                self._place_to_transition[place] = transition
     
     def log(self, message: str):
         """Log a message."""

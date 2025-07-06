@@ -540,12 +540,15 @@ class TestInterfaces:
             class SubPlace(Place):
                 pass
             
+            class OtherSubPlace(Place):
+                pass
+            
             class SubTransition(Transition):
                 def input_arcs(self):
                     return {"input": Arc(TestInterfaces.NestedInterface.SubInterface.SubPlace)}
                 
                 def output_arcs(self):
-                    return {}
+                    return {'output': Arc(TestInterfaces.NestedInterface.SubInterface.OtherSubPlace)}
                 
                 async def on_fire(self, consumed_tokens):
                     return {}
@@ -555,7 +558,7 @@ class TestInterfaces:
         
         class MainTransition(Transition):
             def input_arcs(self):
-                return {"sub": Arc(TestInterfaces.NestedInterface.SubInterface.SubPlace)}
+                return {"sub": Arc(TestInterfaces.NestedInterface.SubInterface.OtherSubPlace)}
             
             def output_arcs(self):
                 return {"main": Arc(TestInterfaces.NestedInterface.MainPlace)}
