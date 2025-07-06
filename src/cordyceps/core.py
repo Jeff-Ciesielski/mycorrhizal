@@ -920,19 +920,19 @@ class PetriNet(metaclass=DeclarativeABCMeta):
     async def _on_token_added(self, place: Place, token: Token):
         """Called when a token is added to any place - triggers transition checking."""
         self.log(f"Token added to {place.qualified_name}: {token}")
-        
-        # Queue transition checking
-        await self._transition_check_queue.put(('token_added', place, token))
+        # Only queue the transition that uses this place as input, if any
+        transition = self._place_to_transition.get(place)
+        if transition is not None:
+            await self._transition_check_queue.put(transition)
     
     async def _on_token_removed(self, place: Place, token: Token):
         """Called when a token is removed from any place."""
         self.log(f"Token removed from {place.qualified_name}: {token}")
     
-    async def _check_and_fire_transitions(self):
-        """Check all transitions and fire those that can fire."""
+    async def _check_and_fire_transitions(self, transitions):
+        """Check the given transitions and fire those that can fire."""
         # Sort transitions by priority
-        sorted_transitions = sorted(self._transitions, key=lambda t: t.PRIORITY, reverse=True)
-        
+        sorted_transitions = sorted(transitions, key=lambda t: t.PRIORITY, reverse=True)
         for transition in sorted_transitions:
             try:
                 if await transition.can_fire():
@@ -940,8 +940,6 @@ class PetriNet(metaclass=DeclarativeABCMeta):
                     if fired:
                         self.log(f"Fired transition: {transition.qualified_name}")
                         self._firing_log.append((datetime.now(), transition.qualified_name))
-                        # After firing, check again (more tokens might enable more transitions)
-                        await self._transition_check_queue.put(('transition_fired', transition))
             except Exception as e:
                 self.log(f"Error in transition {transition.qualified_name}: {e}")
     
@@ -950,18 +948,13 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         while self._is_running:
             try:
                 # Wait for events
-                event = await asyncio.wait_for(self._transition_check_queue.get(), timeout=0.1)
-                
+                transition = await asyncio.wait_for(self._transition_check_queue.get(), timeout=0.1)
                 # Process the event
-                event_type = event[0]
-                if event_type in ('token_added', 'transition_fired'):
-                    await self._check_and_fire_transitions()
-                
+                await self._check_and_fire_transitions([transition])
                 # Check termination conditions
                 if self._should_terminate():
                     self._is_finished = True
                     break
-                    
             except asyncio.TimeoutError:
                 # No events - check if we should terminate
                 if self._should_terminate():
@@ -971,7 +964,6 @@ class PetriNet(metaclass=DeclarativeABCMeta):
             except Exception as e:
                 self.log(f"Error in event loop: {e}")
                 break
-        
         self.log("Event loop finished")
     
     def _should_terminate(self) -> bool:
