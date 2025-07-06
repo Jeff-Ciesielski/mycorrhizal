@@ -46,6 +46,16 @@ class ArcValidationError(Exception):
     pass
 
 
+class InterfaceBoundaryViolation(Exception):
+    """Raised when a transition tries to access places outside its interface boundary."""
+    pass
+
+
+class QualifiedNameConflict(Exception):
+    """Raised when there are conflicts in qualified names."""
+    pass
+
+
 # Core Token System
 class Token(ABC):
     """
@@ -91,10 +101,20 @@ class Place(ABC):
         self._total_tokens_processed = 0
         self._net: Optional['PetriNet'] = None
         self._token_added_callbacks: List[Callable] = []
+        self._qualified_name: Optional[str] = None
         
     def _attach_to_net(self, net: 'PetriNet'):
         """Called when place is attached to a net."""
         self._net = net
+        
+    def _set_qualified_name(self, qualified_name: str):
+        """Set the fully qualified name for this place."""
+        self._qualified_name = qualified_name
+        
+    @property
+    def qualified_name(self) -> str:
+        """Get the fully qualified name for this place."""
+        return self._qualified_name or self.__class__.__name__
         
     @property
     def token_count(self) -> int:
@@ -134,9 +154,9 @@ class Place(ABC):
         """
         if not self.can_accept_token(token):
             if self.is_full:
-                raise Exception(f"Place {self.__class__.__name__} is at capacity")
+                raise Exception(f"Place {self.qualified_name} is at capacity")
             else:
-                raise InvalidTokenType(f"Place {self.__class__.__name__} cannot accept token type {type(token)}")
+                raise InvalidTokenType(f"Place {self.qualified_name} cannot accept token type {type(token)}")
         
         self._tokens.append(token)
         self._total_tokens_processed += 1
@@ -151,7 +171,7 @@ class Place(ABC):
     async def remove_token(self, token_type: Type[Token] = None) -> Token:
         """Remove and return a token from this place."""
         if self.is_empty:
-            raise InsufficientTokens(f"No tokens available in place {self.__class__.__name__}")
+            raise InsufficientTokens(f"No tokens available in place {self.qualified_name}")
         
         if token_type is None:
             token = self._tokens.pop(0)  # FIFO by default
@@ -162,7 +182,7 @@ class Place(ABC):
                     token = self._tokens.pop(i)
                     break
             else:
-                raise InsufficientTokens(f"No tokens of type {token_type.__name__} in place {self.__class__.__name__}")
+                raise InsufficientTokens(f"No tokens of type {token_type.__name__} in place {self.qualified_name}")
         
         await token.on_consumed()
         await self.on_token_removed(token)
@@ -202,7 +222,7 @@ class Place(ABC):
         pass
     
     def __repr__(self):
-        return f"{self.__class__.__name__}(tokens={self.token_count})"
+        return f"{self.qualified_name}(tokens={self.token_count})"
 
 
 class IOOutputPlace(Place):
@@ -237,7 +257,7 @@ class IOOutputPlace(Place):
                 
         except Exception as e:
             # Handle unexpected errors
-            self.log(f"Unexpected error in IO output place {self.__class__.__name__}: {e}")
+            self.log(f"Unexpected error in IO output place {self.qualified_name}: {e}")
             await self.on_io_error(token, None)
     
     async def on_token(self, token: Token) -> Optional[Token]:
@@ -326,7 +346,7 @@ class IOInputPlace(Place):
                 except asyncio.CancelledError:
                     break
                 except Exception as e:
-                    self.log(f"Error in input loop for {self.__class__.__name__}: {e}")
+                    self.log(f"Error in input loop for {self.qualified_name}: {e}")
                     await asyncio.sleep(0.1)  # Back off on error
             
             await self.on_input_stop()
@@ -369,16 +389,19 @@ class IOInputPlace(Place):
 @dataclass
 class Arc:
     """Represents a connection between a place and transition with metadata."""
-    place: Type[Place]
+    place: Union[Type[Place], str]  # Allow string references for deferred resolution
     weight: int = 1
     token_type: Optional[Type[Token]] = None
     label: Optional[str] = None
     
     def __post_init__(self):
-        if self.label is None and self.place is not None:
-            self.label = self.place.__name__.lower()
-        elif self.label is None:
-            self.label = "unnamed_arc"
+        if self.label is None:
+            if isinstance(self.place, str):
+                self.label = self.place.split('.')[-1].lower()
+            elif self.place is not None:
+                self.label = self.place.__name__.lower()
+            else:
+                self.label = "unnamed_arc"
 
 
 # Core Transition System
@@ -395,10 +418,25 @@ class Transition(ABC):
         self._fire_count = 0
         self._last_fired = None
         self._net: Optional['PetriNet'] = None
+        self._qualified_name: Optional[str] = None
+        self._interface_path: Optional[str] = None
 
     def _attach_to_net(self, net: 'PetriNet'):
         """Called when transition is attached to a net."""
         self._net = net
+        
+    def _set_qualified_name(self, qualified_name: str):
+        """Set the fully qualified name for this transition."""
+        self._qualified_name = qualified_name
+        
+    def _set_interface_path(self, interface_path: str):
+        """Set the interface path for boundary checking."""
+        self._interface_path = interface_path
+        
+    @property
+    def qualified_name(self) -> str:
+        """Get the fully qualified name for this transition."""
+        return self._qualified_name or self.__class__.__name__
 
     def input_arcs(self):
         """Override this method to define input arcs."""
@@ -427,7 +465,7 @@ class Transition(ABC):
         input_arcs = self._normalize_arcs(self.input_arcs())
         
         for label, arc in input_arcs.items():
-            place = self._net._get_place(arc.place)
+            place = self._net._resolve_place_from_arc(arc)
             if place.count_tokens(arc.token_type) < arc.weight:
                 return False
         
@@ -447,7 +485,7 @@ class Transition(ABC):
         consumed_tokens = {}
         
         for label, arc in input_arcs.items():
-            place = self._net._get_place(arc.place)
+            place = self._net._resolve_place_from_arc(arc)
             tokens = []
             for _ in range(arc.weight):
                 token = await place.remove_token(arc.token_type)
@@ -464,7 +502,7 @@ class Transition(ABC):
             for label, tokens in produced_tokens.items():
                 if label in output_arcs:
                     arc = output_arcs[label]
-                    place = self._net._get_place(arc.place)
+                    place = self._net._resolve_place_from_arc(arc)
                     for token in tokens:
                         await place.add_token(token)
         
@@ -510,7 +548,7 @@ class Transition(ABC):
         return arcs
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(fired={self.fire_count})"
+        return f"{self.qualified_name}(fired={self.fire_count})"
 
 
 # Declarative Composition System
@@ -528,6 +566,7 @@ class DeclarativeMeta(type):
         for attr_name, attr_value in namespace.items():
             if inspect.isclass(attr_value):
                 attr_value._outer_class = cls
+                attr_value._attr_name = attr_name
                 
                 if issubclass(attr_value, Place):
                     cls._discovered_places.append(attr_value)
@@ -557,13 +596,6 @@ class Interface(ABC, metaclass=DeclarativeABCMeta):
     """Base class for interface nets using declarative composition."""
     
     def __init__(self):
-        self._auto_build()
-    
-    def _auto_build(self):
-        if hasattr(self, 'build'):
-            self.build()
-    
-    def build(self):
         pass
     
     def get_all_places(self) -> List[Type[Place]]:
@@ -585,7 +617,8 @@ class PetriNet(metaclass=DeclarativeABCMeta):
     """
     
     def __init__(self, log_fn=print):
-        self._places: Dict[Type[Place], Place] = {}
+        self._places_by_type: Dict[Type[Place], Place] = {}
+        self._places_by_qualified_name: Dict[str, Place] = {}
         self._transitions: List[Transition] = []
         self._io_input_places: List[IOInputPlace] = []
         self._io_output_places: List[IOOutputPlace] = []
@@ -600,101 +633,247 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         self._transition_check_queue = asyncio.Queue()
         self._running_tasks = set()
         
+        # Tracking for qualified names and interface boundaries
+        self._qualified_name_registry: Dict[str, Any] = {}
+        self._interface_hierarchy: Dict[str, List[str]] = {}
+        
         self._auto_build()
     
     def _auto_build(self):
         """Automatically build the net from discovered components."""
-        # Add all discovered interfaces first
-        for interface_class in self._discovered_interfaces:
-            self.add_interface(interface_class)
+        # First pass: register all components with qualified names
+        self._register_components("", self.__class__)
         
-        # Add all discovered places
-        for place_class in self._discovered_places:
-            self.add_place(place_class)
+        # Second pass: validate interface boundaries
+        self._validate_interface_boundaries()
         
-        # Add all discovered transitions
-        for transition_class in self._discovered_transitions:
-            self.add_transition(transition_class())
-        
-        # Custom build logic if needed
-        if hasattr(self, 'build'):
-            self.build()
+        # Third pass: instantiate everything
+        self._instantiate_components()
     
-    def build(self):
-        """Optional - only override if you need custom build logic."""
-        pass
+    def _register_components(self, prefix: str, cls: Type):
+        """Register components with their qualified names."""
+        # Register discovered interfaces
+        for interface_class in getattr(cls, '_discovered_interfaces', []):
+            interface_name = getattr(interface_class, '_attr_name', interface_class.__name__)
+            qualified_name = f"{prefix}.{interface_name}" if prefix else interface_name
+            
+            if qualified_name in self._qualified_name_registry:
+                raise QualifiedNameConflict(f"Qualified name '{qualified_name}' already exists")
+            
+            self._qualified_name_registry[qualified_name] = interface_class
+            self._interface_hierarchy[qualified_name] = []
+            
+            # Recursively register nested components
+            self._register_components(qualified_name, interface_class)
+        
+        # Register discovered places
+        for place_class in getattr(cls, '_discovered_places', []):
+            place_name = getattr(place_class, '_attr_name', place_class.__name__)
+            qualified_name = f"{prefix}.{place_name}" if prefix else place_name
+            
+            if qualified_name in self._qualified_name_registry:
+                raise QualifiedNameConflict(f"Qualified name '{qualified_name}' already exists")
+            
+            self._qualified_name_registry[qualified_name] = place_class
+            
+            # Track which interface this belongs to
+            if prefix:
+                self._interface_hierarchy[prefix].append(qualified_name)
+        
+        # Register discovered transitions
+        for transition_class in getattr(cls, '_discovered_transitions', []):
+            transition_name = getattr(transition_class, '_attr_name', transition_class.__name__)
+            qualified_name = f"{prefix}.{transition_name}" if prefix else transition_name
+            
+            if qualified_name in self._qualified_name_registry:
+                raise QualifiedNameConflict(f"Qualified name '{qualified_name}' already exists")
+            
+            self._qualified_name_registry[qualified_name] = transition_class
+            
+            # Track which interface this belongs to
+            if prefix:
+                self._interface_hierarchy[prefix].append(qualified_name)
+    
+    def _validate_interface_boundaries(self):
+        """Validate that transitions don't cross interface boundaries."""
+        self.log("Starting interface boundary validation...")
+        
+        for qualified_name, component in self._qualified_name_registry.items():
+            if inspect.isclass(component) and issubclass(component, Transition):
+                self.log(f"Validating transition: {qualified_name}")
+                self._validate_transition_boundaries(qualified_name, component)
+    
+    def _validate_transition_boundaries(self, transition_qualified_name: str, transition_class: Type[Transition]):
+        """Validate that a transition doesn't violate interface boundaries."""
+        # Find the interface this transition belongs to
+        transition_interface = None
+        for interface_name, components in self._interface_hierarchy.items():
+            if transition_qualified_name in components:
+                transition_interface = interface_name
+                break
+        
+        if not transition_interface:
+            # Top-level transition, can access anything
+            self.log(f"Transition {transition_qualified_name} is top-level, allowing all access")
+            return
+        
+        self.log(f"Transition {transition_qualified_name} belongs to interface {transition_interface}")
+        
+        # Create a temporary instance to check arc definitions
+        temp_transition = transition_class()
+        
+        # Check input arcs
+        try:
+            input_arcs = temp_transition._normalize_arcs(temp_transition.input_arcs())
+            for label, arc in input_arcs.items():
+                self.log(f"Checking input arc {label}: {arc.place}")
+                self._validate_arc_boundary(arc.place, transition_interface, transition_qualified_name, "input")
+        except InterfaceBoundaryViolation:
+            # Re-raise boundary violations
+            raise
+        except Exception as e:
+            # For other exceptions, we can't validate so we skip
+            self.log(f"Skipping input arc validation for {transition_qualified_name}: {e}")
+        
+        # Check output arcs
+        try:
+            output_arcs = temp_transition._normalize_arcs(temp_transition.output_arcs())
+            for label, arc in output_arcs.items():
+                self.log(f"Checking output arc {label}: {arc.place}")
+                self._validate_arc_boundary(arc.place, transition_interface, transition_qualified_name, "output")
+        except InterfaceBoundaryViolation:
+            # Re-raise boundary violations
+            raise
+        except Exception as e:
+            # For other exceptions, we can't validate so we skip
+            self.log(f"Skipping output arc validation for {transition_qualified_name}: {e}")
+    
+    def _validate_arc_boundary(self, place_ref: Union[Type[Place], str], transition_interface: str, transition_name: str, arc_type: str):
+        """Validate that an arc doesn't cross interface boundaries."""
+        # Handle string references
+        if isinstance(place_ref, str):
+            place_qualified_name = place_ref
+            place_type = self._qualified_name_registry.get(place_qualified_name)
+            if not place_type:
+                raise InterfaceBoundaryViolation(
+                    f"Transition {transition_name} references unknown place '{place_qualified_name}' in {arc_type} arc"
+                )
+        else:
+            # Find the qualified name of this place type
+            place_qualified_name = None
+            for qualified_name, component in self._qualified_name_registry.items():
+                if component == place_ref:
+                    place_qualified_name = qualified_name
+                    break
+            
+            if not place_qualified_name:
+                raise InterfaceBoundaryViolation(
+                    f"Transition {transition_name} references unknown place {place_ref.__name__} in {arc_type} arc"
+                )
+        
+        self.log(f"Checking boundary: place {place_qualified_name} vs transition interface {transition_interface}")
+        
+        # Check if the place is within the same interface or a child interface
+        if not self._is_within_interface_boundary(place_qualified_name, transition_interface):
+            raise InterfaceBoundaryViolation(
+                f"Transition {transition_name} violates interface boundary: "
+                f"cannot access {place_qualified_name} from interface {transition_interface}"
+            )
+    
+    def _is_within_interface_boundary(self, place_qualified_name: str, transition_interface: str) -> bool:
+        """Check if a place is within the interface boundary of a transition."""
+        self.log(f"Boundary check: {place_qualified_name} within {transition_interface}?")
+        
+        # Same interface
+        if place_qualified_name in self._interface_hierarchy.get(transition_interface, []):
+            self.log("Place is in same interface")
+            return True
+        
+        # Child interface
+        if place_qualified_name.startswith(transition_interface + "."):
+            self.log("Place is in child interface")
+            return True
+        
+        self.log("Place violates interface boundary")
+        return False
+    
+    def _instantiate_components(self):
+        """Instantiate all registered components."""
+        # Instantiate places
+        for qualified_name, component in self._qualified_name_registry.items():
+            if inspect.isclass(component) and issubclass(component, Place):
+                place_instance = component()
+                place_instance._set_qualified_name(qualified_name)
+                place_instance._attach_to_net(self)
+                
+                # Track IO places separately
+                if isinstance(place_instance, IOInputPlace):
+                    self._io_input_places.append(place_instance)
+                elif isinstance(place_instance, IOOutputPlace):
+                    self._io_output_places.append(place_instance)
+                
+                self._places_by_type[component] = place_instance
+                self._places_by_qualified_name[qualified_name] = place_instance
+                self.log(f"Added place: {qualified_name}")
+        
+        # Instantiate transitions
+        for qualified_name, component in self._qualified_name_registry.items():
+            if inspect.isclass(component) and issubclass(component, Transition):
+                transition_instance = component()
+                transition_instance._set_qualified_name(qualified_name)
+                
+                # Find interface path for boundary checking
+                interface_path = None
+                for interface_name, components in self._interface_hierarchy.items():
+                    if qualified_name in components:
+                        interface_path = interface_name
+                        break
+                
+                if interface_path:
+                    transition_instance._set_interface_path(interface_path)
+                
+                transition_instance._attach_to_net(self)
+                self._transitions.append(transition_instance)
+                self.log(f"Added transition: {qualified_name}")
     
     def log(self, message: str):
         """Log a message."""
         self._log_fn(f"[{datetime.now()}] {message}")
     
-    def add_interface(self, interface_class: Type[Interface]):
-        """Add an interface by flattening all its components."""
-        interface_instance = interface_class()
-        
-        for place_class in interface_instance.get_all_places():
-            if place_class not in self._places:
-                self.add_place(place_class)
-        
-        for transition_class in interface_instance.get_all_transitions():
-            self.add_transition(transition_class())
-        
-        for nested_interface_class in interface_instance.get_all_interfaces():
-            self.add_interface(nested_interface_class)
-        
-        return interface_instance
+    def _resolve_place_from_arc(self, arc: Arc) -> Place:
+        """Resolve a place from an arc, handling both type and string references."""
+        if isinstance(arc.place, str):
+            return self._get_place_by_qualified_name(arc.place)
+        else:
+            return self._get_place_by_type(arc.place)
     
-    def add_place(self, place_class: Type[Place]):
-        """Add a place to the net."""
-        if place_class not in self._places:
-            place_instance = place_class()
-            place_instance._attach_to_net(self)
-            
-            # Track IO places separately
-            if isinstance(place_instance, IOInputPlace):
-                self._io_input_places.append(place_instance)
-            elif isinstance(place_instance, IOOutputPlace):
-                self._io_output_places.append(place_instance)
-            
-            self._places[place_class] = place_instance
-            self.log(f"Added place: {place_class.__name__}")
-        
-        return self._places[place_class]
-    
-    def add_transition(self, transition: Union[Transition, Type[Transition]]):
-        """Add a transition to the net."""
-        if isinstance(transition, type):
-            transition = transition()
-        
-        if not isinstance(transition, Transition):
-            raise InvalidTransitionType(f"{transition} is not a valid Transition")
-        
-        transition._attach_to_net(self)
-        self._transitions.append(transition)
-        self.log(f"Added transition: {transition.__class__.__name__}")
-        return transition
-    
-    def _get_place(self, place_type: Type[Place]) -> Place:
+    def _get_place_by_type(self, place_type: Type[Place]) -> Place:
         """Get a place by type."""
-        if place_type not in self._places:
-            raise KeyError(f"Place {place_type.__name__} not found")
-        return self._places[place_type]
+        if place_type not in self._places_by_type:
+            raise KeyError(f"Place type {place_type.__name__} not found")
+        return self._places_by_type[place_type]
+    
+    def _get_place_by_qualified_name(self, qualified_name: str) -> Place:
+        """Get a place by qualified name."""
+        if qualified_name not in self._places_by_qualified_name:
+            raise KeyError(f"Place {qualified_name} not found")
+        return self._places_by_qualified_name[qualified_name]
     
     async def produce_token(self, place_type: Type[Place], token: Token):
         """Produce a token to the specified place."""
-        place = self._get_place(place_type)
+        place = self._get_place_by_type(place_type)
         await place.add_token(token)
     
     async def _on_token_added(self, place: Place, token: Token):
         """Called when a token is added to any place - triggers transition checking."""
-        self.log(f"Token added to {place.__class__.__name__}: {token}")
+        self.log(f"Token added to {place.qualified_name}: {token}")
         
         # Queue transition checking
         await self._transition_check_queue.put(('token_added', place, token))
     
     async def _on_token_removed(self, place: Place, token: Token):
         """Called when a token is removed from any place."""
-        self.log(f"Token removed from {place.__class__.__name__}: {token}")
+        self.log(f"Token removed from {place.qualified_name}: {token}")
     
     async def _check_and_fire_transitions(self):
         """Check all transitions and fire those that can fire."""
@@ -706,12 +885,12 @@ class PetriNet(metaclass=DeclarativeABCMeta):
                 if await transition.can_fire():
                     fired = await transition.fire()
                     if fired:
-                        self.log(f"Fired transition: {transition.__class__.__name__}")
-                        self._firing_log.append((datetime.now(), transition.__class__.__name__))
+                        self.log(f"Fired transition: {transition.qualified_name}")
+                        self._firing_log.append((datetime.now(), transition.qualified_name))
                         # After firing, check again (more tokens might enable more transitions)
                         await self._transition_check_queue.put(('transition_fired', transition))
             except Exception as e:
-                self.log(f"Error in transition {transition.__class__.__name__}: {e}")
+                self.log(f"Error in transition {transition.qualified_name}: {e}")
     
     async def _event_loop(self):
         """Main event loop that processes token additions and fires transitions."""
@@ -807,11 +986,11 @@ class PetriNet(metaclass=DeclarativeABCMeta):
                     if await transition.can_fire():
                         fired = await transition.fire()
                         if fired:
-                            self.log(f"Fired transition: {transition.__class__.__name__}")
-                            self._firing_log.append((datetime.now(), transition.__class__.__name__))
+                            self.log(f"Fired transition: {transition.qualified_name}")
+                            self._firing_log.append((datetime.now(), transition.qualified_name))
                             any_fired = True
                 except Exception as e:
-                    self.log(f"Error in transition {transition.__class__.__name__}: {e}")
+                    self.log(f"Error in transition {transition.qualified_name}: {e}")
             
             if not any_fired:
                 self.log("No more transitions can fire - net is stable")
@@ -835,14 +1014,14 @@ class PetriNet(metaclass=DeclarativeABCMeta):
             'is_running': self._is_running,
             'is_finished': self._is_finished,
             'places': {
-                place_type.__name__: {
+                place.qualified_name: {
                     'token_count': place.token_count,
                     'tokens': [repr(token) for token in place.tokens]
                 }
-                for place_type, place in self._places.items()
+                for place in self._places_by_type.values()
             },
             'transitions': {
-                transition.__class__.__name__: {
+                transition.qualified_name: {
                     'fire_count': transition.fire_count,
                     'last_fired': transition.last_fired
                 }
@@ -855,72 +1034,66 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         """Generate a Mermaid diagram representing the Petri net structure."""
         lines = ["graph TD"]
 
-        # Group places and transitions by interface
-        interface_groups = {}
-        place_to_interface = {}
-        transition_to_interface = {}
-
-        # Find all interface classes in the net
-        for interface_class in getattr(self, '_discovered_interfaces', []):
-            group_name = interface_class.__name__
-            interface_groups[group_name] = []
-            for place in interface_class._discovered_places:
-                place_to_interface[place.__name__] = group_name
-                interface_groups[group_name].append(place.__name__)
-            for transition in interface_class._discovered_transitions:
-                transition_to_interface[transition.__name__] = group_name
-                interface_groups[group_name].append(transition.__name__)
-
-        # Add places as circles (different styling for different IO types)
-        for place_type, place_instance in self._places.items():
-            place_name = place_type.__name__
-            token_count = place_instance.token_count
+        # Add places with their qualified names
+        for place in self._places_by_type.values():
+            qualified_name = place.qualified_name
+            # Use safe node IDs (replace dots with underscores)
+            safe_name = qualified_name.replace(".", "_")
+            token_count = place.token_count
             
-            if isinstance(place_instance, IOInputPlace):
-                # IO input places get arrow pointing in
-                lines.append(f'    {place_name}(("→ {place_name}<br/>({token_count} tokens)<br/>[INPUT]"))')
-            elif isinstance(place_instance, IOOutputPlace):
-                # IO output places get arrow pointing out  
-                lines.append(f'    {place_name}(("{place_name} →<br/>({token_count} tokens)<br/>[OUTPUT]"))')
+            if isinstance(place, IOInputPlace):
+                lines.append(f'    {safe_name}(("→ {qualified_name}<br/>({token_count} tokens)<br/>[INPUT]"))')
+            elif isinstance(place, IOOutputPlace):
+                lines.append(f'    {safe_name}(("{qualified_name} →<br/>({token_count} tokens)<br/>[OUTPUT]"))')
             else:
-                # Regular places
-                lines.append(f'    {place_name}(("{place_name}<br/>({token_count} tokens)"))')
+                lines.append(f'    {safe_name}(("{qualified_name}<br/>({token_count} tokens)"))')
 
-        # Add transitions as rectangles
+        # Add transitions with their qualified names
         for transition in self._transitions:
-            transition_name = transition.__class__.__name__
+            qualified_name = transition.qualified_name
+            safe_name = qualified_name.replace(".", "_")
             fire_count = transition.fire_count
-            lines.append(f'    {transition_name}["{transition_name}<br/>(fired {fire_count}x)"]')
+            lines.append(f'    {safe_name}["{qualified_name}<br/>(fired {fire_count}x)"]')
 
         # Group nodes in subgraphs for interfaces
-        for group, members in interface_groups.items():
-            if members:  # Only create subgraph if it has members
-                lines.append(f'    subgraph {group}')
-                for member in members:
-                    lines.append(f'        {member}')
+        for interface_name, components in self._interface_hierarchy.items():
+            if components:
+                safe_interface_name = interface_name.replace(".", "_")
+                lines.append(f'    subgraph {safe_interface_name} ["{interface_name}"]')
+                for component_name in components:
+                    safe_component_name = component_name.replace(".", "_")
+                    lines.append(f'        {safe_component_name}')
                 lines.append('    end')
 
         # Add arcs
         for transition in self._transitions:
-            transition_name = transition.__class__.__name__
+            transition_safe_name = transition.qualified_name.replace(".", "_")
 
             # Input arcs
-            input_arcs = transition._normalize_arcs(transition.input_arcs())
-            for label, arc in input_arcs.items():
-                place_name = arc.place.__name__
-                if arc.weight > 1:
-                    lines.append(f'    {place_name} -->|"{arc.weight}"| {transition_name}')
-                else:
-                    lines.append(f'    {place_name} --> {transition_name}')
+            try:
+                input_arcs = transition._normalize_arcs(transition.input_arcs())
+                for label, arc in input_arcs.items():
+                    place = self._resolve_place_from_arc(arc)
+                    place_safe_name = place.qualified_name.replace(".", "_")
+                    if arc.weight > 1:
+                        lines.append(f'    {place_safe_name} -->|"{arc.weight}"| {transition_safe_name}')
+                    else:
+                        lines.append(f'    {place_safe_name} --> {transition_safe_name}')
+            except Exception as e:
+                self.log(f"Warning: Could not generate input arcs for {transition.qualified_name}: {e}")
 
             # Output arcs
-            output_arcs = transition._normalize_arcs(transition.output_arcs())
-            for label, arc in output_arcs.items():
-                place_name = arc.place.__name__
-                if arc.weight > 1:
-                    lines.append(f'    {transition_name} -->|"{arc.weight}"| {place_name}')
-                else:
-                    lines.append(f'    {transition_name} --> {place_name}')
+            try:
+                output_arcs = transition._normalize_arcs(transition.output_arcs())
+                for label, arc in output_arcs.items():
+                    place = self._resolve_place_from_arc(arc)
+                    place_safe_name = place.qualified_name.replace(".", "_")
+                    if arc.weight > 1:
+                        lines.append(f'    {transition_safe_name} -->|"{arc.weight}"| {place_safe_name}')
+                    else:
+                        lines.append(f'    {transition_safe_name} --> {place_safe_name}')
+            except Exception as e:
+                self.log(f"Warning: Could not generate output arcs for {transition.qualified_name}: {e}")
 
         return "\n".join(lines)
     
@@ -930,7 +1103,7 @@ class PetriNet(metaclass=DeclarativeABCMeta):
             f.write(self.generate_mermaid_diagram())
     
     def __repr__(self):
-        return f"PetriNet(places={len(self._places)}, transitions={len(self._transitions)})"
+        return f"PetriNet(places={len(self._places_by_type)}, transitions={len(self._transitions)})"
 
 
 # Utility Functions

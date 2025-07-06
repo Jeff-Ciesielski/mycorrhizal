@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-Cordyceps Comprehensive Demo - Shows all major library features
+Cordyceps Comprehensive Demo - Fixed Interface Boundaries
 
 This example demonstrates:
-- Interface composition and modularity
+- Proper interface composition without boundary violations
 - IOInputPlace with configuration
 - IOOutputPlace with error handling
 - Graceful shutdown mechanisms
 - Token-based communication
 - Async execution model
 - Mermaid diagram generation
+- Fully qualified names
 """
 
 import asyncio
@@ -151,6 +152,10 @@ class TaskGeneratorInterface(Interface):
 class TaskProcessorInterface(Interface):
     """Interface for processing tasks with different handling strategies"""
     
+    class TaskInputPlace(Place):
+        """Input place for tasks to be processed"""
+        pass
+    
     class HighPriorityPlace(Place):
         """High priority tasks processed first"""
         pass
@@ -175,7 +180,7 @@ class TaskProcessorInterface(Interface):
         """Routes tasks by priority"""
         
         def input_arcs(self):
-            return {"task": Arc(TaskGeneratorInterface.TaskQueuePlace)}
+            return {"task": Arc(TaskProcessorInterface.TaskInputPlace)}
         
         def output_arcs(self):
             return {
@@ -267,6 +272,10 @@ class TaskProcessorInterface(Interface):
 class NotificationInterface(Interface):
     """Interface for sending notifications via different channels"""
     
+    class NotificationInputPlace(Place):
+        """Input place for notifications to be sent"""
+        pass
+    
     class EmailOutputPlace(IOOutputPlace):
         """Sends email notifications"""
         
@@ -323,7 +332,7 @@ class NotificationInterface(Interface):
         """Sends notifications to multiple channels"""
         
         def input_arcs(self):
-            return {"completed": Arc(TaskProcessorInterface.CompletedPlace)}
+            return {"notification": Arc(NotificationInterface.NotificationInputPlace)}
         
         def output_arcs(self):
             return {
@@ -333,15 +342,7 @@ class NotificationInterface(Interface):
             }
         
         async def on_fire(self, consumed_tokens):
-            completed = consumed_tokens["completed"][0]
-            
-            # Create notification
-            is_urgent = "HIGH_PRIORITY" in completed.result
-            notification = NotificationToken(
-                recipient="admin@example.com",
-                message=f"Task {completed.task_id} completed: {completed.result}",
-                urgent=is_urgent
-            )
+            notification = consumed_tokens["notification"][0]
             
             # Send to all channels
             return {
@@ -356,6 +357,10 @@ class NotificationInterface(Interface):
 class ErrorHandlingInterface(Interface):
     """Interface for handling errors and retries"""
     
+    class ErrorInputPlace(Place):
+        """Input place for errors to be handled"""
+        pass
+    
     class ErrorLogPlace(IOOutputPlace):
         """Logs errors to external system"""
         
@@ -367,17 +372,14 @@ class ErrorHandlingInterface(Interface):
             
             return None
     
-    class HandleProcessingErrorsTransition(Transition):
+    class HandleErrorsTransition(Transition):
         """Handles processing errors"""
         
         def input_arcs(self):
-            return {"error": Arc(TaskProcessorInterface.FailedPlace)}
+            return {"error": Arc(ErrorHandlingInterface.ErrorInputPlace)}
         
         def output_arcs(self):
-            return {
-                "error_log": Arc(ErrorHandlingInterface.ErrorLogPlace),
-                "notification": Arc(NotificationInterface.EmailOutputPlace)
-            }
+            return {"error_log": Arc(ErrorHandlingInterface.ErrorLogPlace)}
         
         async def on_fire(self, consumed_tokens):
             error = consumed_tokens["error"][0]
@@ -386,42 +388,6 @@ class ErrorHandlingInterface(Interface):
             error_log = ErrorToken(
                 error.error_type,
                 f"Processing error logged: {error.message}",
-                error
-            )
-            
-            # Send error notification
-            notification = NotificationToken(
-                recipient="ops@example.com",
-                message=f"Processing error: {error.message}",
-                urgent=True
-            )
-            
-            return {
-                "error_log": [error_log],
-                "notification": [notification]
-            }
-    
-    class HandleNotificationErrorsTransition(Transition):
-        """Handles notification errors"""
-        
-        def input_arcs(self):
-            return {"error": Arc(NotificationInterface.EmailOutputPlace)}
-        
-        def output_arcs(self):
-            return {"error_log": Arc(ErrorHandlingInterface.ErrorLogPlace)}
-        
-        async def guard(self):
-            # Only fire if there are error tokens
-            email_place = self._net._get_place(NotificationInterface.EmailOutputPlace)
-            return any(isinstance(token, ErrorToken) for token in email_place.tokens)
-        
-        async def on_fire(self, consumed_tokens):
-            error = consumed_tokens["error"][0]
-            
-            # Log the notification error
-            error_log = ErrorToken(
-                "notification_error",
-                f"Email notification failed: {error.message}",
                 error
             )
             
@@ -447,49 +413,6 @@ class ShutdownInterface(Interface):
             
             return None
     
-    class TriggerShutdownTransition(Transition):
-        """Triggers shutdown when all tasks are processed"""
-        
-        def input_arcs(self):
-            return {}  # No input arcs needed
-        
-        def output_arcs(self):
-            return {"shutdown": Arc(ShutdownInterface.ShutdownPlace)}
-        
-        async def guard(self):
-            # Shutdown when task generator is done and system is idle
-            task_source = self._net._get_place(TaskGeneratorInterface.TaskSourcePlace)
-            
-            # Check if generator is done (no active input task)
-            generator_done = task_source.tasks_generated >= task_source.max_tasks
-            
-            # Check if system is idle (no tokens in processing places)
-            task_queue = self._net._get_place(TaskGeneratorInterface.TaskQueuePlace)
-            high_priority = self._net._get_place(TaskProcessorInterface.HighPriorityPlace)
-            low_priority = self._net._get_place(TaskProcessorInterface.LowPriorityPlace)
-            processing = self._net._get_place(TaskProcessorInterface.ProcessingPlace)
-            
-            # Wait a bit for final tokens to be processed
-            system_idle = (task_queue.is_empty and high_priority.is_empty and 
-                          low_priority.is_empty and processing.is_empty)
-            
-            # Also check that we've actually processed some tasks
-            completed = self._net._get_place(TaskProcessorInterface.CompletedPlace)
-            has_processed_tasks = completed.token_count > 0
-            
-            return generator_done and system_idle and has_processed_tasks
-        
-        async def on_fire(self, consumed_tokens):
-            # Stop the task generator
-            task_source = self._net._get_place(TaskGeneratorInterface.TaskSourcePlace)
-            await task_source.stop_input()
-            
-            # Signal shutdown
-            self._net._is_finished = True
-            
-            shutdown = ShutdownToken("All tasks processed")
-            return {"shutdown": [shutdown]}
-    
     class HandleShutdownTransition(Transition):
         """Handles shutdown notifications"""
         
@@ -508,7 +431,7 @@ class ShutdownInterface(Interface):
 # === MAIN SYSTEM ===
 
 class TaskProcessingSystem(PetriNet):
-    """Comprehensive task processing system demonstrating all Cordyceps features"""
+    """Comprehensive task processing system demonstrating proper interface boundaries"""
     
     # Compose all interfaces
     class TaskGen(TaskGeneratorInterface): pass
@@ -517,16 +440,111 @@ class TaskProcessingSystem(PetriNet):
     class ErrorHandle(ErrorHandlingInterface): pass
     class Shutdown(ShutdownInterface): pass
     
+    # Top-level transitions that connect interfaces
+    class ConnectGeneratorToProcessorTransition(Transition):
+        """Connects task generator to processor"""
+        
+        def input_arcs(self):
+            return {"task": Arc(TaskProcessingSystem.TaskGen.TaskQueuePlace)}
+        
+        def output_arcs(self):
+            return {"processor_input": Arc(TaskProcessingSystem.TaskProc.TaskInputPlace)}
+        
+        async def on_fire(self, consumed_tokens):
+            task = consumed_tokens["task"][0]
+            return {"processor_input": [task]}
+    
+    class ConnectProcessorToNotificationTransition(Transition):
+        """Connects processor output to notification system"""
+        
+        def input_arcs(self):
+            return {"completed": Arc(TaskProcessingSystem.TaskProc.CompletedPlace)}
+        
+        def output_arcs(self):
+            return {"notification": Arc(TaskProcessingSystem.Notify.NotificationInputPlace)}
+        
+        async def on_fire(self, consumed_tokens):
+            completed = consumed_tokens["completed"][0]
+            
+            # Create notification
+            is_urgent = "HIGH_PRIORITY" in completed.result
+            notification = NotificationToken(
+                recipient="admin@example.com",
+                message=f"Task {completed.task_id} completed: {completed.result}",
+                urgent=is_urgent
+            )
+            
+            return {"notification": [notification]}
+    
+    class ConnectProcessorToErrorHandlingTransition(Transition):
+        """Connects processor errors to error handling"""
+        
+        def input_arcs(self):
+            return {"error": Arc(TaskProcessingSystem.TaskProc.FailedPlace)}
+        
+        def output_arcs(self):
+            return {"error_input": Arc(TaskProcessingSystem.ErrorHandle.ErrorInputPlace)}
+        
+        async def on_fire(self, consumed_tokens):
+            error = consumed_tokens["error"][0]
+            return {"error_input": [error]}
+    
+    class TriggerShutdownTransition(Transition):
+        """Triggers shutdown when all tasks are processed"""
+        
+        def input_arcs(self):
+            return {}  # No input arcs needed
+        
+        def output_arcs(self):
+            return {"shutdown": Arc(TaskProcessingSystem.Shutdown.ShutdownPlace)}
+        
+        async def guard(self):
+            # Shutdown when task generator is done and system is idle
+            task_source = self._net._get_place_by_type(TaskProcessingSystem.TaskGen.TaskSourcePlace)
+            
+            # Check if generator is done (no active input task)
+            generator_done = task_source.tasks_generated >= task_source.max_tasks
+            
+            # Check if system is idle (no tokens in processing places)
+            task_queue = self._net._get_place_by_type(TaskProcessingSystem.TaskGen.TaskQueuePlace)
+            task_input = self._net._get_place_by_type(TaskProcessingSystem.TaskProc.TaskInputPlace)
+            high_priority = self._net._get_place_by_type(TaskProcessingSystem.TaskProc.HighPriorityPlace)
+            low_priority = self._net._get_place_by_type(TaskProcessingSystem.TaskProc.LowPriorityPlace)
+            processing = self._net._get_place_by_type(TaskProcessingSystem.TaskProc.ProcessingPlace)
+            
+            # Wait a bit for final tokens to be processed
+            system_idle = (task_queue.is_empty and task_input.is_empty and 
+                          high_priority.is_empty and low_priority.is_empty and 
+                          processing.is_empty)
+            
+            # Also check that we've actually processed some tasks
+            completed = self._net._get_place_by_type(TaskProcessingSystem.TaskProc.CompletedPlace)
+            has_processed_tasks = completed.token_count > 0
+            
+            return generator_done and system_idle and has_processed_tasks
+        
+        async def on_fire(self, consumed_tokens):
+            # Stop the task generator
+            task_source = self._net._get_place_by_type(TaskProcessingSystem.TaskGen.TaskSourcePlace)
+            await task_source.stop_input()
+            
+            # Signal shutdown
+            self._net._is_finished = True
+            
+            shutdown = ShutdownToken("All tasks processed")
+            return {"shutdown": [shutdown]}
+    
     def _should_terminate(self) -> bool:
         """Custom termination logic"""
         return self._is_finished
 
 
 async def demonstrate_comprehensive_system():
-    """Demonstrate all major Cordyceps features"""
-    print("=== Cordyceps Comprehensive Demo ===")
+    """Demonstrate all major Cordyceps features with proper interface boundaries"""
+    print("=== Cordyceps Fixed Interface Boundaries Demo ===")
     print("Features demonstrated:")
-    print("- Interface composition and modularity")
+    print("- Proper interface composition without boundary violations")
+    print("- Fully qualified names for all components")
     print("- Configurable IOInputPlace")
     print("- IOOutputPlace with error handling")
     print("- Priority-based processing")
@@ -536,11 +554,11 @@ async def demonstrate_comprehensive_system():
     print("- Async execution model")
     print()
     
-    # Create system with custom configuration
+    # Create system with validated interface boundaries
     system = TaskProcessingSystem()
     
     # Configure the task generator after creation
-    task_source = system._get_place(TaskProcessingSystem.TaskGen.TaskSourcePlace)
+    task_source = system._get_place_by_type(TaskProcessingSystem.TaskGen.TaskSourcePlace)
     task_source.task_types = ["analysis", "computation", "validation", "reporting"]
     task_source.max_tasks = 8
     task_source.interval = 0.8
@@ -549,10 +567,20 @@ async def demonstrate_comprehensive_system():
     print(f"Task types: {task_source.task_types}")
     print(f"Max tasks: {task_source.max_tasks}")
     print(f"Generation interval: {task_source.interval}s")
-    print(f"Total places: {len(system._places)}")
+    print(f"Total places: {len(system._places_by_type)}")
     print(f"Total transitions: {len(system._transitions)}")
     print(f"IO input places: {len(system._io_input_places)}")
     print(f"IO output places: {len(system._io_output_places)}")
+    print()
+    
+    # Show qualified names
+    print("=== Qualified Names ===")
+    print("Places:")
+    for place in system._places_by_type.values():
+        print(f"  {place.qualified_name}")
+    print("Transitions:")
+    for transition in system._transitions:
+        print(f"  {transition.qualified_name}")
     print()
     
     # Set up signal handling for graceful shutdown
@@ -597,8 +625,8 @@ async def demonstrate_comprehensive_system():
     state = system.get_state_summary()
     
     print("\n=== Final Statistics ===")
-    email_place = system._get_place(TaskProcessingSystem.Notify.EmailOutputPlace)
-    sms_place = system._get_place(TaskProcessingSystem.Notify.SMSOutputPlace)
+    email_place = system._get_place_by_type(TaskProcessingSystem.Notify.EmailOutputPlace)
+    sms_place = system._get_place_by_type(TaskProcessingSystem.Notify.SMSOutputPlace)
     
     print(f"Tasks generated: {task_source.tasks_generated}")
     print(f"Emails sent: {len(email_place.sent_emails)}")
