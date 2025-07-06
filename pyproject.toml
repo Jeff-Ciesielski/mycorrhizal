@@ -10,11 +10,11 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
-test = ["pytest"]
+test = [    "pytest>=7.0.0",
+    "pytest-asyncio>=0.20.0",
+    "pytest-cov>=4.0.0",
+    "pytest-timeout>=2.0.0",]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
 
 [tool.hatch.build]
 exclude = ["examples/*", "tests/*"]
@@ -22,3 +22,42 @@ exclude = ["examples/*", "tests/*"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+    "--asyncio-mode=auto",
+    "--cov=src/cordyceps",
+    "--cov-report=term",
+]
+markers = [
+    "slow: marks tests as slow",
+    "integration: marks tests as integration tests",
+    "performance: marks tests as performance tests",
+    "unit: marks tests as unit tests"
+]
+asyncio_mode = "auto"
+timeout = 30
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["cordyceps"]
+omit = ["tests/*", "setup.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]
+show_missing = false
+skip_covered = true
+precision = 2
+fail_under = 0

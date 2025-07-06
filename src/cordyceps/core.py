@@ -46,8 +46,13 @@ class ArcValidationError(Exception):
     pass
 
 
+
 class InterfaceBoundaryViolation(Exception):
     """Raised when a transition tries to access places outside its interface boundary."""
+    pass
+
+class MissingPlaceError(Exception):
+    """Raised when a transition references a place that does not exist in the net."""
     pass
 
 
@@ -147,6 +152,7 @@ class Place(ABC):
         return True
     
     async def add_token(self, token: Token):
+        # Debug print removed
         """
         Add a token to this place and notify the net.
         
@@ -154,7 +160,7 @@ class Place(ABC):
         """
         if not self.can_accept_token(token):
             if self.is_full:
-                raise Exception(f"Place {self.qualified_name} is at capacity")
+                raise InsufficientTokens(f"Place {self.qualified_name} is at capacity")
             else:
                 raise InvalidTokenType(f"Place {self.qualified_name} cannot accept token type {type(token)}")
         
@@ -169,6 +175,7 @@ class Place(ABC):
             await self._net._on_token_added(self, token)
     
     async def remove_token(self, token_type: Type[Token] = None) -> Token:
+        # Debug print removed
         """Remove and return a token from this place."""
         if self.is_empty:
             raise InsufficientTokens(f"No tokens available in place {self.qualified_name}")
@@ -456,82 +463,117 @@ class Transition(ABC):
         """Timestamp of last firing."""
         return self._last_fired
 
-    async def can_fire(self) -> bool:
-        """Check if this transition can fire."""
-        return await self.guard()
 
-    async def guard(self) -> bool:
-        """Default guard: check if all input arcs have sufficient tokens."""
+    def __init__(self):
+        self._fire_count = 0
+        self._last_fired = None
+        self._net: Optional['PetriNet'] = None
+        self._qualified_name: Optional[str] = None
+        self._interface_path: Optional[str] = None
+        self._to_consume = {}
+        self._to_produce = {}
+
+    def consume(self, label, token):
+        """Mark a token for consumption from a given input arc label."""
+        if label not in self._to_consume:
+            self._to_consume[label] = []
+        self._to_consume[label].append(token)
+
+    def produce(self, label, token):
+        """Mark a token to be produced to a given output arc label."""
+        if label not in self._to_produce:
+            self._to_produce[label] = []
+        self._to_produce[label].append(token)
+
+    async def can_fire(self):
+        """Check if this transition can fire. Returns True if fireable, else False."""
+        self._to_consume = {}
         input_arcs = self._normalize_arcs(self.input_arcs())
-        
+        pending = {}
         for label, arc in input_arcs.items():
             place = self._net._resolve_place_from_arc(arc)
-            if place.count_tokens(arc.token_type) < arc.weight:
-                return False
-        
-        return True
+            tokens = [t for t in place.tokens if arc.token_type is None or isinstance(t, arc.token_type)]
+            pending[label] = tokens
+        result = await self.guard(pending)
+        # Only fire if guard returns True and at least one token is marked for consumption (or no input arcs)
+        if result is True and (self._to_consume or not input_arcs):
+            return True
+        return False
 
     async def fire(self):
+        # Debug print removed
         """
-        Fire this transition.
-        
-        This consumes tokens from input places and produces tokens to output places.
+        Fire this transition. The guard determines which tokens to consume from each input arc.
         """
         if not await self.can_fire():
             return False
-        
-        # Consume input tokens
+
         input_arcs = self._normalize_arcs(self.input_arcs())
         consumed_tokens = {}
-        
+        # Remove only the tokens marked for consumption
         for label, arc in input_arcs.items():
             place = self._net._resolve_place_from_arc(arc)
             tokens = []
-            for _ in range(arc.weight):
-                token = await place.remove_token(arc.token_type)
+            for token in self._to_consume.get(label, []):
+                try:
+                    idx = place._tokens.index(token)
+                except ValueError:
+                    raise InsufficientTokens(f"Token {token} not found in place {place.qualified_name}")
+                token = place._tokens.pop(idx)
+                await token.on_consumed()
+                await place.on_token_removed(token)
+                if place._net:
+                    await place._net._on_token_removed(place, token)
                 tokens.append(token)
             consumed_tokens[label] = tokens
-        
-        # Execute transition logic
+
+        self._to_produce = {}
         await self.on_before_fire()
-        produced_tokens = await self.on_fire(consumed_tokens)
-        
-        # Produce output tokens
-        if produced_tokens:
-            output_arcs = self._normalize_arcs(self.output_arcs())
-            for label, tokens in produced_tokens.items():
+        result = await self.on_fire(consumed_tokens)
+
+        # Actually produce tokens
+        output_arcs = self._normalize_arcs(self.output_arcs())
+        if result is not None:
+            for label, tokens in result.items():
                 if label in output_arcs:
                     arc = output_arcs[label]
                     place = self._net._resolve_place_from_arc(arc)
                     for token in tokens:
                         await place.add_token(token)
-        
+        for label, tokens in self._to_produce.items():
+            if label in output_arcs:
+                arc = output_arcs[label]
+                place = self._net._resolve_place_from_arc(arc)
+                for token in tokens:
+                    await place.add_token(token)
+
         self._fire_count += 1
         self._last_fired = datetime.now()
         await self.on_after_fire()
-        
         return True
 
-    async def on_fire(self, consumed_tokens: Dict[str, List[Token]]) -> Optional[Dict[str, List[Token]]]:
+    async def guard(self, pending):
         """
-        Fire the transition logic - override this method.
-        
-        Args:
-            consumed_tokens: Dict mapping arc labels to lists of consumed tokens
-            
-        Returns:
-            Dict mapping output arc labels to lists of tokens to produce
+        User should override this. Inspect `pending` (dict of arc label to tokens),
+        call self.consume(label, token) for any tokens to consume, and return True if should fire.
         """
-        # Default implementation does nothing
-        return {}
+        # Default: consume first token from each arc if available
+        for label, tokens in pending.items():
+            if tokens:
+                self.consume(label, tokens[0])
+            else:
+                return False
+        return True
 
-    async def execute(self, consumed_tokens: Dict[str, List[Token]]) -> Optional[Dict[str, List[Token]]]:
+    async def on_fire(self, consumed: Dict[str, List[Token]]) -> Optional[Dict[str, List[Token]]]:
         """
-        DEPRECATED: Use on_fire() instead.
-        
-        This method is kept for backwards compatibility.
+        User should override this. Use self.produce(label, token) to produce output tokens.
         """
-        return await self.on_fire(consumed_tokens)
+        # Default: produce consumed tokens to all output arcs
+        for label, tokens in consumed.items():
+            for out_label in self._normalize_arcs(self.output_arcs()).keys():
+                for token in tokens:
+                    self.produce(out_label, token)
     
     async def on_before_fire(self):
         """Called before transition fires."""
@@ -610,6 +652,9 @@ class Interface(ABC, metaclass=DeclarativeABCMeta):
 
 # Main Petri Net Engine
 class PetriNet(metaclass=DeclarativeABCMeta):
+    def get_place(self, place_type: type) -> Place:
+        """Public API: Get a place instance by its class (not string)."""
+        return self._get_place_by_type(place_type)
     """
     Main async Petri net execution engine.
     
@@ -712,67 +757,60 @@ class PetriNet(metaclass=DeclarativeABCMeta):
                 transition_interface = interface_name
                 break
         
-        if not transition_interface:
-            # Top-level transition, can access anything
-            self.log(f"Transition {transition_qualified_name} is top-level, allowing all access")
-            return
-        
-        self.log(f"Transition {transition_qualified_name} belongs to interface {transition_interface}")
-        
         # Create a temporary instance to check arc definitions
         temp_transition = transition_class()
-        
-        # Check input arcs
+
+        # Always validate input arcs, and raise InterfaceBoundaryViolation for any missing place
         try:
             input_arcs = temp_transition._normalize_arcs(temp_transition.input_arcs())
-            for label, arc in input_arcs.items():
-                self.log(f"Checking input arc {label}: {arc.place}")
-                self._validate_arc_boundary(arc.place, transition_interface, transition_qualified_name, "input")
-        except InterfaceBoundaryViolation:
-            # Re-raise boundary violations
-            raise
         except Exception as e:
-            # For other exceptions, we can't validate so we skip
-            self.log(f"Skipping input arc validation for {transition_qualified_name}: {e}")
-        
-        # Check output arcs
+            # If arc normalization fails, treat as missing place reference
+            raise InterfaceBoundaryViolation(
+                f"Transition {transition_qualified_name} has invalid input arcs: {e}"
+            )
+        for label, arc in input_arcs.items():
+            self.log(f"Checking input arc {label}: {arc.place}")
+            # For top-level transitions, only check existence, not boundary
+            self._validate_arc_boundary(arc.place, transition_interface, transition_qualified_name, "input", skip_boundary_check=(not transition_interface))
+
+        # Always validate output arcs, and raise InterfaceBoundaryViolation for any missing place
         try:
             output_arcs = temp_transition._normalize_arcs(temp_transition.output_arcs())
-            for label, arc in output_arcs.items():
-                self.log(f"Checking output arc {label}: {arc.place}")
-                self._validate_arc_boundary(arc.place, transition_interface, transition_qualified_name, "output")
-        except InterfaceBoundaryViolation:
-            # Re-raise boundary violations
-            raise
         except Exception as e:
-            # For other exceptions, we can't validate so we skip
-            self.log(f"Skipping output arc validation for {transition_qualified_name}: {e}")
+            # If arc normalization fails, treat as missing place reference
+            raise InterfaceBoundaryViolation(
+                f"Transition {transition_qualified_name} has invalid output arcs: {e}"
+            )
+        for label, arc in output_arcs.items():
+            self.log(f"Checking output arc {label}: {arc.place}")
+            self._validate_arc_boundary(arc.place, transition_interface, transition_qualified_name, "output", skip_boundary_check=(not transition_interface))
     
-    def _validate_arc_boundary(self, place_ref: Union[Type[Place], str], transition_interface: str, transition_name: str, arc_type: str):
-        """Validate that an arc doesn't cross interface boundaries."""
-        # Handle string references
+    def _validate_arc_boundary(self, place_ref: Union[Type[Place], str], transition_interface: str, transition_name: str, arc_type: str, skip_boundary_check: bool = False):
+        """Validate that an arc doesn't cross interface boundaries or reference missing places."""
+        # Always resolve the qualified name and ensure the place exists
         if isinstance(place_ref, str):
             place_qualified_name = place_ref
             place_type = self._qualified_name_registry.get(place_qualified_name)
-            if not place_type:
-                raise InterfaceBoundaryViolation(
-                    f"Transition {transition_name} references unknown place '{place_qualified_name}' in {arc_type} arc"
-                )
         else:
             # Find the qualified name of this place type
             place_qualified_name = None
+            place_type = None
             for qualified_name, component in self._qualified_name_registry.items():
                 if component == place_ref:
                     place_qualified_name = qualified_name
+                    place_type = component
                     break
-            
-            if not place_qualified_name:
-                raise InterfaceBoundaryViolation(
-                    f"Transition {transition_name} references unknown place {place_ref.__name__} in {arc_type} arc"
-                )
-        
+        if not place_qualified_name or not place_type:
+            raise MissingPlaceError(
+                f"Transition {transition_name} references unknown place '{getattr(place_ref, '__name__', str(place_ref))}' in {arc_type} arc"
+            )
+
+        if skip_boundary_check:
+            # Only check existence, not interface boundary
+            return
+
         self.log(f"Checking boundary: place {place_qualified_name} vs transition interface {transition_interface}")
-        
+
         # Check if the place is within the same interface or a child interface
         if not self._is_within_interface_boundary(place_qualified_name, transition_interface):
             raise InterfaceBoundaryViolation(
@@ -781,20 +819,21 @@ class PetriNet(metaclass=DeclarativeABCMeta):
             )
     
     def _is_within_interface_boundary(self, place_qualified_name: str, transition_interface: str) -> bool:
-        """Check if a place is within the interface boundary of a transition."""
+        """Allow access to any place that is a direct child or any descendant (nested) of the transition's interface."""
         self.log(f"Boundary check: {place_qualified_name} within {transition_interface}?")
-        
-        # Same interface
-        if place_qualified_name in self._interface_hierarchy.get(transition_interface, []):
-            self.log("Place is in same interface")
+        if place_qualified_name == transition_interface:
+            # Should not happen (places are not interfaces), but for completeness
+            return False
+        # Direct child
+        direct_children = set(self._interface_hierarchy.get(transition_interface, []))
+        if place_qualified_name in direct_children:
+            self.log("Place is a direct child of the interface (allowed)")
             return True
-        
-        # Child interface
+        # Any descendant (nested deeper within the interface)
         if place_qualified_name.startswith(transition_interface + "."):
-            self.log("Place is in child interface")
+            self.log("Place is a descendant (nested) within the interface (allowed)")
             return True
-        
-        self.log("Place violates interface boundary")
+        self.log("Place violates interface boundary (not a child or descendant)")
         return False
     
     def _instantiate_components(self):
