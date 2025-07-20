@@ -523,28 +523,15 @@ def run_fsm_scenario(
             for msg in messages:
                 sm.send_message(msg)
 
-        # Run the state machine
-        for i in range(max_iterations):
-            try:
-                sm.tick(timeout=timeout)
-                current_name = sm.current_state.name()
-                if current_name != states_visited[-1]:
-                    states_visited.append(current_name)
-            except BlockedInUntimedState:
-                # Can't proceed further
-                raise
-            except Exception as e:
-                raise
+        sm.run(max_iterations=max_iterations, timeout=timeout)
     except StateMachineComplete:
         completed = True
-
     except Exception as e:
         error = e
         print(traceback.format_exc())
 
     return {
         "final_state": sm.current_state,
-        "states_visited": states_visited,
         "completed": completed,
         "error": error,
         "stack_depth": len(sm.state_stack),

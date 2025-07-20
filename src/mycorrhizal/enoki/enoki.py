@@ -1104,7 +1104,7 @@ class StateMachine:
         next_state = self.state_stack.pop()
         self._transition_to_state(next_state)
 
-    def run(self, max_iterations: Optional[int] = None):
+    def run(self, max_iterations: Optional[int] = None, timeout: Optional[float] = 0):
         """Run the state machine until terminal state"""
         iteration = 0
 
@@ -1117,10 +1117,10 @@ class StateMachine:
                 break
 
             try:
-                self.tick(timeout=0.11)
+                self.tick(timeout=timeout)
                 iteration += 1
             except StateMachineComplete:
-                return
+                raise
             except Exception as e:
                 self.log(f"Error in FSM: {e}")
                 if self.error_state:
