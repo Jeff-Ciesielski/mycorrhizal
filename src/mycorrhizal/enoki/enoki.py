@@ -25,6 +25,7 @@ from typing import Any, Dict, Optional, Union, Type, Callable
 import importlib
 import importlib.util, sys, os, types, inspect
 from itertools import accumulate
+from pathlib import Path
 
 import time
 import inspect
@@ -36,13 +37,13 @@ from gevent import spawn, sleep, Greenlet
 from gevent.queue import Queue as GeventQueue, Empty
 
 
-class TransitionEnum(Enum):
+class TransitionName(Enum):
     """Base class for state-specific transition enums"""
 
     pass
 
 
-class GlobalTransitions(TransitionEnum):
+class GlobalTransitions(TransitionName):
     """Common transitions available to all states"""
 
     UNHANDLED = "unhandled"
@@ -72,8 +73,6 @@ class SharedContext:
     log: Callable
     common: Any
     msg: Optional[Any] = None
-    fsm: Optional["StateMachine"] = None
-
 
 @dataclass
 class TimeoutMessage:
@@ -113,13 +112,13 @@ class State(ABC):
     @abstractmethod
     def transitions(
         cls,
-    ) -> Dict[TransitionEnum, Union[str, Type["State"], "Push", "Pop"]]:
+    ) -> Dict[TransitionName, Union[str, Type["State"], "Push", "Pop"]]:
         """Returns mapping of transition enums to their targets"""
-        pass
+        return dict()
 
     @classmethod
     @abstractmethod
-    def on_state(cls, ctx: SharedContext) -> TransitionEnum:
+    def on_state(cls, ctx: SharedContext) -> TransitionName:
         """Main state logic"""
         pass
 
@@ -134,15 +133,16 @@ class State(ABC):
         pass
 
     @classmethod
-    def on_fail(cls, ctx: SharedContext) -> TransitionEnum:
+    def on_fail(cls, ctx: SharedContext) -> TransitionName:
         """Called when retry limit is exceeded"""
         return GlobalTransitions.UNHANDLED
 
     @classmethod
-    def on_timeout(cls, ctx: SharedContext) -> TransitionEnum:
+    @abstractmethod
+    def on_timeout(cls, ctx: SharedContext) -> TransitionName:
         """Called when state times out"""
         return GlobalTransitions.RETRY
-
+    
     @classmethod
     @cache
     def name(cls) -> str:
@@ -183,14 +183,14 @@ class Pop:
     pass
 
 
+
 class StateRegistry:
     """Manages state resolution and validation"""
 
     def __init__(self):
         self._state_cache: Dict[str, Type[State]] = {}
         self._transition_cache: Dict[str, Dict] = {}
-        self._resolved_paths: set = set()
-        self._resolved_modules: set = set()
+        self._resolved_modules: Dict[str, Type] = {}
 
     def resolve_state(
         self, state_ref: Union[str, Type[State]], validate_only: bool = False
@@ -198,13 +198,19 @@ class StateRegistry:
         """Resolves a state reference to an actual state class, supporting nested classes/functions and dynamic import. Tracks all resolved file paths and modules for future resolution attempts."""
 
         if isinstance(state_ref, type) and issubclass(state_ref, State):
-            # Track resolved module and file path for direct State subclass
+            # Track resolved module and short name
             module_name = getattr(state_ref, "__module__", None)
-            if module_name:
-                self._resolved_modules.add(module_name)
+            if module_name and (module_name not in self._resolved_modules):
                 mod = sys.modules.get(module_name)
+                self._resolved_modules[module_name] = mod
+
+                # Store a short name so we can do local file lookup more easily without needin the whole enchilada                
                 if mod and hasattr(mod, "__file__"):
-                    self._resolved_paths.add(os.path.abspath(mod.__file__))
+                    fp = Path(getattr(mod, '__file__'))
+                    
+                    # Now, grab just the filename, without extension and save that as well
+                    self._resolved_modules[fp.stem] = mod
+
             return state_ref
 
         if isinstance(state_ref, str):
@@ -224,12 +230,18 @@ class StateRegistry:
                 # See if the module exists in sys.modules
                 mod_name = None
                 for path in module_paths:
+                    if path in self._resolved_modules:
+                        mod_name = path
+                        module = self._resolved_modules[mod_name]
+                        break
+
                     if path in sys.modules:
                         mod_name = path
                         module = sys.modules[mod_name]
+                        break
 
                 if mod_name is None:
-                    raise ValidationError(f"f{state_ref} is nowhere in sys.modules")
+                    raise ValidationError(f"{state_ref} is nowhere in sys.modules")
                 # Now, we have the module and its name, so the fq class name is
                 # state_ref with the modue name clipped out
                 fq_class_path = state_ref[len(mod_name)+1:].split('.')
@@ -261,6 +273,11 @@ class StateRegistry:
                     raise ValidationError(error_msg)
 
         return state_ref
+
+    @staticmethod
+    def is_abstract_classmethod_implemented(cls, method_name):
+        """Check if abstract method is implemented by checking __abstractmethods__"""
+        return method_name not in cls.__abstractmethods__ and hasattr(cls, method_name)
 
     def validate_all_states(
         self,
@@ -301,7 +318,7 @@ class StateRegistry:
                 raw_transitions = current_state.transitions()
 
                 for transition_enum, target in raw_transitions.items():
-                    if not isinstance(transition_enum, TransitionEnum):
+                    if not isinstance(transition_enum, TransitionName):
                         self._validation_errors.append(
                             f"State '{state_name}' has invalid transition key '{transition_enum}'"
                         )
@@ -319,6 +336,19 @@ class StateRegistry:
                                 discovered_states.add(target_name)
                                 states_to_visit.append(target_state)
 
+                # Validate that the state has an on_state handler
+                if not self.is_abstract_classmethod_implemented(current_state, 'on_state'):
+                    self._validation_errors.append(
+                        f'State {state_name} does not have an on_state handler defined'
+                    )
+                    
+                # Make sure non-terminal states define transitions
+                if not current_state.CONFIG.terminal:
+                    if not self.is_abstract_classmethod_implemented(current_state, 'transitions'):
+                        self._validation_errors.append(
+                            f"Non-terminal state {state_name} does not define any transitions"
+                        )
+
                 # Validate timeout configuration
                 if current_state.CONFIG.timeout is not None:
                     if (
@@ -328,11 +358,11 @@ class StateRegistry:
                         self._validation_errors.append(
                             f"State '{state_name}' has invalid timeout: {current_state.CONFIG.timeout}"
                         )
-
-                    has_timeout_handler = GlobalTransitions.TIMEOUT in raw_transitions
+                    
+                    has_timeout_handler = self.is_abstract_classmethod_implemented(current_state, 'on_timeout')
                     if not has_timeout_handler:
                         self._validation_warnings.append(
-                            f"State '{state_name}' has timeout but no TIMEOUT transition defined"
+                            f"State '{state_name}' has timeout but no on_timeout handler defined"
                         )
 
             except Exception as e:
@@ -478,7 +508,6 @@ class StateMachine:
             send_message=self.send_message,
             log=self.log,
             common= common_data or dict(),
-            fsm=self,
         )
 
         self.retry_counters = {}
@@ -870,7 +899,7 @@ class StateMachine:
 
         self._process_transition(transition)
 
-    def _process_transition(self, transition: TransitionEnum):
+    def _process_transition(self, transition: TransitionName):
         """Process a state transition"""
         transitions = self.registry.get_transitions(self.current_state)
 
@@ -912,11 +941,11 @@ class StateMachine:
 
         self.current_state = next_state
         self.state_enter_times[next_state.name()] = time.time()
+        self.log(f"Transitioned to {next_state.name()}")
 
         self._start_timeout(next_state)
         next_state.on_enter(self.context)
 
-        self.log(f"Transitioned to {next_state.name()}")
 
     def _handle_retry(self):
         """Handle retry logic with counter"""

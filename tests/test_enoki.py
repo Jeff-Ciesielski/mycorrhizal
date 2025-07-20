@@ -17,7 +17,7 @@ from enum import auto
 from mycorrhizal.enoki import (
     State,
     StateMachine,
-    TransitionEnum,
+    TransitionName,
     GlobalTransitions,
     StateConfiguration,
     SharedContext,
@@ -42,7 +42,7 @@ from mycorrhizal.enoki.testing_utils import (
 class TestStringResolution(EnokiTestCase):
     """Test basic state transition behaviors in  architecture."""
 
-    class TestTransitions(TransitionEnum):
+    class TestTransitions(TransitionName):
         GO_TO_B = "go_to_b"
 
     class StateA(State):
@@ -100,7 +100,7 @@ class TestBasicStateTransitions(EnokiTestCase):
     def test_push_single_state(self):
         """Push with single state should work correctly."""
 
-        class TestTransitions(TransitionEnum):
+        class TestTransitions(TransitionName):
             PUSH_B = "push_b"
 
         class StateA(State):
@@ -139,7 +139,7 @@ class TestBasicStateTransitions(EnokiTestCase):
     def test_push_multiple_states(self):
         """Push with multiple states should work correctly."""
 
-        class TestTransitions(TransitionEnum):
+        class TestTransitions(TransitionName):
             PUSH_MULTI = "push_multi"
 
         class StateA(State):
@@ -192,7 +192,7 @@ class TestBasicStateTransitions(EnokiTestCase):
     def test_pop_transition(self):
         """Pop transitions should work correctly."""
 
-        class TestTransitions(TransitionEnum):
+        class TestTransitions(TransitionName):
             POP_BACK = "pop_back"
 
         class TestState(State):
@@ -264,7 +264,7 @@ class TestStateLifecycle(EnokiTestCase):
     def test_on_fail_called_on_retry_limit(self):
         """on_fail should be callable and handle retry exhaustion."""
 
-        class TestTransitions(TransitionEnum):
+        class TestTransitions(TransitionName):
             FAILED = "failed"
 
         class TestState(State):
@@ -477,7 +477,7 @@ class TestStateMachineLifecycle(StateMachineTestCase):
     def test_fsm_transitions_between_states(self):
         """FSM should transition between states correctly."""
 
-        class TestTransitions(TransitionEnum):
+        class TestTransitions(TransitionName):
             GO_TO_B = "go_to_b"
 
         class StateA(State):
@@ -529,7 +529,7 @@ class TestStateMachineLifecycle(StateMachineTestCase):
     def test_fsm_blocks_in_untimed_state(self):
         """FSM should raise BlockedInUntimedState for non-dwelling states."""
 
-        class TestTransitions(TransitionEnum):
+        class TestTransitions(TransitionName):
             Nada = "Nada"
 
         class BlockingState(State):
@@ -548,7 +548,7 @@ class TestStateMachineLifecycle(StateMachineTestCase):
     def test_fsm_reset_functionality(self):
         """FSM reset should return to initial state and clear stack."""
 
-        class TestTransitions(TransitionEnum):
+        class TestTransitions(TransitionName):
             PUSH_B = "push_b"
 
         class StateA(State):
@@ -595,7 +595,7 @@ class TestStackOperations(StateMachineTestCase):
     def test_push_multiple_states_uses_stack(self):
         """Pushing multiple states should use the state stack correctly."""
 
-        class TestTransitions(TransitionEnum):
+        class TestTransitions(TransitionName):
             PUSH_MULTI = "push_multi"
             POP_BACK = "pop_back"
 
@@ -653,7 +653,7 @@ class TestStackOperations(StateMachineTestCase):
     def test_pop_from_empty_stack_handled(self):
         """Popping from empty stack should be handled gracefully."""
 
-        class TestTransitions(TransitionEnum):
+        class TestTransitions(TransitionName):
             POP_BACK = "pop_back"
 
         class PopState(State):
@@ -751,7 +751,7 @@ class TestComplexScenarios(StateMachineTestCase):
     def test_timeout(self):
         """Test that timeouts work"""
 
-        class TimeoutTransitions(TransitionEnum):
+        class TimeoutTransitions(TransitionName):
             RETURN_TO_IDLE = auto()
             GO_TO_LONG_STATE = auto()
 
@@ -793,7 +793,7 @@ class TestComplexScenarios(StateMachineTestCase):
     def test_imaging_workflow_scenario(self):
         """Test a complex imaging workflow with multiple states."""
 
-        class ImagingTransitions(TransitionEnum):
+        class ImagingTransitions(TransitionName):
             LIGHTING_SET = "lighting_set"
             PICTURE_TAKEN = "picture_taken"
             FAILED = "failed"
@@ -911,7 +911,7 @@ class TestComplexScenarios(StateMachineTestCase):
     def test_menu_navigation_with_push_pop(self):
         """Test menu navigation using push/pop operations."""
 
-        class MenuTransitions(TransitionEnum):
+        class MenuTransitions(TransitionName):
             ENTER_SUBMENU = "enter_submenu"
             BACK = "back"
             EXIT = "exit"
@@ -980,7 +980,7 @@ class TestAnalysisAndVisualization(StateMachineTestCase):
     def test_state_discovery(self):
         """StateMachine should discover all reachable states."""
 
-        class TestTransitions(TransitionEnum):
+        class TestTransitions(TransitionName):
             GO_TO_B = "go_to_b"
             GO_TO_C = "go_to_c"
 
@@ -1037,7 +1037,7 @@ class TestAnalysisAndVisualization(StateMachineTestCase):
 
             pass
 
-        class ImagingTransitions(TransitionEnum):
+        class ImagingTransitions(TransitionName):
             NEXT = "next"
 
         class CaptureImage(ImagingState):
@@ -1074,7 +1074,7 @@ class TestAnalysisAndVisualization(StateMachineTestCase):
     def test_push_pop_analysis(self):
         """StateMachine should analyze push/pop relationships."""
 
-        class TestTransitions(TransitionEnum):
+        class TestTransitions(TransitionName):
             PUSH_B = "push_b"
             POP_BACK = "pop_back"
 
@@ -1121,7 +1121,7 @@ class TestAnalysisAndVisualization(StateMachineTestCase):
     def test_mermaid_flowchart_generation(self):
         """StateMachine should generate Mermaid flowcharts."""
 
-        class TestTransitions(TransitionEnum):
+        class TestTransitions(TransitionName):
             GO_TO_B = "go_to_b"
 
         class StateA(State):

@@ -14,7 +14,7 @@ from gevent import sleep
 
 # Import the Enoki modules
 from mycorrhizal.enoki import (
-    State, StateMachine, TransitionEnum, GlobalTransitions,
+    State, StateMachine, TransitionName, GlobalTransitions,
     StateConfiguration, SharedContext, TimeoutMessage, Push, Pop,
     ValidationError, BlockedInUntimedState
 )
@@ -161,7 +161,7 @@ class EnokiTestCase(unittest.TestCase):
                                f"Expected transition to {expected_name}, got {result}")
             else:
                 self.fail(f"Expected string state name, got {type(result)}: {result}")
-        elif isinstance(expected_transition, TransitionEnum):
+        elif isinstance(expected_transition, TransitionName):
             self.assertEqual(result, expected_transition,
                            f"Expected {expected_transition}, got {result}")
         else:
