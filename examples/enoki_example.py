@@ -50,7 +50,6 @@ class NetworkRequestState(State):
     @classmethod
     def _send_msg(cls, ctx):
         sleep(0.2)
-        print("sending message")
         ctx.send_message({'type': 'network_response', 'success': True})
         
 

@@ -42,7 +42,6 @@ markers = [
     "performance: marks tests as performance tests",
     "unit: marks tests as unit tests",
 ]
-asyncio_mode = "auto"
 timeout = 30
 
 # Coverage configuration

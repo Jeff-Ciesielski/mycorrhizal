@@ -19,8 +19,8 @@ import types
 import inspect
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from enum import Enum
+from dataclasses import dataclass, field
+from enum import Enum, IntEnum
 from typing import Any, Dict, Optional, Union, Type, Callable
 import importlib
 import importlib.util, sys, os, types, inspect
@@ -34,7 +34,11 @@ from functools import cache
 
 import gevent
 from gevent import spawn, sleep, Greenlet
-from gevent.queue import Queue as GeventQueue, Empty
+from gevent.queue import (
+    Queue as GeventQueue,
+    Empty,
+    PriorityQueue as GeventPriorityQueue,
+)
 
 
 class TransitionName(Enum):
@@ -74,8 +78,20 @@ class SharedContext:
     common: Any
     msg: Optional[Any] = None
 
+
+@dataclass(order=True)
+class PrioritizedMessage:
+    priority: int
+    item: Any = field(compare=False)
+
+
 @dataclass
-class TimeoutMessage:
+class EnokiInternalMessage:
+    pass
+
+
+@dataclass
+class TimeoutMessage(EnokiInternalMessage):
     """Internal message for timeout events"""
 
     state_name: str
@@ -91,6 +107,18 @@ class ValidationError(Exception):
 
 class BlockedInUntimedState(Exception):
     """Raised when a non-dwelling state blocks without a timeout"""
+
+    pass
+
+
+class StateMachineComplete(Exception):
+    """Raised when the state machine has reached a terminal state"""
+
+    pass
+
+
+class PopFromEmptyStack(Exception):
+    """Raised when we attempt to pop from an empty stack"""
 
 
 @dataclass
@@ -142,7 +170,7 @@ class State(ABC):
     def on_timeout(cls, ctx: SharedContext) -> TransitionName:
         """Called when state times out"""
         return GlobalTransitions.RETRY
-    
+
     @classmethod
     @cache
     def name(cls) -> str:
@@ -183,7 +211,6 @@ class Pop:
     pass
 
 
-
 class StateRegistry:
     """Manages state resolution and validation"""
 
@@ -204,10 +231,10 @@ class StateRegistry:
                 mod = sys.modules.get(module_name)
                 self._resolved_modules[module_name] = mod
 
-                # Store a short name so we can do local file lookup more easily without needin the whole enchilada                
+                # Store a short name so we can do local file lookup more easily without needin the whole enchilada
                 if mod and hasattr(mod, "__file__"):
-                    fp = Path(getattr(mod, '__file__'))
-                    
+                    fp = Path(getattr(mod, "__file__"))
+
                     # Now, grab just the filename, without extension and save that as well
                     self._resolved_modules[fp.stem] = mod
 
@@ -244,8 +271,8 @@ class StateRegistry:
                     raise ValidationError(f"{state_ref} is nowhere in sys.modules")
                 # Now, we have the module and its name, so the fq class name is
                 # state_ref with the modue name clipped out
-                fq_class_path = state_ref[len(mod_name)+1:].split('.')
-                
+                fq_class_path = state_ref[len(mod_name) + 1 :].split(".")
+
                 # Now, we need to walk down the fq_class_path, starting at the
                 # module, getting attributes, and checking if either the
                 # attribute itself exists, or if it exists within locals
@@ -253,7 +280,7 @@ class StateRegistry:
                 for path_elt in fq_class_path:
                     if hasattr(working_elt, path_elt):
                         working_elt = getattr(working_elt, path_elt)
-                    
+
                 if not (
                     isinstance(working_elt, type) and issubclass(working_elt, State)
                 ):
@@ -337,14 +364,18 @@ class StateRegistry:
                                 states_to_visit.append(target_state)
 
                 # Validate that the state has an on_state handler
-                if not self.is_abstract_classmethod_implemented(current_state, 'on_state'):
+                if not self.is_abstract_classmethod_implemented(
+                    current_state, "on_state"
+                ):
                     self._validation_errors.append(
-                        f'State {state_name} does not have an on_state handler defined'
+                        f"State {state_name} does not have an on_state handler defined"
                     )
-                    
+
                 # Make sure non-terminal states define transitions
                 if not current_state.CONFIG.terminal:
-                    if not self.is_abstract_classmethod_implemented(current_state, 'transitions'):
+                    if not self.is_abstract_classmethod_implemented(
+                        current_state, "transitions"
+                    ):
                         self._validation_errors.append(
                             f"Non-terminal state {state_name} does not define any transitions"
                         )
@@ -358,8 +389,10 @@ class StateRegistry:
                         self._validation_errors.append(
                             f"State '{state_name}' has invalid timeout: {current_state.CONFIG.timeout}"
                         )
-                    
-                    has_timeout_handler = self.is_abstract_classmethod_implemented(current_state, 'on_timeout')
+
+                    has_timeout_handler = self.is_abstract_classmethod_implemented(
+                        current_state, "on_timeout"
+                    )
                     if not has_timeout_handler:
                         self._validation_warnings.append(
                             f"State '{state_name}' has timeout but no on_timeout handler defined"
@@ -459,14 +492,33 @@ class StateRegistry:
 class StateMachine:
     """State Machine with gevent-based async support"""
 
+    class MessagePriorities(IntEnum):
+        ERROR = 0
+        INTERNAL_MESSAGE = 1
+        MESSAGE = 2
+
     def __init__(
         self,
         initial_state: Union[str, Type[State]],
         error_state: Union[str, Type[State]] = None,
+        filter_fn: Optional[callable] = None,
+        trap_fn: Optional[callable] = None,
+        on_error_fn=None,
         common_data: Optional[Any] = None,
     ):
 
         self.registry = StateRegistry()
+
+        # The filter and trap functions are used to filter messages
+        # (for example, common messages that apply to the process
+        # rather than an individual state) and trap unhandled messages
+        # (so that one could, for example, raise an exception)
+        self._filter_fn = filter_fn or (lambda x, y: None)
+        self._trap_fn = trap_fn or (lambda x: None)
+
+        # The on_error function allows users to catch and handle specific kinds
+        # of errors as they see fit and avoid crashing if the FSM can recover
+        self._on_err_fn = on_error_fn or (lambda x, y: None)
 
         # Validate the state machine structure
         validation_result = self.registry.validate_all_states(
@@ -496,7 +548,7 @@ class StateMachine:
         self._state_analysis = self._analyze_all_states()
 
         # Gevent-based infrastructure
-        self._message_queue = GeventQueue()
+        self._message_queue = GeventPriorityQueue()
         self._timeout_greenlet = None
         self._timeout_counter = 0
         self._current_timeout_id = None
@@ -507,7 +559,7 @@ class StateMachine:
         self.context = SharedContext(
             send_message=self.send_message,
             log=self.log,
-            common= common_data or dict(),
+            common=common_data or dict(),
         )
 
         self.retry_counters = {}
@@ -791,12 +843,33 @@ class StateMachine:
 
     def send_message(self, message: Any):
         """Send a message to the state machine"""
-        self._message_queue.put(message)
+        try:
+            if message and self._filter_fn(self.context, message):
+                return
+            self._send_message_internal(message)
+        except Exception as e:
+            self._send_message_internal(e)
+
+    def _send_message_internal(self, message):
+        match message:
+            case _ if isinstance(message, EnokiInternalMessage):
+                self._message_queue.put(
+                    PrioritizedMessage(self.MessagePriorities.INTERNAL_MESSAGE, message)
+                )
+            case _ if isinstance(message, Exception):
+                self._message_queue.put(
+                    PrioritizedMessage(self.MessagePriorities.ERROR, message)
+                )
+            case _:
+                # standard message
+                self._message_queue.put(
+                    PrioritizedMessage(self.MessagePriorities.MESSAGE, message)
+                )
 
     def _send_timeout_message(self, state_name: str, timeout_id: int, duration: float):
         """Internal method to send timeout messages"""
         timeout_msg = TimeoutMessage(state_name, timeout_id, duration)
-        self._message_queue.put(timeout_msg)
+        self._send_message_internal(timeout_msg)
 
     def _start_timeout(self, state_class: Type[State]) -> Optional[int]:
         """Start a timeout for the given state"""
@@ -833,8 +906,11 @@ class StateMachine:
             self._timeout_greenlet = None
         self._current_timeout_id = None
 
-    def _handle_timeout_message(self, timeout_msg: TimeoutMessage) -> bool:
+    def _handle_timeout_message(self) -> bool:
         """Handle a timeout message"""
+        timeout_msg = self.context.msg
+        self.context.msg = None
+
         if timeout_msg.timeout_id != self._current_timeout_id:
             self.log(f"Ignoring stale timeout {timeout_msg.timeout_id}")
             return False
@@ -872,48 +948,85 @@ class StateMachine:
         """Log a message"""
         print(f"[FSM] {message}")
 
-    def tick(self, block: bool = True, timeout: Optional[float] = 1.0):
+    def tick(self, timeout: Optional[float] = 0):
         """Process one state machine tick"""
         if not self.current_state:
             return
 
-        # Get next message
-        try:
-            if block:
-                message = self._message_queue.get(timeout=timeout)
-            else:
-                message = self._message_queue.get_nowait()
-        except Empty:
-            message = None
+        match timeout:
+            case 0:
+                block = False
+            case None:
+                block = True
+            case x if x > 0:
+                block = True
+            case _:
+                raise ValueError("Tick timeout must be None, or >=0")
 
-        # Handle timeout messages specially
-        if isinstance(message, TimeoutMessage):
-            if not self._handle_timeout_message(message):
-                return
+        while True:
+            try:
+                if isinstance(self.context.msg, Exception):
+                    raise self.context.msg
 
-            self.context.msg = message
-            transition = self.current_state.on_timeout(self.context)
-        else:
-            self.context.msg = message
-            transition = self.current_state.on_state(self.context)
+                # Handle timeout messages specially
+                if isinstance(self.context.msg, TimeoutMessage):
+                    if not self._handle_timeout_message():
+                        return
+                    transition = self.current_state.on_timeout(self.context)
+                else:
+                    transition = self.current_state.on_state(self.context)
+                if self.current_state.CONFIG.terminal:
+                    raise StateMachineComplete
 
-        self._process_transition(transition)
+                if transition in (None, GlobalTransitions.UNHANDLED):
+                    self._trap_fn(self.context)
 
-    def _process_transition(self, transition: TransitionName):
+                self.context.msg = None
+
+                should_check_queue = self._process_transition(transition)
+
+                if should_check_queue:
+                    if block:
+                        message = self._message_queue.get(timeout=timeout).item
+                    else:
+                        message = self._message_queue.get_nowait().item
+                    self.context.msg = message
+            except Empty:
+                break
+            except Exception as e:
+                # While it's true that 'Pokemon errors' are typically
+                # in poor taste, this allows the user to selectively
+                # handle error cases, and throw any error that isn't
+                # explicitely handled
+
+                # If we're terminal anyway, bail
+                if (
+                    isinstance(e, StateMachineComplete)
+                    or self.current_state.CONFIG.terminal
+                ):
+                    raise
+
+                next_transition = self._on_err_fn(self.context, e)
+                if next_transition:
+                    self._process_transition(next_transition)
+                else:
+                    raise
+
+    def _process_transition(self, transition: TransitionName) -> bool:
         """Process a state transition"""
         transitions = self.registry.get_transitions(self.current_state)
 
-        if transition not in transitions:
+        if transition and (transition not in transitions):
             self.log(f"ERROR: Unknown transition {transition}")
             return
 
-        target = transitions[transition]
+        target = transitions.get(transition)
 
-        if target in (None, GlobalTransitions.UNHANDLED):
+        if transition in (None, GlobalTransitions.UNHANDLED):
             if (
                 self.current_state.CONFIG.can_dwell
             ) or self.current_state.CONFIG.timeout:
-                return
+                return True
             raise BlockedInUntimedState(
                 f"{self.current_state.name} cannot dwell and does not have a timeout"
             )
@@ -930,8 +1043,11 @@ class StateMachine:
         elif target == GlobalTransitions.RESTART:
             self._reset_state_context()
             self._transition_to_state(type(self.current_state))
+            return True
         elif target == GlobalTransitions.RETRY:
             self._handle_retry()
+
+        return False
 
     def _transition_to_state(self, next_state: Type[State]):
         """Transition to a new state"""
@@ -945,7 +1061,6 @@ class StateMachine:
 
         self._start_timeout(next_state)
         next_state.on_enter(self.context)
-
 
     def _handle_retry(self):
         """Handle retry logic with counter"""
@@ -984,8 +1099,7 @@ class StateMachine:
     def _handle_pop(self):
         """Handle pop transition"""
         if not self.state_stack:
-            self.log("ERROR: Cannot pop from empty stack")
-            return
+            raise PopFromEmptyStack
 
         next_state = self.state_stack.pop()
         self._transition_to_state(next_state)
@@ -1003,8 +1117,10 @@ class StateMachine:
                 break
 
             try:
-                self.tick()
+                self.tick(timeout=0.11)
                 iteration += 1
+            except StateMachineComplete:
+                return
             except Exception as e:
                 self.log(f"Error in FSM: {e}")
                 if self.error_state:

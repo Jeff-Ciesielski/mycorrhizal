@@ -26,6 +26,8 @@ from mycorrhizal.enoki import (
     Pop,
     ValidationError,
     BlockedInUntimedState,
+    PopFromEmptyStack,
+    StateMachineComplete
 )
 
 # Import our testing utilities
@@ -54,7 +56,7 @@ class TestStringResolution(EnokiTestCase):
                 # NOTE: For string resolution to work, states CANNOT be declared
                 # inside a function as they will be cleaned up / GCd. They only exist within
                 # the context of that function
-                TestStringResolution.TestTransitions.GO_TO_B: "tests.test_enoki.TestStringResolution.StateB",
+                TestStringResolution.TestTransitions.GO_TO_B: "test_enoki.TestStringResolution.StateB",
                 GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
             }
 
@@ -76,7 +78,7 @@ class TestStringResolution(EnokiTestCase):
     def test_transition_to_string_state_reference(self):
         """States should be able to transition via string references."""
 
-        result = run_fsm_scenario(TestStringResolution.StateA, block=False)
+        result = run_fsm_scenario(TestStringResolution.StateA, timeout=0)
         self.assertEqual(result.get("final_state"), TestStringResolution.StateB)
 
 
@@ -148,10 +150,7 @@ class TestBasicStateTransitions(EnokiTestCase):
             @classmethod
             def transitions(cls):
                 return {
-                    TestTransitions.PUSH_MULTI: Push(
-                        "enoki_tests.StateB", "enoki_tests.StateC"
-                    ),
-                    GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
+                    TestTransitions.PUSH_MULTI: Push(StateB, StateC),
                 }
 
             @classmethod
@@ -537,11 +536,11 @@ class TestStateMachineLifecycle(StateMachineTestCase):
 
             @classmethod
             def transitions(cls):
-                return {TestTransitions.Nada: GlobalTransitions.UNHANDLED}
+                return {TestTransitions.Nada: None}
 
             @classmethod
             def on_state(cls, ctx: SharedContext):
-                return TestTransitions.Nada
+                pass
 
         self.assertFSMBlocks(BlockingState)
 
@@ -606,7 +605,6 @@ class TestStackOperations(StateMachineTestCase):
             def transitions(cls):
                 return {
                     TestTransitions.PUSH_MULTI: Push(StateB, StateC),
-                    GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
             @classmethod
@@ -620,35 +618,31 @@ class TestStackOperations(StateMachineTestCase):
             def transitions(cls):
                 return {
                     TestTransitions.POP_BACK: Pop,
-                    GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
             @classmethod
             def on_state(cls, ctx: SharedContext):
+                ctx.common["B_entered"] = True
                 return TestTransitions.POP_BACK
 
         class StateC(State):
-            CONFIG = StateConfiguration(can_dwell=True)
-
-            @classmethod
-            def transitions(cls):
-                return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
+            CONFIG = StateConfiguration(terminal=True)
 
             @classmethod
             def on_state(cls, ctx: SharedContext):
+                ctx.common["C_entered"] = True
                 return GlobalTransitions.UNHANDLED
 
-        sm = StateMachine(StateA)
+        cd = {"B_entered": False, "C_entered": False}
+        sm = StateMachine(StateA, common_data=cd)
 
         # First tick: A -> B, push C
-        sm.tick()
-        self.assertEqual(sm.current_state, StateB)
-        self.assertFSMStackState(sm, [StateC])
-
-        # Second tick: B -> Pop -> C
-        sm.tick()
+        with self.assertRaises(StateMachineComplete):
+            sm.tick()
         self.assertEqual(sm.current_state, StateC)
         self.assertEqual(len(sm.state_stack), 0)
+        self.assertTrue(cd['B_entered'])
+        self.assertTrue(cd['C_entered'])
 
     def test_pop_from_empty_stack_handled(self):
         """Popping from empty stack should be handled gracefully."""
@@ -674,12 +668,8 @@ class TestStackOperations(StateMachineTestCase):
 
         # This should handle the empty stack gracefully
         # The exact behavior depends on implementation
-        try:
+        with self.assertRaises(PopFromEmptyStack):
             sm.tick()
-            # If it doesn't crash, that's good
-        except Exception as e:
-            # Log what kind of error we get
-            print(f"Pop from empty stack error: {e}")
 
 
 class TestValidation(StateMachineTestCase):
@@ -785,7 +775,7 @@ class TestComplexScenarios(StateMachineTestCase):
 
         # Run the scenario
         scenario_result = run_fsm_scenario(
-            Idle, max_iterations=5, common_data={"timed_out": False}, block=True, timeout=0.1
+            Idle, max_iterations=5, common_data={"timed_out": False}, timeout=0.1
         )
 
         self.assertTrue(scenario_result["ctx"].common.get("timed_out"))
@@ -924,7 +914,6 @@ class TestComplexScenarios(StateMachineTestCase):
                 return {
                     MenuTransitions.ENTER_SUBMENU: Push(SubMenu, MainMenu),
                     MenuTransitions.EXIT: ProcessingComplete,
-                    GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
             @classmethod
@@ -933,7 +922,6 @@ class TestComplexScenarios(StateMachineTestCase):
                     return MenuTransitions.ENTER_SUBMENU
                 elif ctx.msg and ctx.msg.get("action") == "exit":
                     return MenuTransitions.EXIT
-                return GlobalTransitions.UNHANDLED
 
         class SubMenu(State):
             CONFIG = StateConfiguration(can_dwell=True)
@@ -942,33 +930,28 @@ class TestComplexScenarios(StateMachineTestCase):
             def transitions(cls):
                 return {
                     MenuTransitions.BACK: Pop,
-                    GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
             @classmethod
             def on_state(cls, ctx: SharedContext):
                 if ctx.msg and ctx.msg.get("action") == "back":
                     return MenuTransitions.BACK
-                return GlobalTransitions.UNHANDLED
 
         class ProcessingComplete(State):
             CONFIG = StateConfiguration(terminal=True)
 
             @classmethod
-            def transitions(cls):
-                return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
-
-            @classmethod
             def on_state(cls, ctx: SharedContext):
-                return GlobalTransitions.UNHANDLED
+                pass
 
         # Test the menu navigation
         messages = [{"action": "enter_submenu"}, {"action": "back"}, {"action": "exit"}]
 
         scenario_result = run_fsm_scenario(
-            MainMenu, messages=messages, max_iterations=10
+            MainMenu, messages=messages, max_iterations=10, timeout=0
         )
-
+        
+        self.assertEqual(scenario_result['error'], None)
         # Should reach ProcessingComplete
         self.assertEqual(scenario_result["final_state"], ProcessingComplete)
         self.assertTrue(scenario_result["completed"])

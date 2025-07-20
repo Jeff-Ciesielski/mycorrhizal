@@ -10,6 +10,7 @@ __all__ = [
     'EmptyStateStackError',
     'NoPushedStatesError',
     'BlockedInUntimedState',
+    'PopFromEmptyStack'
     # Transition types
     'Push',
     'Pop',
