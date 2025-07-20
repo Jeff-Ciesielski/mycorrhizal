@@ -1,19 +1,19 @@
 [project]
-name = "cordyceps"
+name = "mycorrhizal"
 version = "0.1.0"
-description = "Add your description here"
+description = "Utilities and DSLs for modelling and implementing safe, performant, structured systems"
 readme = "README.md"
-authors = [
-    { name = "Jeff Ciesielski", email = "jeffciesielski@gmail.com" }
-]
+authors = [{ name = "Jeff Ciesielski", email = "jeffciesielski@gmail.com" }]
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["typeguard==4.4.4", "gevent==25.5.1"]
 
 [project.optional-dependencies]
-test = [    "pytest>=7.0.0",
-    "pytest-asyncio>=0.20.0",
+test = [
+    "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
-    "pytest-timeout>=2.0.0",]
+    "pytest-timeout>=2.0.0",
+    "pytest-gevent"
+]
 
 
 [tool.hatch.build]
@@ -32,22 +32,22 @@ addopts = [
     "-v",
     "--tb=short",
     "--strict-markers",
-    "--asyncio-mode=auto",
-    "--cov=src/cordyceps",
+    "--cov=src/mycorrhizal",
     "--cov-report=term",
+    "--cov-report=html"
 ]
 markers = [
     "slow: marks tests as slow",
     "integration: marks tests as integration tests",
     "performance: marks tests as performance tests",
-    "unit: marks tests as unit tests"
+    "unit: marks tests as unit tests",
 ]
 asyncio_mode = "auto"
 timeout = 30
 
 # Coverage configuration
 [tool.coverage.run]
-source = ["cordyceps"]
+source = ["mycorrhizal"]
 omit = ["tests/*", "setup.py"]
 
 [tool.coverage.report]
