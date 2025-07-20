@@ -27,7 +27,7 @@ from mycorrhizal.enoki import (
     ValidationError,
     BlockedInUntimedState,
     PopFromEmptyStack,
-    StateMachineComplete
+    StateMachineComplete,
 )
 
 # Import our testing utilities
@@ -50,7 +50,6 @@ class TestStringResolution(EnokiTestCase):
     class StateA(State):
         CONFIG = StateConfiguration()
 
-        @classmethod
         def transitions(cls):
             return {
                 # NOTE: For string resolution to work, states CANNOT be declared
@@ -60,18 +59,15 @@ class TestStringResolution(EnokiTestCase):
                 GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
             }
 
-        @classmethod
         def on_state(cls, ctx: SharedContext):
             return TestStringResolution.TestTransitions.GO_TO_B
 
     class StateB(State):
         CONFIG = StateConfiguration()
 
-        @classmethod
         def transitions(cls):
             return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-        @classmethod
         def on_state(cls, ctx: SharedContext):
             return GlobalTransitions.UNHANDLED
 
@@ -89,11 +85,9 @@ class TestBasicStateTransitions(EnokiTestCase):
         class TestState(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -108,25 +102,21 @@ class TestBasicStateTransitions(EnokiTestCase):
         class StateA(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {
                     TestTransitions.PUSH_B: Push("enoki_tests.StateB"),
                     GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return TestTransitions.PUSH_B
 
         class StateB(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -147,35 +137,29 @@ class TestBasicStateTransitions(EnokiTestCase):
         class StateA(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {
                     TestTransitions.PUSH_MULTI: Push(StateB, StateC),
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return TestTransitions.PUSH_MULTI
 
         class StateB(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
         class StateC(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -197,14 +181,12 @@ class TestBasicStateTransitions(EnokiTestCase):
         class TestState(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {
                     TestTransitions.POP_BACK: Pop,
                     GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return TestTransitions.POP_BACK
 
@@ -226,15 +208,12 @@ class TestStateLifecycle(EnokiTestCase):
         class TestState(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_enter(cls, ctx: SharedContext):
                 ctx.common.entered = True
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -246,15 +225,12 @@ class TestStateLifecycle(EnokiTestCase):
         class TestState(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_leave(cls, ctx: SharedContext):
                 ctx.common.left = True
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -269,30 +245,25 @@ class TestStateLifecycle(EnokiTestCase):
         class TestState(State):
             CONFIG = StateConfiguration(retries=3)
 
-            @classmethod
             def transitions(cls):
                 return {
                     TestTransitions.FAILED: "enoki_tests.ErrorState",
                     GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
-            @classmethod
             def on_fail(cls, ctx: SharedContext):
                 ctx.common.failed = True
                 return TestTransitions.FAILED
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
         class ErrorState(State):
             CONFIG = StateConfiguration(terminal=True)
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -311,11 +282,9 @@ class TestStateConfiguration(EnokiTestCase):
         class TimeoutState(State):
             CONFIG = StateConfiguration(timeout=10.0)
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -327,11 +296,9 @@ class TestStateConfiguration(EnokiTestCase):
         class RetryState(State):
             CONFIG = StateConfiguration(retries=5)
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -343,11 +310,9 @@ class TestStateConfiguration(EnokiTestCase):
         class TerminalState(State):
             CONFIG = StateConfiguration(terminal=True)
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -359,11 +324,9 @@ class TestStateConfiguration(EnokiTestCase):
         class DwellState(State):
             CONFIG = StateConfiguration(can_dwell=True)
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -379,11 +342,9 @@ class TestSharedContext(EnokiTestCase):
         class TestState(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 ctx.common.test_value = 42
                 return GlobalTransitions.UNHANDLED
@@ -396,11 +357,9 @@ class TestSharedContext(EnokiTestCase):
         class TestState(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 if ctx.msg and ctx.msg.get("action") == "test":
                     ctx.common.received_test = True
@@ -416,11 +375,9 @@ class TestSharedContext(EnokiTestCase):
         class TestState(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 ctx.send_message({"response": "sent"})
                 return GlobalTransitions.UNHANDLED
@@ -437,11 +394,9 @@ class TestSharedContext(EnokiTestCase):
         class TestState(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 ctx.log("Test log message")
                 return GlobalTransitions.UNHANDLED
@@ -462,11 +417,9 @@ class TestStateMachineLifecycle(StateMachineTestCase):
         class InitialState(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -482,25 +435,21 @@ class TestStateMachineLifecycle(StateMachineTestCase):
         class StateA(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {
                     TestTransitions.GO_TO_B: StateB,
                     GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return TestTransitions.GO_TO_B
 
         class StateB(State):
             CONFIG = StateConfiguration(can_dwell=True)  # Prevent blocking
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -515,11 +464,9 @@ class TestStateMachineLifecycle(StateMachineTestCase):
         class TerminalState(State):
             CONFIG = StateConfiguration(terminal=True)
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -534,11 +481,9 @@ class TestStateMachineLifecycle(StateMachineTestCase):
         class BlockingState(State):
             CONFIG = StateConfiguration()  # No timeout, no dwelling
 
-            @classmethod
             def transitions(cls):
                 return {TestTransitions.Nada: None}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 pass
 
@@ -553,25 +498,21 @@ class TestStateMachineLifecycle(StateMachineTestCase):
         class StateA(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {
                     TestTransitions.PUSH_B: Push(StateB),
                     GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return TestTransitions.PUSH_B
 
         class StateB(State):
             CONFIG = StateConfiguration(can_dwell=True)
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -601,26 +542,22 @@ class TestStackOperations(StateMachineTestCase):
         class StateA(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {
                     TestTransitions.PUSH_MULTI: Push(StateB, StateC),
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return TestTransitions.PUSH_MULTI
 
         class StateB(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {
                     TestTransitions.POP_BACK: Pop,
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 ctx.common["B_entered"] = True
                 return TestTransitions.POP_BACK
@@ -628,7 +565,6 @@ class TestStackOperations(StateMachineTestCase):
         class StateC(State):
             CONFIG = StateConfiguration(terminal=True)
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 ctx.common["C_entered"] = True
                 return GlobalTransitions.UNHANDLED
@@ -641,8 +577,8 @@ class TestStackOperations(StateMachineTestCase):
             sm.tick()
         self.assertEqual(sm.current_state, StateC)
         self.assertEqual(len(sm.state_stack), 0)
-        self.assertTrue(cd['B_entered'])
-        self.assertTrue(cd['C_entered'])
+        self.assertTrue(cd["B_entered"])
+        self.assertTrue(cd["C_entered"])
 
     def test_pop_from_empty_stack_handled(self):
         """Popping from empty stack should be handled gracefully."""
@@ -653,14 +589,12 @@ class TestStackOperations(StateMachineTestCase):
         class PopState(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {
                     TestTransitions.POP_BACK: Pop,
                     GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return TestTransitions.POP_BACK
 
@@ -681,11 +615,9 @@ class TestValidation(StateMachineTestCase):
         class BadState(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: "nonexistent.module.FakeState"}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -697,14 +629,12 @@ class TestValidation(StateMachineTestCase):
         class BadState(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {
                     "not_an_enum": "some_state",  # Invalid key
                     GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -716,14 +646,12 @@ class TestValidation(StateMachineTestCase):
         class TimeoutState(State):
             CONFIG = StateConfiguration(timeout=5.0)
 
-            @classmethod
             def transitions(cls):
                 return {
                     # Missing GlobalTransitions.TIMEOUT handler
                     GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -748,26 +676,21 @@ class TestComplexScenarios(StateMachineTestCase):
         class Idle(State):
             CONFIG = StateConfiguration(can_dwell=True)
 
-            @classmethod
             def transitions(cls):
                 return {TimeoutTransitions.GO_TO_LONG_STATE: LongState}
 
-            @classmethod
             def on_state(cls, ctx):
                 return TimeoutTransitions.GO_TO_LONG_STATE
 
         class LongState(State):
             CONFIG = StateConfiguration(timeout=0.2)
 
-            @classmethod
             def transitions(cls):
                 return {TimeoutTransitions.RETURN_TO_IDLE: Idle}
 
-            @classmethod
             def on_state(cls, ctx):
                 pass
 
-            @classmethod
             def on_timeout(cls, ctx):
                 print("timed out")
                 ctx.common["timed_out"] = True
@@ -791,7 +714,6 @@ class TestComplexScenarios(StateMachineTestCase):
         class SetImageLighting(State):
             CONFIG = StateConfiguration(timeout=10.0, retries=3)
 
-            @classmethod
             def transitions(cls):
                 return {
                     ImagingTransitions.LIGHTING_SET: TakePicture,
@@ -800,18 +722,15 @@ class TestComplexScenarios(StateMachineTestCase):
                     GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
-            @classmethod
             def on_enter(cls, ctx: SharedContext):
                 ctx.log("Setting up lighting...")
                 # Simulate async setup
                 spawn(cls._simulate_setup, ctx)
 
-            @classmethod
             def _simulate_setup(cls, ctx: SharedContext):
                 sleep(0.1)  # Short simulation
                 ctx.send_message({"type": "lighting_ready"})
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 if isinstance(ctx.msg, TimeoutMessage):
                     return GlobalTransitions.TIMEOUT
@@ -819,12 +738,10 @@ class TestComplexScenarios(StateMachineTestCase):
                     return ImagingTransitions.LIGHTING_SET
                 return GlobalTransitions.UNHANDLED
 
-            @classmethod
             def on_timeout(cls, ctx: SharedContext):
                 ctx.log("Lighting setup timed out")
                 return GlobalTransitions.RETRY
 
-            @classmethod
             def on_fail(cls, ctx: SharedContext):
                 ctx.log("Lighting setup failed after all retries")
                 return ImagingTransitions.FAILED
@@ -832,7 +749,6 @@ class TestComplexScenarios(StateMachineTestCase):
         class TakePicture(State):
             CONFIG = StateConfiguration(timeout=15.0, retries=2)
 
-            @classmethod
             def transitions(cls):
                 return {
                     ImagingTransitions.PICTURE_TAKEN: ProcessingComplete,
@@ -841,17 +757,14 @@ class TestComplexScenarios(StateMachineTestCase):
                     GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
-            @classmethod
             def on_enter(cls, ctx: SharedContext):
                 ctx.log("Taking picture...")
                 spawn(cls._simulate_capture, ctx)
 
-            @classmethod
             def _simulate_capture(cls, ctx: SharedContext):
                 sleep(0.1)  # Short simulation
                 ctx.send_message({"type": "picture_complete", "success": True})
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 if isinstance(ctx.msg, TimeoutMessage):
                     return GlobalTransitions.TIMEOUT
@@ -865,11 +778,9 @@ class TestComplexScenarios(StateMachineTestCase):
         class ProcessingComplete(State):
             CONFIG = StateConfiguration(terminal=True)
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 ctx.log("Processing complete!")
                 return GlobalTransitions.UNHANDLED
@@ -877,11 +788,9 @@ class TestComplexScenarios(StateMachineTestCase):
         class ErrorState(State):
             CONFIG = StateConfiguration(terminal=True)
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 ctx.log("Error state reached")
                 return GlobalTransitions.UNHANDLED
@@ -909,14 +818,12 @@ class TestComplexScenarios(StateMachineTestCase):
         class MainMenu(State):
             CONFIG = StateConfiguration(can_dwell=True)
 
-            @classmethod
             def transitions(cls):
                 return {
                     MenuTransitions.ENTER_SUBMENU: Push(SubMenu, MainMenu),
                     MenuTransitions.EXIT: ProcessingComplete,
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 if ctx.msg and ctx.msg.get("action") == "enter_submenu":
                     return MenuTransitions.ENTER_SUBMENU
@@ -926,13 +833,11 @@ class TestComplexScenarios(StateMachineTestCase):
         class SubMenu(State):
             CONFIG = StateConfiguration(can_dwell=True)
 
-            @classmethod
             def transitions(cls):
                 return {
                     MenuTransitions.BACK: Pop,
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 if ctx.msg and ctx.msg.get("action") == "back":
                     return MenuTransitions.BACK
@@ -940,7 +845,6 @@ class TestComplexScenarios(StateMachineTestCase):
         class ProcessingComplete(State):
             CONFIG = StateConfiguration(terminal=True)
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 pass
 
@@ -950,8 +854,8 @@ class TestComplexScenarios(StateMachineTestCase):
         scenario_result = run_fsm_scenario(
             MainMenu, messages=messages, max_iterations=10, timeout=0
         )
-        
-        self.assertEqual(scenario_result['error'], None)
+
+        self.assertEqual(scenario_result["error"], None)
         # Should reach ProcessingComplete
         self.assertEqual(scenario_result["final_state"], ProcessingComplete)
         self.assertTrue(scenario_result["completed"])
@@ -970,39 +874,33 @@ class TestAnalysisAndVisualization(StateMachineTestCase):
         class StateA(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {
                     TestTransitions.GO_TO_B: StateB,
                     GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return TestTransitions.GO_TO_B
 
         class StateB(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {
                     TestTransitions.GO_TO_C: StateC,
                     GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return TestTransitions.GO_TO_C
 
         class StateC(State):
             CONFIG = StateConfiguration(terminal=True)
 
-            @classmethod
             def transitions(cls):
                 return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return GlobalTransitions.UNHANDLED
 
@@ -1022,31 +920,35 @@ class TestAnalysisAndVisualization(StateMachineTestCase):
 
         class ImagingTransitions(TransitionName):
             NEXT = "next"
+            PUSH = "push"
 
         class CaptureImage(ImagingState):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {
                     ImagingTransitions.NEXT: ProcessImage,
-                    GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
+                    ImagingTransitions.PUSH: Push(PushState, ProcessImage),
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
-                return ImagingTransitions.NEXT
+                return ImagingTransitions.PUSH
+            
+        class PushState(ImagingState):
+            CONFIG = StateConfiguration()
+            
+            def transitions(cls):
+                return {GlobalTransitions.POP: GlobalTransitions.POP}
+
+            def on_state(cls, ctx):
+                return GlobalTransitions.POP
+                
 
         class ProcessImage(ImagingState):
             CONFIG = StateConfiguration(terminal=True)
 
-            @classmethod
-            def transitions(cls):
-                return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
-
-            @classmethod
             def on_state(cls, ctx: SharedContext):
-                return GlobalTransitions.UNHANDLED
+                pass
 
         sm = StateMachine(CaptureImage)
 
@@ -1064,28 +966,24 @@ class TestAnalysisAndVisualization(StateMachineTestCase):
         class StateA(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {
                     TestTransitions.PUSH_B: Push(StateB, StateA),
                     GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return TestTransitions.PUSH_B
 
         class StateB(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {
                     TestTransitions.POP_BACK: Pop,
                     GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return TestTransitions.POP_BACK
 
@@ -1105,32 +1003,33 @@ class TestAnalysisAndVisualization(StateMachineTestCase):
         """StateMachine should generate Mermaid flowcharts."""
 
         class TestTransitions(TransitionName):
-            GO_TO_B = "go_to_b"
+            GO_TO_C = "go_to_c"
 
         class StateA(State):
             CONFIG = StateConfiguration()
 
-            @classmethod
             def transitions(cls):
                 return {
-                    TestTransitions.GO_TO_B: StateB,
-                    GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
+                    TestTransitions.GO_TO_C: Push(StateB, StateC),
                 }
 
-            @classmethod
             def on_state(cls, ctx: SharedContext):
                 return TestTransitions.GO_TO_B
 
         class StateB(State):
+            CONFIG = StateConfiguration()
+
+            def transitions(cls):
+                return {GlobalTransitions.POP: Pop}
+
+            def on_state(cls, ctx: SharedContext):
+                return GlobalTransitions.POP
+
+        class StateC(State):
             CONFIG = StateConfiguration(terminal=True)
 
-            @classmethod
-            def transitions(cls):
-                return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
-
-            @classmethod
             def on_state(cls, ctx: SharedContext):
-                return GlobalTransitions.UNHANDLED
+                pass
 
         sm = StateMachine(StateA)
 
@@ -1140,7 +1039,7 @@ class TestAnalysisAndVisualization(StateMachineTestCase):
         self.assertIn("flowchart", flowchart.lower())
         self.assertIn("StateA", flowchart)
         self.assertIn("StateB", flowchart)
-
+        self.assertIn("StateC", flowchart)
 
 if __name__ == "__main__":
     # Run specific test groups

@@ -20,6 +20,7 @@ from mycorrhizal.enoki import (
     TimeoutMessage,
     Push,
     Pop,
+    StateMachineComplete,
 )
 
 
@@ -33,27 +34,17 @@ class NetworkTransitions(TransitionName):
 class NetworkRequestState(State):
     CONFIG = StateConfiguration(timeout=5.0, retries=3)
 
-    @classmethod
     def transitions(cls):
         return {
             NetworkTransitions.SUCCESS: "enoki_example.ProcessingState",
             NetworkTransitions.FAILURE: "enoki_example.ErrorState",
         }
 
-    @classmethod
     def on_enter(cls, ctx: SharedContext):
         print("Starting network request...")
         # In real implementation, would initiate async network request here
         ctx.common.request_id = f"req_{randint}"
-        spawn(cls._send_msg, ctx)
 
-    @classmethod
-    def _send_msg(cls, ctx):
-        sleep(0.2)
-        ctx.send_message({'type': 'network_response', 'success': True})
-        
-
-    @classmethod
     def on_state(cls, ctx: SharedContext) -> TransitionName:
         if ctx.msg and ctx.msg.get("type") == "network_response":
             if ctx.msg.get("success"):
@@ -61,12 +52,10 @@ class NetworkRequestState(State):
             else:
                 return NetworkTransitions.FAILURE
 
-    @classmethod
     def on_timeout(cls, ctx: SharedContext) -> TransitionName:
         print("Network request timed out")
         return GlobalTransitions.RETRY
 
-    @classmethod
     def on_fail(cls, ctx: SharedContext) -> TransitionName:
         print("Network request failed after all retries")
         return NetworkTransitions.FAILURE
@@ -75,7 +64,6 @@ class NetworkRequestState(State):
 class ProcessingState(State):
     CONFIG = StateConfiguration(timeout=2.0, terminal=True)
 
-    @classmethod
     def on_state(cls, ctx: SharedContext) -> TransitionName:
         print("Processing complete!")
 
@@ -83,174 +71,8 @@ class ProcessingState(State):
 class ErrorState(State):
     CONFIG = StateConfiguration(terminal=True)
 
-    @classmethod
     def on_state(cls, ctx: SharedContext) -> TransitionName:
         print("Error state reached")
-
-
-# Example 2: State Grouping for Imaging System
-class ImagingState(State):
-    """Base class for imaging-related states"""
-
-    pass
-
-
-class ImagingTransitions(TransitionName):
-    LIGHTING_SET = "lighting_set"
-    PICTURE_TAKEN = "picture_taken"
-    FAILED = "failed"
-
-
-class SetImageLighting(ImagingState):
-    CONFIG = StateConfiguration(timeout=10.0, retries=3)
-
-    @classmethod
-    def transitions(cls):
-        return {
-            ImagingTransitions.LIGHTING_SET: TakePicture,
-            ImagingTransitions.FAILED: ErrorState,
-            GlobalTransitions.TIMEOUT: GlobalTransitions.RETRY,
-            GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
-        }
-
-    @classmethod
-    def on_enter(cls, ctx: SharedContext):
-        print("Setting up lighting...")
-        # Simulate async lighting setup
-        spawn(cls._simulate_lighting_setup, ctx)
-
-    @classmethod
-    def _simulate_lighting_setup(cls, ctx: SharedContext):
-        """Simulate async lighting setup"""
-        sleep(2)  # Simulate lighting adjustment time
-        ctx.send_message({"type": "lighting_ready"})
-
-    @classmethod
-    def on_state(cls, ctx: SharedContext) -> TransitionName:
-        if isinstance(ctx.msg, TimeoutMessage):
-            return GlobalTransitions.TIMEOUT
-        elif ctx.msg and ctx.msg.get("type") == "lighting_ready":
-            return ImagingTransitions.LIGHTING_SET
-        return GlobalTransitions.UNHANDLED
-
-    @classmethod
-    def on_timeout(cls, ctx: SharedContext) -> TransitionName:
-        print("Lighting setup timed out")
-        return GlobalTransitions.RETRY
-
-    @classmethod
-    def on_fail(cls, ctx: SharedContext) -> TransitionName:
-        print("Lighting setup failed after all retries")
-        return ImagingTransitions.FAILED
-
-
-class TakePicture(ImagingState):
-    CONFIG = StateConfiguration(timeout=15.0, retries=2)
-
-    @classmethod
-    def transitions(cls):
-        return {
-            ImagingTransitions.PICTURE_TAKEN: ProcessingState,
-            ImagingTransitions.FAILED: ErrorState,
-            GlobalTransitions.TIMEOUT: GlobalTransitions.RETRY,
-            GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
-        }
-
-    @classmethod
-    def on_enter(cls, ctx: SharedContext):
-        print("Taking picture...")
-        spawn(cls._simulate_picture_capture, ctx)
-
-    @classmethod
-    def _simulate_picture_capture(cls, ctx: SharedContext):
-        """Simulate async picture capture"""
-        sleep(3)  # Simulate capture time
-        ctx.send_message({"type": "picture_complete", "success": True})
-
-    @classmethod
-    def on_state(cls, ctx: SharedContext) -> TransitionName:
-        if isinstance(ctx.msg, TimeoutMessage):
-            return GlobalTransitions.TIMEOUT
-        elif ctx.msg and ctx.msg.get("type") == "picture_complete":
-            if ctx.msg.get("success"):
-                return ImagingTransitions.PICTURE_TAKEN
-            else:
-                return ImagingTransitions.FAILED
-        return GlobalTransitions.UNHANDLED
-
-    @classmethod
-    def on_timeout(cls, ctx: SharedContext) -> TransitionName:
-        print("Picture capture timed out")
-        return GlobalTransitions.RETRY
-
-    @classmethod
-    def on_fail(cls, ctx: SharedContext) -> TransitionName:
-        print("Picture capture failed after all retries")
-        return ImagingTransitions.FAILED
-
-
-# Example 3: Push/Pop State Stack Example
-class MenuTransitions(TransitionName):
-    ENTER_SUBMENU = "enter_submenu"
-    BACK = "back"
-    EXIT = "exit"
-
-
-class MainMenu(State):
-    CONFIG = StateConfiguration(can_dwell=True)
-
-    @classmethod
-    def transitions(cls):
-        return {
-            MenuTransitions.ENTER_SUBMENU: Push(SubMenu, MainMenu),
-            MenuTransitions.EXIT: ProcessingState,
-            GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
-        }
-
-    @classmethod
-    def on_state(cls, ctx: SharedContext) -> TransitionName:
-        if ctx.msg and ctx.msg.get("action") == "enter_submenu":
-            return MenuTransitions.ENTER_SUBMENU
-        elif ctx.msg and ctx.msg.get("action") == "exit":
-            return MenuTransitions.EXIT
-        return GlobalTransitions.UNHANDLED
-
-
-class SubMenu(State):
-    CONFIG = StateConfiguration(can_dwell=True)
-
-    @classmethod
-    def transitions(cls):
-        return {
-            MenuTransitions.BACK: Pop,
-            MenuTransitions.ENTER_SUBMENU: Push(SubMenuItem, SubMenu),
-            GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
-        }
-
-    @classmethod
-    def on_state(cls, ctx: SharedContext) -> TransitionName:
-        if ctx.msg and ctx.msg.get("action") == "back":
-            return MenuTransitions.BACK
-        elif ctx.msg and ctx.msg.get("action") == "enter_item":
-            return MenuTransitions.ENTER_SUBMENU
-        return GlobalTransitions.UNHANDLED
-
-
-class SubMenuItem(State):
-    CONFIG = StateConfiguration(can_dwell=True)
-
-    @classmethod
-    def transitions(cls):
-        return {
-            MenuTransitions.BACK: Pop,
-            GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
-        }
-
-    @classmethod
-    def on_state(cls, ctx: SharedContext) -> TransitionName:
-        if ctx.msg and ctx.msg.get("action") == "back":
-            return MenuTransitions.BACK
-        return GlobalTransitions.UNHANDLED
 
 
 # Example usage and testingv
@@ -287,9 +109,153 @@ def example_network_fsm():
     spawn(simulate_network_response)
 
     # Run FSM
-    fsm.run(max_iterations=10)
+    try:
+        fsm.run(timeout=0.1)
+    except StateMachineComplete:
+        pass
 
     print(f"Final state: {fsm.current_state.name()}")
+
+
+# Example 2: State Grouping for Imaging System
+class ImagingState(State):
+    """Base class for imaging-related states"""
+
+    pass
+
+
+class ImagingTransitions(TransitionName):
+    LIGHTING_SET = "lighting_set"
+    PICTURE_TAKEN = "picture_taken"
+    FAILED = "failed"
+
+
+class SetImageLighting(ImagingState):
+    CONFIG = StateConfiguration(timeout=10.0, retries=3)
+
+    def transitions(cls):
+        return {
+            ImagingTransitions.LIGHTING_SET: TakePicture,
+            ImagingTransitions.FAILED: ErrorState,
+        }
+
+    def on_enter(cls, ctx: SharedContext):
+        print("Setting up lighting...")
+        # Simulate async lighting setup
+        spawn(cls._simulate_lighting_setup, ctx)
+
+    def _simulate_lighting_setup(cls, ctx: SharedContext):
+        """Simulate async lighting setup"""
+        sleep(2)  # Simulate lighting adjustment time
+        print("Light ready")
+        ctx.send_message({"type": "lighting_ready"})
+
+    def on_state(cls, ctx: SharedContext) -> TransitionName:
+        if ctx.msg and ctx.msg.get("type") == "lighting_ready":
+            return ImagingTransitions.LIGHTING_SET
+
+    def on_timeout(cls, ctx: SharedContext) -> TransitionName:
+        print("Lighting setup timed out")
+        return GlobalTransitions.RETRY
+
+    def on_fail(cls, ctx: SharedContext) -> TransitionName:
+        print("Lighting setup failed after all retries")
+        return ImagingTransitions.FAILED
+
+
+class TakePicture(ImagingState):
+    CONFIG = StateConfiguration(timeout=15.0, retries=2)
+
+    def transitions(cls):
+        return {
+            ImagingTransitions.PICTURE_TAKEN: ProcessingState,
+            ImagingTransitions.FAILED: ErrorState,
+            GlobalTransitions.TIMEOUT: GlobalTransitions.RETRY,
+        }
+
+    def on_enter(cls, ctx: SharedContext):
+        print("Taking picture...")
+        spawn(cls._simulate_picture_capture, ctx)
+
+    def _simulate_picture_capture(cls, ctx: SharedContext):
+        """Simulate async picture capture"""
+        sleep(3)  # Simulate capture time
+        ctx.send_message({"type": "picture_complete", "success": True})
+
+    def on_state(cls, ctx: SharedContext) -> TransitionName:
+        if isinstance(ctx.msg, TimeoutMessage):
+            return GlobalTransitions.TIMEOUT
+        elif ctx.msg and ctx.msg.get("type") == "picture_complete":
+            if ctx.msg.get("success"):
+                return ImagingTransitions.PICTURE_TAKEN
+            else:
+                return ImagingTransitions.FAILED
+
+    def on_timeout(cls, ctx: SharedContext) -> TransitionName:
+        print("Picture capture timed out")
+        return GlobalTransitions.RETRY
+
+    def on_fail(cls, ctx: SharedContext) -> TransitionName:
+        print("Picture capture failed after all retries")
+        return ImagingTransitions.FAILED
+
+
+# Example 3: Push/Pop State Stack Example
+class MenuTransitions(TransitionName):
+    ENTER_SUBMENU = "enter_submenu"
+    BACK = "back"
+    EXIT = "exit"
+
+
+class MainMenu(State):
+    CONFIG = StateConfiguration(can_dwell=True)
+
+    def transitions(cls):
+        return {
+            MenuTransitions.ENTER_SUBMENU: Push(SubMenu, MainMenu),
+            MenuTransitions.EXIT: ProcessingState,
+            GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
+        }
+
+    def on_state(cls, ctx: SharedContext) -> TransitionName:
+        if ctx.msg and ctx.msg.get("action") == "enter_submenu":
+            return MenuTransitions.ENTER_SUBMENU
+        elif ctx.msg and ctx.msg.get("action") == "exit":
+            return MenuTransitions.EXIT
+        return GlobalTransitions.UNHANDLED
+
+
+class SubMenu(State):
+    CONFIG = StateConfiguration(can_dwell=True)
+
+    def transitions(cls):
+        return {
+            MenuTransitions.BACK: Pop,
+            MenuTransitions.ENTER_SUBMENU: Push(SubMenuItem, SubMenu),
+            GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
+        }
+
+    def on_state(cls, ctx: SharedContext) -> TransitionName:
+        if ctx.msg and ctx.msg.get("action") == "back":
+            return MenuTransitions.BACK
+        elif ctx.msg and ctx.msg.get("action") == "enter_item":
+            return MenuTransitions.ENTER_SUBMENU
+        return GlobalTransitions.UNHANDLED
+
+
+class SubMenuItem(State):
+    CONFIG = StateConfiguration(can_dwell=True)
+
+    def transitions(cls):
+        return {
+            MenuTransitions.BACK: Pop,
+            GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
+        }
+
+    def on_state(cls, ctx: SharedContext) -> TransitionName:
+        if ctx.msg and ctx.msg.get("action") == "back":
+            return MenuTransitions.BACK
+        return GlobalTransitions.UNHANDLED
 
 
 def example_imaging_fsm():
@@ -325,7 +291,11 @@ def example_imaging_fsm():
     print(f"\nStates reachable from SetImageLighting: {reachable}")
 
     # Run FSM
-    fsm.run(max_iterations=10)
+    try:
+        fsm.run()
+    except StateMachineComplete:
+        pass
+    
 
     print(f"Final state: {fsm.current_state.name()}")
 
@@ -392,7 +362,10 @@ def example_menu_fsm():
     spawn(simulate_menu_navigation)
 
     # Run FSM
-    fsm.run(max_iterations=20)
+    try:
+        fsm.run()
+    except StateMachineComplete:
+        pass
 
     print(f"Final state: {fsm.current_state.name()}")
     print(f"Stack depth at end: {len(fsm.state_stack)}")
@@ -410,7 +383,6 @@ class WorkflowTransitions(TransitionName):
 class MainWorkflow(State):
     CONFIG = StateConfiguration(can_dwell=True)
 
-    @classmethod
     def transitions(cls):
         return {
             # Now includes itself for return after interrupt
@@ -426,7 +398,6 @@ class MainWorkflow(State):
             GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
         }
 
-    @classmethod
     def on_state(cls, ctx: SharedContext) -> TransitionName:
         return GlobalTransitions.UNHANDLED
 
@@ -434,7 +405,6 @@ class MainWorkflow(State):
 class TaskExecution(State):
     CONFIG = StateConfiguration(timeout=10.0)
 
-    @classmethod
     def transitions(cls):
         return {
             WorkflowTransitions.COMPLETE_TASK: Pop,  # Pops to TaskCleanup
@@ -446,7 +416,6 @@ class TaskExecution(State):
             GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
         }
 
-    @classmethod
     def on_state(cls, ctx: SharedContext) -> TransitionName:
         return GlobalTransitions.UNHANDLED
 
@@ -454,7 +423,6 @@ class TaskExecution(State):
 class TaskCleanup(State):
     CONFIG = StateConfiguration(timeout=5.0)
 
-    @classmethod
     def transitions(cls):
         return {
             WorkflowTransitions.COMPLETE_TASK: Pop,  # Pops to MainWorkflow
@@ -462,7 +430,6 @@ class TaskCleanup(State):
             GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
         }
 
-    @classmethod
     def on_state(cls, ctx: SharedContext) -> TransitionName:
         return GlobalTransitions.UNHANDLED
 
@@ -470,7 +437,6 @@ class TaskCleanup(State):
 class InterruptHandler(State):
     CONFIG = StateConfiguration(timeout=3.0)
 
-    @classmethod
     def transitions(cls):
         return {
             # This Pop can go to either MainWorkflow or TaskExecution
@@ -480,7 +446,6 @@ class InterruptHandler(State):
             GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
         }
 
-    @classmethod
     def on_state(cls, ctx: SharedContext) -> TransitionName:
         return GlobalTransitions.UNHANDLED
 
@@ -488,11 +453,9 @@ class InterruptHandler(State):
 class ProcessingState(State):
     CONFIG = StateConfiguration(terminal=True)
 
-    @classmethod
     def transitions(cls):
         return {GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED}
 
-    @classmethod
     def on_state(cls, ctx: SharedContext) -> TransitionName:
         return GlobalTransitions.UNHANDLED
 
@@ -567,7 +530,6 @@ class DeepTransitions(TransitionName):
 class Level1(State):
     CONFIG = StateConfiguration()
 
-    @classmethod
     def transitions(cls):
         return {
             DeepTransitions.DIVE: Push(
@@ -576,7 +538,6 @@ class Level1(State):
             GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
         }
 
-    @classmethod
     def on_state(cls, ctx: SharedContext) -> TransitionName:
         return GlobalTransitions.UNHANDLED
 
@@ -584,7 +545,6 @@ class Level1(State):
 class Level2(State):
     CONFIG = StateConfiguration()
 
-    @classmethod
     def transitions(cls):
         return {
             DeepTransitions.DIVE: Push(
@@ -594,7 +554,6 @@ class Level2(State):
             GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
         }
 
-    @classmethod
     def on_state(cls, ctx: SharedContext) -> TransitionName:
         return GlobalTransitions.UNHANDLED
 
@@ -602,14 +561,12 @@ class Level2(State):
 class Level3(State):
     CONFIG = StateConfiguration()
 
-    @classmethod
     def transitions(cls):
         return {
             DeepTransitions.SURFACE: Pop,
             GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
         }
 
-    @classmethod
     def on_state(cls, ctx: SharedContext) -> TransitionName:
         return GlobalTransitions.UNHANDLED
 
@@ -617,14 +574,12 @@ class Level3(State):
 class Shared(State):
     CONFIG = StateConfiguration()
 
-    @classmethod
     def transitions(cls):
         return {
             DeepTransitions.SURFACE: Pop,  # Can pop to Level1, Level2, or others
             GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED,
         }
 
-    @classmethod
     def on_state(cls, ctx: SharedContext) -> TransitionName:
         return GlobalTransitions.UNHANDLED
 
@@ -664,11 +619,9 @@ def example_validation_errors():
     class BrokenState(State):
         CONFIG = StateConfiguration()
 
-        @classmethod
         def transitions(cls):
             return {GlobalTransitions.UNHANDLED: "nonexistent.module.BadState"}
 
-        @classmethod
         def on_state(cls, ctx: SharedContext) -> TransitionName:
             return GlobalTransitions.UNHANDLED
 
@@ -682,14 +635,12 @@ def example_validation_errors():
     class TimeoutState(State):
         CONFIG = StateConfiguration(timeout=5.0)
 
-        @classmethod
         def transitions(cls):
             return {
                 GlobalTransitions.UNHANDLED: GlobalTransitions.UNHANDLED
                 # Missing TIMEOUT handler - will generate warning
             }
 
-        @classmethod
         def on_state(cls, ctx: SharedContext) -> TransitionName:
             return GlobalTransitions.UNHANDLED
 
@@ -703,11 +654,11 @@ def example_validation_errors():
 if __name__ == "__main__":
     # Run all examples
     example_network_fsm()
-    # example_imaging_fsm()
-    # example_menu_fsm()
-    # example_push_pop_detailed()
-    # deep_stack_analysis()
-    # example_validation_errors()
+    example_imaging_fsm()
+    example_menu_fsm()
+    example_push_pop_detailed()
+    deep_stack_analysis()
+    example_validation_errors()
 
     print("\n" + "=" * 50)
     print("All examples completed!")

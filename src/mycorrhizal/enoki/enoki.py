@@ -18,7 +18,7 @@ import os
 import types
 import inspect
 
-from abc import ABC, abstractmethod
+from abc import ABC, abstractmethod, ABCMeta
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from typing import Any, Dict, Optional, Union, Type, Callable
@@ -131,12 +131,59 @@ class ValidationResult:
     discovered_states: set[str]
 
 
-class State(ABC):
+class StateMeta(ABCMeta):
+    def __new__(mcs, name, bases, namespace, **kwargs):
+        # Methods that should automatically become classmethods
+        auto_classmethod_names = {
+            "transitions",
+            "on_state",
+            "on_enter",
+            "on_leave",
+            "on_fail",
+            "on_timeout",
+        }
+
+        # Convert specified methods to classmethods if they aren't already
+        for method_name in auto_classmethod_names:
+            if method_name in namespace:
+                method = namespace[method_name]
+                # Only convert if it's not already a classmethod/staticmethod
+                if not isinstance(method, (classmethod, staticmethod)):
+                    # If it's an abstractmethod, we need to handle it specially
+                    if (
+                        hasattr(method, "__isabstractmethod__")
+                        and method.__isabstractmethod__
+                    ):
+                        # Create classmethod first, then make it abstract
+                        new_method = classmethod(
+                            abstractmethod(
+                                method.__func__
+                                if hasattr(method, "__func__")
+                                else method
+                            )
+                        )
+                    else:
+                        new_method = classmethod(method)
+                    namespace[method_name] = new_method
+
+        # Also auto-convert any private methods (starting with _)
+        for key, value in list(namespace.items()):
+            if (
+                key.startswith("_")
+                and callable(value)
+                and not isinstance(value, (classmethod, staticmethod))
+                and not key.startswith("__")
+            ):
+                namespace[key] = classmethod(value)
+
+        return super().__new__(mcs, name, bases, namespace)
+
+
+class State(ABC, metaclass=StateMeta):
     """Base class for states"""
 
     CONFIG = StateConfiguration()
 
-    @classmethod
     @abstractmethod
     def transitions(
         cls,
@@ -144,32 +191,27 @@ class State(ABC):
         """Returns mapping of transition enums to their targets"""
         return dict()
 
-    @classmethod
     @abstractmethod
     def on_state(cls, ctx: SharedContext) -> TransitionName:
         """Main state logic"""
         pass
 
-    @classmethod
     def on_enter(cls, ctx: SharedContext) -> None:
         """Called when entering the state"""
         pass
 
-    @classmethod
     def on_leave(cls, ctx: SharedContext) -> None:
         """Called when leaving the state"""
         pass
 
-    @classmethod
     def on_fail(cls, ctx: SharedContext) -> TransitionName:
         """Called when retry limit is exceeded"""
         return GlobalTransitions.UNHANDLED
 
-    @classmethod
     @abstractmethod
     def on_timeout(cls, ctx: SharedContext) -> TransitionName:
         """Called when state times out"""
-        return GlobalTransitions.RETRY
+        pass
 
     @classmethod
     @cache
@@ -1104,7 +1146,7 @@ class StateMachine:
         next_state = self.state_stack.pop()
         self._transition_to_state(next_state)
 
-    def run(self, max_iterations: Optional[int] = None, timeout: Optional[float] = 0):
+    def run(self, max_iterations: Optional[int] = None, timeout: Optional[float] = 1):
         """Run the state machine until terminal state"""
         iteration = 0
 
