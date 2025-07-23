@@ -332,6 +332,10 @@ class IOInputPlace(Place):
             self._greenlet = spawn(self._input_loop)
             if self._net:
                 self._net._running_tasks.add(self._greenlet)
+                
+    def sleep_cycles(self, n_cycles):
+        for _ in range(n_cycles):
+            gevent.sleep(1e-6)
     
     def _input_loop(self):
         """Main input loop - calls on_input() and puts tokens in queue."""
@@ -707,6 +711,10 @@ class Transition(ABC):
         except Exception as e:
             # Handle error and potentially rollback
             self._handle_error(e, consumed_tokens)
+
+    def sleep_cycles(self, n_cycles):
+        for _ in range(n_cycles):
+            gevent.sleep(1e-6)
 
     def on_fire(self, consumed: Dict[PlaceName, List[Token]]) -> Optional[Dict[PlaceName, List[Token]]]:
         """
