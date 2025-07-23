@@ -10,7 +10,8 @@ __all__ = [
     'EmptyStateStackError',
     'NoPushedStatesError',
     'BlockedInUntimedState',
-    'PopFromEmptyStack'
+    'PopFromEmptyStack',
+    'ValidationError',
     # Transition types
     'Push',
     'Pop',
@@ -19,6 +20,8 @@ __all__ = [
     'Retry',
     'Restart',
     'Repeat',
+    'StateRef',
+    'LabeledTransition',
     # Core classes
     'State',
     'DefaultStates',

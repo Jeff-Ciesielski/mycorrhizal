@@ -17,8 +17,6 @@ import traceback
 from mycorrhizal.enoki import (
     State,
     StateMachine,
-    TransitionName,
-    GlobalTransitions,
     StateConfiguration,
     SharedContext,
     TimeoutMessage,
@@ -27,6 +25,7 @@ from mycorrhizal.enoki import (
     ValidationError,
     BlockedInUntimedState,
     StateMachineComplete,
+    Unhandled
 )
 
 
@@ -135,7 +134,7 @@ def simulate_state_lifecycle(
             results.append((msg, result))
 
             # Break if we get a definitive transition
-            if result != GlobalTransitions.UNHANDLED:
+            if result not in (None, Unhandled):
                 break
 
         except Exception as e:
@@ -166,7 +165,7 @@ class EnokiTestCase(unittest.TestCase):
         ):
             # Convert state class to string for comparison
             if isinstance(result, str):
-                expected_name = expected_transition.name()
+                expected_name = expected_transition.name
                 self.assertEqual(
                     result,
                     expected_name,
@@ -186,8 +185,8 @@ class EnokiTestCase(unittest.TestCase):
     def assertNoTransition(self, state_class, context=None, **context_kwargs):
         """Assert that a state does not transition (returns UNHANDLED)."""
         result = run_state_on_state(state_class, context, **context_kwargs)
-        self.assertEqual(
-            result, GlobalTransitions.UNHANDLED, f"Expected UNHANDLED, got {result}"
+        self.assertIn(
+            result, (None, Unhandled), f"Expected None/Unhandled, got {result}"
         )
 
     def assertPushTransition(
@@ -201,7 +200,7 @@ class EnokiTestCase(unittest.TestCase):
         expected_names = []
         for state in expected_states:
             if isinstance(state, type) and issubclass(state, State):
-                expected_names.append(state.name())
+                expected_names.append(state.name)
             else:
                 expected_names.append(str(state))
 
@@ -286,7 +285,7 @@ class EnokiTestCase(unittest.TestCase):
         actual_target = transitions[transition_enum]
 
         if isinstance(expected_target, type) and issubclass(expected_target, State):
-            expected_name = expected_target.name()
+            expected_name = expected_target.name
             self.assertEqual(
                 actual_target,
                 expected_name,
@@ -313,7 +312,7 @@ class EnokiTestCase(unittest.TestCase):
 
     def assertTimeoutBehavior(self, state_class, context=None, **context_kwargs):
         """Assert that a state properly handles timeout messages."""
-        timeout_msg = TimeoutMessage(state_class.name(), 1, 5.0)
+        timeout_msg = TimeoutMessage(state_class.name, 1, 5.0)
 
         if context is None:
             context = make_mock_context(msg=timeout_msg, **context_kwargs)
@@ -359,8 +358,8 @@ class StateMachineTestCase(EnokiTestCase):
             print(f"FSM tick error: {e}")
 
         if isinstance(expected_state, type) and issubclass(expected_state, State):
-            expected_name = expected_state.name()
-            actual_name = sm.current_state.name()
+            expected_name = expected_state.name
+            actual_name = sm.current_state.name
             self.assertEqual(
                 actual_name,
                 expected_name,
@@ -380,17 +379,8 @@ class StateMachineTestCase(EnokiTestCase):
 
         # Run until terminal or max iterations
         max_iterations = 100
-        for i in range(max_iterations):
-            if sm.current_state.CONFIG.terminal:
-                break
-            try:
-                sm.tick()
-            except BlockedInUntimedState:
-                # Can't proceed further
-                break
-            except Exception:
-                # Error occurred
-                break
+        with self.assertRaises(StateMachineComplete):
+            sm.run(max_iterations)
 
         self.assertTrue(
             sm.current_state.CONFIG.terminal, "FSM should reach terminal state"
@@ -411,10 +401,10 @@ class StateMachineTestCase(EnokiTestCase):
     def assertFSMStackState(self, sm, expected_stack):
         """Assert that the FSM's state stack matches expected states."""
         actual_stack = [
-            s.name() if hasattr(s, "name") else str(s) for s in sm.state_stack
+            s.name if hasattr(s, "name") else str(s) for s in sm.state_stack
         ]
         expected_names = [
-            s.name() if hasattr(s, "name") else str(s) for s in expected_stack
+            s.name if hasattr(s, "name") else str(s) for s in expected_stack
         ]
         self.assertEqual(
             actual_stack,
@@ -432,7 +422,7 @@ class StateMachineTestCase(EnokiTestCase):
         if expected_states:
             discovered = sm.discovered_states
             expected_names = {
-                s.name() if hasattr(s, "name") else str(s) for s in expected_states
+                s.name if hasattr(s, "name") else str(s) for s in expected_states
             }
             self.assertEqual(
                 discovered,
@@ -513,7 +503,7 @@ def run_fsm_scenario(
         }
     """
     sm = StateMachine(initial_state, **sm_kwargs)
-    states_visited = [sm.current_state.name()]
+    states_visited = [sm.current_state.name]
     error = None
     completed = False
 

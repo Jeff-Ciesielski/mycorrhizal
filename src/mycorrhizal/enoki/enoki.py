@@ -20,8 +20,19 @@ import inspect
 
 from abc import ABC, abstractmethod, ABCMeta
 from dataclasses import dataclass, field
-from enum import Enum, IntEnum
-from typing import Any, Dict, Optional, Union, Type, Callable
+from enum import Enum, IntEnum, auto
+from typing import (
+    Any,
+    Dict,
+    Optional,
+    Union,
+    Type,
+    Callable,
+    List,
+    Tuple,
+    Hashable,
+    Set,
+)
 import importlib
 import importlib.util, sys, os, types, inspect
 from itertools import accumulate
@@ -39,24 +50,7 @@ from gevent.queue import (
     Empty,
     PriorityQueue as GeventPriorityQueue,
 )
-
-
-class TransitionName(Enum):
-    """Base class for state-specific transition enums"""
-
-    pass
-
-
-class GlobalTransitions(TransitionName):
-    """Common transitions available to all states"""
-
-    UNHANDLED = "unhandled"
-    AGAIN = "again"
-    REPEAT = "repeat"
-    RESTART = "restart"
-    RETRY = "retry"
-    POP = "pop"
-    TIMEOUT = "timeout"
+import traceback
 
 
 @dataclass
@@ -121,6 +115,14 @@ class PopFromEmptyStack(Exception):
     """Raised when we attempt to pop from an empty stack"""
 
 
+class InvalidTransition(Exception):
+    """Raised when an invalid transition is detected"""
+
+
+class NoStateToTick(Exception):
+    """Rasied when the FSM object doesn't have a state attached"""
+
+
 @dataclass
 class ValidationResult:
     """Results of state machine validation"""
@@ -129,6 +131,130 @@ class ValidationResult:
     errors: list[str]
     warnings: list[str]
     discovered_states: set[str]
+
+
+class ClassPropertyDescriptor:
+    def __init__(self, fget):
+        self.fget = fget
+
+    def __get__(self, obj, klass=None):
+        if klass is None:
+            klass = type(obj)
+        return self.fget(klass)
+
+
+def classproperty(func):
+    return ClassPropertyDescriptor(func)
+
+
+@dataclass
+class TransitionType:
+
+    # A transition that awaits will require backing out to the FSM loop to await
+    # an event or message
+    AWAITS: bool = False
+
+    @classproperty
+    def name(cls):
+        return cls.__name__
+
+    @classproperty
+    def base_name(cls):
+        if hasattr(cls, "__bases__"):
+            return cls.__bases__[0].name
+        return cls.name
+
+    def __hash__(self):
+        return hash(f"{self.base_name()}.{self.name}")
+
+
+@dataclass
+class StateTransition(TransitionType):
+    """Represents a transition to a different state"""
+
+    pass
+
+
+@dataclass
+class StateContinuation(TransitionType):
+    """Represents staying in the same state."""
+
+    pass
+
+
+@dataclass
+class StateRenewal(TransitionType):
+    """Represents a transition back into the current state"""
+
+
+# TODO: Rethink this name?
+@dataclass
+class Again(StateContinuation):
+    """Executes the current state immediately from on_state without affecting
+    the retry counter.
+
+    NOTE: This is synonymous with returning `self`
+    """
+
+    pass
+
+
+@dataclass
+class Unhandled(StateContinuation):
+    """Executes the current state from on_state without affecting the retry
+    counter on the next event or message.
+
+    NOTE: This is synonymous with returning `None`
+    """
+
+    AWAITS = True
+
+
+@dataclass
+class Retry(StateContinuation):
+    """Retries the current state, decrementing it's
+    retry counter and immediately beginning execution from on_enter."""
+
+    pass
+
+
+@dataclass
+class Restart(StateRenewal):
+    """Restarts the current state, resetting
+    the retry counter, and awaiting a message or event to begin from
+    on_enter."""
+
+    AWAITS = True
+
+
+@dataclass
+class Repeat(StateRenewal):
+    """Repeats the current state. The retry
+    counter is reset, and the state immediately begins execution from  on_enter.
+
+    NOTE: This is synonymous with returning `type(self)` OR the constructor for
+    the current state (i.e it acts like any other state transition aside from NOT firing on_exit)
+    """
+
+    pass
+
+
+@dataclass
+class StateRef(StateTransition):
+    state: str = ""
+
+    def __init__(self, state):
+        self.state = state
+        self.AWAITS = False
+
+    def __hash__(self):
+        return hash(self.state)
+
+
+@dataclass
+class LabeledTransition:
+    label: Enum
+    transition: TransitionType
 
 
 class StateMeta(ABCMeta):
@@ -179,7 +305,7 @@ class StateMeta(ABCMeta):
         return super().__new__(mcs, name, bases, namespace)
 
 
-class State(ABC, metaclass=StateMeta):
+class State(StateTransition, ABC, metaclass=StateMeta):
     """Base class for states"""
 
     CONFIG = StateConfiguration()
@@ -187,12 +313,12 @@ class State(ABC, metaclass=StateMeta):
     @abstractmethod
     def transitions(
         cls,
-    ) -> Dict[TransitionName, Union[str, Type["State"], "Push", "Pop"]]:
+    ) -> List[Union[LabeledTransition, TransitionType]]:
         """Returns mapping of transition enums to their targets"""
         return dict()
 
     @abstractmethod
-    def on_state(cls, ctx: SharedContext) -> TransitionName:
+    def on_state(cls, ctx: SharedContext):
         """Main state logic"""
         pass
 
@@ -204,50 +330,63 @@ class State(ABC, metaclass=StateMeta):
         """Called when leaving the state"""
         pass
 
-    def on_fail(cls, ctx: SharedContext) -> TransitionName:
+    def on_fail(cls, ctx: SharedContext):
         """Called when retry limit is exceeded"""
-        return GlobalTransitions.UNHANDLED
+        pass
 
     @abstractmethod
-    def on_timeout(cls, ctx: SharedContext) -> TransitionName:
+    def on_timeout(cls, ctx: SharedContext):
         """Called when state times out"""
         pass
 
-    @classmethod
-    @cache
+    @classproperty
     def name(cls) -> str:
-        """Returns a fully qualified name for the state, omitting <locals> and using filename for scripts."""
-        import inspect, os
+        """Returns a fully qualified name for the state, using filename for scripts."""
 
-        module = cls.__module__
-        if module == "__main__":
-            filename = inspect.getfile(cls)
-            module = os.path.splitext(os.path.basename(filename))[0]
-        return f"{module}.{cls.__qualname__}"
+        @cache
+        def gen_name():
+            module = cls.__module__
+            if module == "__main__":
+                filename = inspect.getfile(cls)
+                module = os.path.splitext(os.path.basename(filename))[0]
+            return f"{module}.{cls.__qualname__}"
 
-    @classmethod
-    @cache
+        return gen_name()
+
+    @classproperty
     def group_name(cls) -> str:
         """Returns the group name for visualization purposes"""
-        for base in cls.__mro__:
-            if base != State and issubclass(base, State) and base != cls:
-                return base.__name__
-        return cls.__name__
 
-    @classmethod
+        @cache
+        def gen_name():
+            for base in cls.__mro__:
+                if base != State and issubclass(base, State) and base != cls:
+                    return base.__name__
+            return cls.__name__
+
+        return gen_name()
+
+    @classproperty
     def base_name(cls) -> str:
         """Returns just the class name without module path"""
         return cls.__qualname__.split(".")[-1]
 
 
-class Push:
+@dataclass(init=False)
+class Push(StateTransition):
     """Represents pushing states onto the stack"""
 
-    def __init__(self, *states: Union[str, Type[State]]):
-        self.states = states
+    push_states: list[type[State]]
+
+    def __init__(self, *push_states: list[type[State]]):
+        self.push_states = push_states
+
+    def __hash__(self):
+        return hash(".".join([x.name for x in self.push_states]))
 
 
-class Pop:
+@dataclass
+class Pop(StateTransition):
     """Represents popping from the stack"""
 
     pass
@@ -266,6 +405,7 @@ class StateRegistry:
     ) -> Optional[Type[State]]:
         """Resolves a state reference to an actual state class, supporting nested classes/functions and dynamic import. Tracks all resolved file paths and modules for future resolution attempts."""
 
+        # TODO: Maybe use functools.cache rather than manually maintaining caches?
         if isinstance(state_ref, type) and issubclass(state_ref, State):
             # Track resolved module and short name
             module_name = getattr(state_ref, "__module__", None)
@@ -282,18 +422,19 @@ class StateRegistry:
 
             return state_ref
 
-        if isinstance(state_ref, str):
+        if isinstance(state_ref, StateRef):
             if state_ref in self._state_cache:
+                print(f"cached: {state_ref}->{self._state_cache[state_ref]}")
                 return self._state_cache[state_ref]
 
             try:
-                if "." not in state_ref:
+                if "." not in state_ref.state:
                     raise ValueError(
                         f"State reference '{state_ref}' must be fully qualified"
                     )
 
                 module_paths = list(
-                    accumulate(state_ref.split("."), lambda acc, x: acc + "." + x)
+                    accumulate(state_ref.state.split("."), lambda acc, x: acc + "." + x)
                 )
 
                 # See if the module exists in sys.modules
@@ -313,7 +454,7 @@ class StateRegistry:
                     raise ValidationError(f"{state_ref} is nowhere in sys.modules")
                 # Now, we have the module and its name, so the fq class name is
                 # state_ref with the modue name clipped out
-                fq_class_path = state_ref[len(mod_name) + 1 :].split(".")
+                fq_class_path = state_ref.state[len(mod_name) + 1 :].split(".")
 
                 # Now, we need to walk down the fq_class_path, starting at the
                 # module, getting attributes, and checking if either the
@@ -341,8 +482,6 @@ class StateRegistry:
                 else:
                     raise ValidationError(error_msg)
 
-        return state_ref
-
     @staticmethod
     def is_abstract_classmethod_implemented(cls, method_name):
         """Check if abstract method is implemented by checking __abstractmethods__"""
@@ -353,57 +492,103 @@ class StateRegistry:
         initial_state: Union[str, Type[State]],
         error_state: Optional[Union[str, Type[State]]] = None,
     ) -> ValidationResult:
-        """Two-pass validation of all states in the state machine"""
+        """Validation of all states in the state machine"""
         self._validation_errors = []
         self._validation_warnings = []
 
-        # Pass 1: Discover all reachable states
+        # Discover all reachable states
         discovered_states = set()
-        string_references = set()
+        state_references = set()
+        resolved_references = set()
         states_to_visit = []
 
         initial_resolved = self.resolve_state(initial_state, validate_only=True)
         if initial_resolved:
             states_to_visit.append(initial_resolved)
-            discovered_states.add(initial_resolved.name())
+            discovered_states.add(initial_resolved.name)
 
         if error_state:
             error_resolved = self.resolve_state(error_state, validate_only=True)
             if error_resolved:
                 states_to_visit.append(error_resolved)
-                discovered_states.add(error_resolved.name())
+                discovered_states.add(error_resolved.name)
 
         # Traverse all reachable states
         visited = set()
         while states_to_visit:
             current_state = states_to_visit.pop()
-            state_name = current_state.name()
+            state_name = current_state.name
 
             if state_name in visited:
                 continue
             visited.add(state_name)
 
+            def handle_state(s):
+                discovered_states.add(s)
+                states_to_visit.append(s)
+
+            def handle_reference(r):
+                state_references.add(r)
+
+            def handle_push(p):
+                for state in p.push_states:
+                    match state:
+                        case type() if issubclass(state, State):
+                            handle_state(state)
+                        case r if isinstance(r, StateRef):
+                            handle_reference(r)
+                        case invalid:
+                            self._validation_errors.append(
+                                f"State '{state_name}' attempted to push an invalid transition: {invalid}"
+                            )
+
             try:
                 raw_transitions = current_state.transitions()
 
-                for transition_enum, target in raw_transitions.items():
-                    if not isinstance(transition_enum, TransitionName):
-                        self._validation_errors.append(
-                            f"State '{state_name}' has invalid transition key '{transition_enum}'"
-                        )
-                        continue
+                #  Handle returning single states
+                match raw_transitions:
+                    case type() if issubclass(raw_transitions, TransitionType):
+                        raw_transitions = [raw_transitions]
+                    case _ if isinstance(raw_transitions, TransitionType):
+                        raw_transitions = [raw_transitions]
 
-                    target_states = self._extract_state_references(target)
-                    for target_state in target_states:
-                        if isinstance(target_state, str):
-                            string_references.add(target_state)
-                        elif isinstance(target_state, type) and issubclass(
-                            target_state, State
+                # Raw transitions returns a list or tuple, every entry in that tuple can be either:
+                # - A LabeledTransition Object (which may contain a Push, State, or StateRef)
+                # - A State Object
+                # - A TransitionType like Again, Pop, etc
+                # - A StateRef Object
+                for transition in raw_transitions:
+                    match transition:
+                        case _ if isinstance(transition, Push):
+                            # NOTE: Due to their error prone nature, Push objects require a label
+                            self._validation_errors.append(
+                                f"State '{state_name}' has a push transition: {transition} without a label"
+                            )
+                        case LabeledTransition(_, s):
+                            match s:
+                                case type() if issubclass(s, State):
+                                    handle_state(s)
+                                case r if isinstance(r, StateRef):
+                                    handle_reference(r)
+                                case p if isinstance(p, Push):
+                                    handle_push(p)
+                        case type() if issubclass(transition, State):
+                            handle_state(transition)
+                        case r if isinstance(r, StateRef):
+                            # TODO: Should this be an error? I have mixed feelings
+                            self._validation_warnings.append(
+                                f"State '{state_name}' has has a StateReference transition: {r} without a label"
+                            )
+                            handle_reference(r)
+                        case type() if issubclass(
+                            transition, (StateContinuation, StateRenewal)
                         ):
-                            target_name = target_state.name()
-                            if target_name not in discovered_states:
-                                discovered_states.add(target_name)
-                                states_to_visit.append(target_state)
+                            # Good to go, just need to capture that these are valid
+                            pass
+                        case invalid:
+                            self._validation_errors.append(
+                                f"State '{state_name}' has an invalid transition: {invalid}"
+                            )
 
                 # Validate that the state has an on_state handler
                 if not self.is_abstract_classmethod_implemented(
@@ -440,55 +625,19 @@ class StateRegistry:
                             f"State '{state_name}' has timeout but no on_timeout handler defined"
                         )
 
+                # Pass 2: Validate all string references
+                for state_ref in state_references - resolved_references:
+                    resolved = self.resolve_state(state_ref, validate_only=True)
+                    if resolved:
+                        resolved_references.add(state_ref)
+                        resolved_name = resolved.name
+                        if resolved_name not in discovered_states:
+                            discovered_states.add(resolved_name)
+                            states_to_visit.append(resolved)
+
             except Exception as e:
                 self._validation_errors.append(
-                    f"Error processing transitions for state '{state_name}': {e}"
-                )
-
-        # Pass 2: Validate all string references
-        for state_ref in string_references:
-            resolved = self.resolve_state(state_ref, validate_only=True)
-            if resolved:
-                resolved_name = resolved.name()
-                if resolved_name not in discovered_states:
-                    discovered_states.add(resolved_name)
-                    states_to_visit.append(resolved)
-
-        # Validate newly discovered states
-        while states_to_visit:
-            current_state = states_to_visit.pop()
-            state_name = current_state.name()
-
-            if state_name in visited:
-                continue
-            visited.add(state_name)
-
-            try:
-                raw_transitions = current_state.transitions()
-                for transition_enum, target in raw_transitions.items():
-                    target_states = self._extract_state_references(target)
-                    for target_state in target_states:
-                        if isinstance(target_state, str):
-                            if target_state not in string_references:
-                                string_references.add(target_state)
-                                resolved = self.resolve_state(
-                                    target_state, validate_only=True
-                                )
-                                if resolved:
-                                    resolved_name = resolved.name()
-                                    if resolved_name not in discovered_states:
-                                        discovered_states.add(resolved_name)
-                                        states_to_visit.append(resolved)
-                        elif isinstance(target_state, type) and issubclass(
-                            target_state, State
-                        ):
-                            target_name = target_state.name()
-                            if target_name not in discovered_states:
-                                discovered_states.add(target_name)
-                                states_to_visit.append(target_state)
-            except Exception as e:
-                self._validation_errors.append(
-                    f"Error processing transitions for state '{state_name}': {e}"
+                    f"Error processing transitions for state '{state_name}': {traceback.format_exc()}"
                 )
 
         return ValidationResult(
@@ -498,37 +647,55 @@ class StateRegistry:
             discovered_states=discovered_states,
         )
 
-    def _extract_state_references(self, target: Any) -> list[Union[str, Type[State]]]:
-        """Extract all state references from a transition target"""
-        if isinstance(target, str):
-            return [target]
-        elif isinstance(target, type) and issubclass(target, State):
-            return [target]
-        elif isinstance(target, Push):
-            return list(target.states)
-        elif isinstance(target, GlobalTransitions):
-            return []
-        else:
-            return []
-
     def get_transitions(self, state_class: Type[State]) -> Dict:
         """Gets the transition mapping for a state, with caching"""
-        state_name = state_class.name()
+        state_name = state_class.name
 
         if state_name in self._transition_cache:
             return self._transition_cache[state_name]
 
-        raw_transitions = state_class.transitions()
-        resolved_transitions = {}
+        resolved_transitions = dict()
 
-        for transition_enum, target in raw_transitions.items():
-            if isinstance(target, str):
-                resolved_transitions[transition_enum] = self.resolve_state(target)
-            else:
-                resolved_transitions[transition_enum] = target
+        raw_transitions = state_class.transitions()
+        match raw_transitions:
+            case type() if issubclass(raw_transitions, TransitionType):
+                raw_transitions = [raw_transitions]
+            case _ if isinstance(raw_transitions, TransitionType):
+                raw_transitions = [raw_transitions]
+
+        for transition in raw_transitions:
+            match transition:
+                case LabeledTransition(l, s):
+                    match s:
+                        case type() if issubclass(s, State):
+                            resolved_transitions[l] = s
+                        case r if isinstance(r, StateRef):
+                            resolved_transitions[l] = self.resolve_state(r)
+                        case x:
+                            # TODO: I hate this, be more explicit
+                            resolved_transitions[l] = x
+                case type() if issubclass(transition, State):
+                    # Allow lookup by the state itself as well since we want to allow the old style of returning a state class
+                    resolved_transitions[transition.name] = transition
+                    resolved_transitions[transition] = transition
+                case r if isinstance(r, StateRef):
+                    # TODO: Still not sure how I feel about this
+                    resolved_transitions[r.state] = self.resolve_state(r)
+                case type() if issubclass(
+                    transition, (StateContinuation, StateRenewal)
+                ):
+                    # Allow Continuations and Renewals to be looked up by type
+                    resolved_transitions[transition] = transition
 
         self._transition_cache[state_name] = resolved_transitions
         return resolved_transitions
+    
+    
+class DefaultStates:
+    class Error(State):
+        CONFIG = StateConfiguration(terminal=True)
+        def on_state(cls, ctx):
+            ctx.log('Error, terminating state machine')
 
 
 class StateMachine:
@@ -623,7 +790,7 @@ class StateMachine:
         # First pass: collect all states and their raw transition data
         while to_visit:
             current = to_visit.pop()
-            state_name = current.name()
+            state_name = current.name
 
             if state_name in visited:
                 continue
@@ -649,22 +816,22 @@ class StateMachine:
                     "terminal": current.CONFIG.terminal,
                     "can_dwell": current.CONFIG.can_dwell,
                 },
-                "group_name": current.group_name(),
-                "base_name": current.base_name(),
+                "group_name": current.group_name,
+                "base_name": current.base_name,
             }
 
             # Add all referenced states to visit queue
             for transition_enum, target in transitions.items():
                 if isinstance(target, type) and issubclass(target, State):
-                    if target not in to_visit and target.name() not in visited:
+                    if target not in to_visit and target.name not in visited:
                         to_visit.append(target)
                 elif isinstance(target, Push):
-                    for state_ref in target.states:
+                    for state_ref in target.push_states:
                         resolved = self.registry.resolve_state(state_ref)
                         if (
                             resolved
                             and resolved not in to_visit
-                            and resolved.name() not in visited
+                            and resolved.name not in visited
                         ):
                             to_visit.append(resolved)
 
@@ -683,9 +850,9 @@ class StateMachine:
         state_contexts = {}  # state_name -> list of (stack, path) tuples
 
         # Start traversal from initial state
-        queue = [PathState(self.initial_state.name(), [], [])]
+        queue = [PathState(self.initial_state.name, [], [])]
         if self.error_state:
-            queue.append(PathState(self.error_state.name(), [], []))
+            queue.append(PathState(self.error_state.name, [], []))
 
         # Limit traversal to prevent infinite loops
         max_path_length = 50
@@ -730,15 +897,15 @@ class StateMachine:
                 if isinstance(target, type) and issubclass(target, State):
                     # Simple transition - same stack
                     next_path = current.path + [(current.state_name, transition_name)]
-                    queue.append(PathState(target.name(), current.stack, next_path))
+                    queue.append(PathState(target.name, current.stack, next_path))
 
                 elif isinstance(target, Push):
                     # Push transition - modify stack
                     resolved_states = []
-                    for state_ref in target.states:
+                    for state_ref in target.push_states:
                         resolved = self.registry.resolve_state(state_ref)
                         if resolved:
-                            resolved_states.append(resolved.name())
+                            resolved_states.append(resolved.name)
 
                     if resolved_states:
                         # First state is where we transition to
@@ -797,17 +964,17 @@ class StateMachine:
                 )
 
                 if isinstance(target, type) and issubclass(target, State):
-                    target_name = target.name()
+                    target_name = target.name
                     targets.append(target_name)
                     transition_details[transition_name] = target_name
 
                 elif isinstance(target, Push):
                     # Resolve all states in the push
                     resolved_states = []
-                    for state_ref in target.states:
+                    for state_ref in target.push_states:
                         resolved = self.registry.resolve_state(state_ref)
                         if resolved:
-                            resolved_states.append(resolved.name())
+                            resolved_states.append(resolved.name)
 
                     if resolved_states:
                         # First state is the immediate target
@@ -854,7 +1021,7 @@ class StateMachine:
                             f"Pop -> {{{', '.join(target_list)}}}"
                         )
 
-                elif isinstance(target, GlobalTransitions):
+                elif isinstance(target, TransitionType):
                     transition_details[transition_name] = f"Global.{target.name}"
 
                 else:
@@ -926,7 +1093,7 @@ class StateMachine:
 
         self._timeout_greenlet = spawn(
             self._timeout_handler,
-            state_class.name(),
+            state_class.name,
             timeout_id,
             state_class.CONFIG.timeout,
         )
@@ -957,9 +1124,9 @@ class StateMachine:
             self.log(f"Ignoring stale timeout {timeout_msg.timeout_id}")
             return False
 
-        if timeout_msg.state_name != self.current_state.name():
+        if timeout_msg.state_name != self.current_state.name:
             self.log(
-                f"Ignoring timeout for {timeout_msg.state_name}, current state is {self.current_state.name()}"
+                f"Ignoring timeout for {timeout_msg.state_name}, current state is {self.current_state.name}"
             )
             return False
 
@@ -990,12 +1157,14 @@ class StateMachine:
         """Log a message"""
         print(f"[FSM] {message}")
 
-    def tick(self, timeout: Optional[float] = 0):
+    def tick(self, timeout: Optional[Union[float, int]] = 0):
         """Process one state machine tick"""
         if not self.current_state:
-            return
+            raise NoStateToTick()
 
         match timeout:
+            case x if x and not isinstance(x, (int, float)):
+                raise ValueError(f"Tick timeout must be None, or an integer/float >= 0, got {type(x)}")
             case 0:
                 block = False
             case None:
@@ -1020,7 +1189,7 @@ class StateMachine:
                 if self.current_state.CONFIG.terminal:
                     raise StateMachineComplete
 
-                if transition in (None, GlobalTransitions.UNHANDLED):
+                if transition in (None, Unhandled):
                     self._trap_fn(self.context)
 
                 self.context.msg = None
@@ -1054,17 +1223,20 @@ class StateMachine:
                 else:
                     raise
 
-    def _process_transition(self, transition: TransitionName) -> bool:
+    def _process_transition(self, transition: Union[TransitionType, Enum]) -> bool:
         """Process a state transition"""
-        transitions = self.registry.get_transitions(self.current_state)
+        valid_transitions = self.registry.get_transitions(self.current_state)
 
-        if transition and (transition not in transitions):
-            self.log(f"ERROR: Unknown transition {transition}")
+        if transition and (transition not in valid_transitions):
+            self.log(f"ERROR: Unknown transition {transition}: {valid_transitions}")
             return
 
-        target = transitions.get(transition)
+        target = valid_transitions.get(transition)
 
-        if transition in (None, GlobalTransitions.UNHANDLED):
+        if target is None and transition in valid_transitions.values():
+            target = transition
+
+        if transition in (None, Unhandled):
             if (
                 self.current_state.CONFIG.can_dwell
             ) or self.current_state.CONFIG.timeout:
@@ -1078,15 +1250,16 @@ class StateMachine:
             self._handle_push(target)
         elif isinstance(target, Pop) or issubclass(target, Pop):
             self._handle_pop()
-        elif target == GlobalTransitions.AGAIN:
+        elif target == Again:
+            # TODO: Fix this, I hate it, should probably just return false.
             spawn(self.tick, block=False)
-        elif target == GlobalTransitions.REPEAT:
+        elif target == Repeat:
             self._transition_to_state(type(self.current_state))
-        elif target == GlobalTransitions.RESTART:
+        elif target == Restart:
             self._reset_state_context()
             self._transition_to_state(type(self.current_state))
             return True
-        elif target == GlobalTransitions.RETRY:
+        elif target == Retry:
             self._handle_retry()
 
         return False
@@ -1098,15 +1271,15 @@ class StateMachine:
             self._cancel_timeout()
 
         self.current_state = next_state
-        self.state_enter_times[next_state.name()] = time.time()
-        self.log(f"Transitioned to {next_state.name()}")
+        self.state_enter_times[next_state.name] = time.time()
+        self.log(f"Transitioned to {next_state.name}")
 
         self._start_timeout(next_state)
         next_state.on_enter(self.context)
 
     def _handle_retry(self):
         """Handle retry logic with counter"""
-        state_name = self.current_state.name()
+        state_name = self.current_state.name
 
         if state_name not in self.retry_counters:
             self.retry_counters[state_name] = 0
@@ -1121,17 +1294,17 @@ class StateMachine:
             transition = self.current_state.on_fail(self.context)
             self._process_transition(transition)
         else:
-            self._transition_to_state(type(self.current_state))
+            self._transition_to_state(self.current_state)
 
     def _reset_state_context(self):
         """Reset context for current state"""
-        state_name = self.current_state.name()
+        state_name = self.current_state.name
         if state_name in self.retry_counters:
             del self.retry_counters[state_name]
 
     def _handle_push(self, push: Push):
         """Handle push transition"""
-        resolved_states = [self.registry.resolve_state(s) for s in push.states]
+        resolved_states = [self.registry.resolve_state(s) for s in push.push_states]
 
         for state in reversed(resolved_states[1:]):
             self.state_stack.append(state)
@@ -1155,7 +1328,7 @@ class StateMachine:
                 break
 
             if self.current_state.CONFIG.terminal:
-                self.log(f"Reached terminal state: {self.current_state.name()}")
+                self.log(f"Reached terminal state: {self.current_state.name}")
                 break
 
             try:
@@ -1262,7 +1435,7 @@ class StateMachine:
     ) -> set[str]:
         """Get all states reachable from a given starting state"""
         if isinstance(from_state, type):
-            start_name = from_state.name()
+            start_name = from_state.name
         else:
             start_name = from_state
 
@@ -1308,7 +1481,7 @@ class StateMachine:
             and isinstance(state_filter, type)
             and issubclass(state_filter, State)
         ):
-            state_filter = state_filter.name()
+            state_filter = state_filter.name
 
         # Determine which states to analyze
         states_to_analyze = []
@@ -1423,7 +1596,7 @@ class StateMachine:
         """
         # Resolve state name if it's a class
         if isinstance(state_name, type) and issubclass(state_name, State):
-            state_name = state_name.name()
+            state_name = state_name.name
 
         state_info = self._state_analysis.get(state_name)
         if not state_info:
