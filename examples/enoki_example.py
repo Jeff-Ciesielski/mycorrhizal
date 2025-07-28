@@ -129,7 +129,7 @@ def example_network_fsm():
     except StateMachineComplete:
         pass
 
-    print(f"Final state: {fsm.current_state.name()}")
+    print(f"Final state: {fsm.current_state.name}")
 
 
 # Example 2: State Grouping for Imaging System
@@ -259,7 +259,7 @@ def example_imaging_fsm():
     except StateMachineComplete:
         pass
 
-    print(f"Final state: {fsm.current_state.name()}")
+    print(f"Final state: {fsm.current_state.name}")
 
 
 # Example 3: Push/Pop State Stack Example
@@ -383,7 +383,7 @@ def example_menu_fsm():
     except StateMachineComplete:
         pass
 
-    print(f"Final state: {fsm.current_state.name()}")
+    print(f"Final state: {fsm.current_state.name}")
     print(f"Stack depth at end: {len(fsm.state_stack)}")
 
 

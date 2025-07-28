@@ -1227,14 +1227,13 @@ class StateMachine:
         """Process a state transition"""
         valid_transitions = self.registry.get_transitions(self.current_state)
 
-        if transition and (transition not in valid_transitions):
-            self.log(f"ERROR: Unknown transition {transition}: {valid_transitions}")
-            return
-
         target = valid_transitions.get(transition)
-
-        if target is None and transition in valid_transitions.values():
-            target = transition
+        
+        if transition is not None:
+            if  target is None and transition in valid_transitions.values():
+                target = transition
+            else:
+                raise ValueError(f"ERROR: Unknown transition {transition}: {valid_transitions}")
 
         if transition in (None, Unhandled):
             if (
