@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Cordyceps Gevent Petri Net Utilities: Parametric Fork and Join Interfaces
+Cordyceps Asyncio Petri Net Utilities: Parametric Fork and Join Interfaces
 
-Updated for the autonomous gevent architecture with PlaceName enum support.
+Updated for the autonomous asyncio architecture with PlaceName enum support.
 """
 from .core import Interface, Place, Transition, Arc, PlaceName, DispatchPolicy
 from typing import Type, Dict, List
 from enum import Enum, auto
+import asyncio
+from asyncio import sleep
 
 
 def ForkN(n: int) -> Type[Interface]:
@@ -50,7 +52,7 @@ def ForkN(n: int) -> Type[Interface]:
                 result[enum_key] = Arc(output_classes[i])
             return result
         
-        def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
+        async def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
             # Replicate each input token to all outputs
             result = {}
             for i in range(n):
@@ -118,7 +120,7 @@ def JoinN(n: int) -> Type[Interface]:
         def output_arcs(self) -> Dict[PlaceName, Arc]:
             return {JoinPlaceNames.OUTPUT: Arc(Output)}
         
-        def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
+        async def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
             # Collect all tokens from all inputs
             all_tokens = []
             for tokens in consumed.values():
@@ -162,7 +164,7 @@ def Fork(from_place_class: Type[Place], to_place_classes: List[Type[Place]]) -> 
         def output_arcs(self) -> Dict[PlaceName, Arc]:
             return {enum_mapping[place_class]: Arc(place_class) for place_class in to_place_classes}
         
-        def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
+        async def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
             result = {enum_mapping[place_class]: [] for place_class in to_place_classes}
             
             input_tokens = consumed[enum_mapping[from_place_class]]
@@ -200,7 +202,7 @@ def Join(from_place_classes: List[Type[Place]], to_place_class: Type[Place]) -> 
         def output_arcs(self) -> Dict[PlaceName, Arc]:
             return {enum_mapping[to_place_class]: Arc(to_place_class)}
         
-        def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
+        async def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
             all_tokens = []
             for tokens in consumed.values():
                 all_tokens.extend(tokens)
@@ -236,7 +238,7 @@ def Merge(place_classes: List[Type[Place]]) -> Type[Transition]:
         def output_arcs(self) -> Dict[PlaceName, Arc]:
             return {enum_mapping[place_class]: Arc(place_class) for place_class in place_classes}
         
-        def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
+        async def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
             # Forward all consumed tokens to all output places
             all_tokens = []
             for tokens in consumed.values():
@@ -284,7 +286,7 @@ def Buffer(capacity: int) -> Type[Interface]:
         def output_arcs(self) -> Dict[PlaceName, Arc]:
             return {BufferPlaceNames.BUFFER: Arc(BufferPlace)}
         
-        def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
+        async def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
             return {BufferPlaceNames.BUFFER: consumed[BufferPlaceNames.INPUT]}
     
     class OutputTransition(Transition):
@@ -296,7 +298,7 @@ def Buffer(capacity: int) -> Type[Interface]:
         def output_arcs(self) -> Dict[PlaceName, Arc]:
             return {BufferPlaceNames.OUTPUT: Arc(Output)}
         
-        def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
+        async def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
             return {BufferPlaceNames.OUTPUT: consumed[BufferPlaceNames.BUFFER]}
     
     attrs.update({
@@ -319,8 +321,7 @@ def RateLimiter(tokens_per_second: float) -> Type[Interface]:
     
     Usage: class MyRateLimiter(RateLimiter(tokens_per_second=5.0)): pass
     """
-    import gevent
-    from gevent import sleep
+    import time
     
     RateLimiterPlaceNames = Enum('RateLimiterPlaceNames', {
         'INPUT': 'input',
@@ -349,18 +350,18 @@ def RateLimiter(tokens_per_second: float) -> Type[Interface]:
         def output_arcs(self) -> Dict[PlaceName, Arc]:
             return {RateLimiterPlaceNames.OUTPUT: Arc(Output)}
         
-        def on_before_fire(self, consumed: Dict[PlaceName, List]):
+        async def on_before_fire(self, consumed: Dict[PlaceName, List]):
             # Implement rate limiting
-            now = gevent.time.time()
+            now = time.time()
             time_since_last = now - self._last_fire_time
             
             if time_since_last < self._min_interval:
                 sleep_time = self._min_interval - time_since_last
-                sleep(sleep_time)
+                await sleep(sleep_time)
             
-            self._last_fire_time = gevent.time.time()
+            self._last_fire_time = time.time()
         
-        def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
+        async def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
             return {RateLimiterPlaceNames.OUTPUT: consumed[RateLimiterPlaceNames.INPUT]}
     
     attrs.update({
