@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-Enoki Usage Examples
+Enoki Usage Examples (Asyncio Version)
 
 This file demonstrates how to use the Enoki state machine library
 with various patterns including timeouts, retries, and state grouping.
 """
 
 from dataclasses import dataclass
-import gevent
+import asyncio
 from enum import auto, Enum
-from gevent import sleep, spawn
 from random import randint
 from typing import List, Union
 from mycorrhizal.enoki import (
@@ -54,23 +53,23 @@ class NetworkRequestState(State):
             Retry,
         ]
 
-    def on_enter(cls, ctx: SharedContext):
+    async def on_enter(cls, ctx: SharedContext):
         print("Starting network request...")
         # In real implementation, would initiate async network request here
-        ctx.common.request_id = f"req_{randint}"
+        ctx.common.request_id = f"req_{randint(1000, 9999)}"
 
-    def on_state(cls, ctx: SharedContext):
+    async def on_state(cls, ctx: SharedContext):
         if ctx.msg and ctx.msg.get("type") == "network_response":
             if ctx.msg.get("success"):
                 return cls.T.SUCCESS
             else:
                 return cls.T.FAILURE
 
-    def on_timeout(cls, ctx: SharedContext):
+    async def on_timeout(cls, ctx: SharedContext):
         print("Network request timed out")
         return Retry
 
-    def on_fail(cls, ctx: SharedContext):
+    async def on_fail(cls, ctx: SharedContext):
         print("Network request failed after all retries")
         return cls.T.FAILURE
 
@@ -78,19 +77,19 @@ class NetworkRequestState(State):
 class ProcessingState(State):
     CONFIG = StateConfiguration(terminal=True)
 
-    def on_state(cls, ctx: SharedContext):
+    async def on_state(cls, ctx: SharedContext):
         print("Processing complete!")
 
 
 class ErrorState(State):
     CONFIG = StateConfiguration(terminal=True)
 
-    def on_state(cls, ctx: SharedContext):
+    async def on_state(cls, ctx: SharedContext):
         print("Error state reached")
 
 
-# Example usage and testingv
-def example_network_fsm():
+# Example usage and testing
+async def example_network_fsm():
     """Example 1: Network request with timeout and retry"""
     print("=" * 50)
     print("Example 1: Network Request FSM")
@@ -115,17 +114,17 @@ def example_network_fsm():
     print(flowchart)
 
     # Simulate network response
-    def simulate_network_response():
-        sleep(2)  # Simulate network delay
+    async def simulate_network_response():
+        await asyncio.sleep(2)  # Simulate network delay
         fsm.send_message({"type": "network_response", "success": True})
 
     # Start simulation
-    spawn(simulate_network_response)
+    asyncio.create_task(simulate_network_response())
 
     print("---- Starting FSM ----")
     # Run FSM
     try:
-        fsm.run(timeout=0.1)
+        await fsm.run(timeout=0.1)
     except StateMachineComplete:
         pass
 
@@ -151,7 +150,7 @@ class Imaging:
     class Error(State):
         CONFIG = StateConfiguration(terminal=True)
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             print("Error state reached")
 
     class SetImageLighting(ImagingState):
@@ -164,26 +163,26 @@ class Imaging:
                 Retry,
             )
 
-        def on_enter(cls, ctx: SharedContext):
+        async def on_enter(cls, ctx: SharedContext):
             print("Setting up lighting...")
             # Simulate async lighting setup
-            spawn(cls._simulate_lighting_setup, ctx)
+            asyncio.create_task(cls._simulate_lighting_setup(ctx))
 
-        def _simulate_lighting_setup(cls, ctx: SharedContext):
+        async def _simulate_lighting_setup(cls, ctx: SharedContext):
             """Simulate async lighting setup"""
-            sleep(2)  # Simulate lighting adjustment time
+            await asyncio.sleep(2)  # Simulate lighting adjustment time
             print("Light ready")
             ctx.send_message({"type": "lighting_ready"})
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             if ctx.msg and ctx.msg.get("type") == "lighting_ready":
                 return Imaging.T.LIGHTING_SET
 
-        def on_timeout(cls, ctx: SharedContext):
+        async def on_timeout(cls, ctx: SharedContext):
             print("Lighting setup timed out")
             return Retry
 
-        def on_fail(cls, ctx: SharedContext):
+        async def on_fail(cls, ctx: SharedContext):
             print("Lighting setup failed after all retries")
             return Imaging.T.FAILED
 
@@ -196,32 +195,32 @@ class Imaging:
                 LabeledTransition(Imaging.T.FAILED, Imaging.Error),
             )
 
-        def on_enter(cls, ctx: SharedContext):
+        async def on_enter(cls, ctx: SharedContext):
             print("Taking picture...")
-            spawn(cls._simulate_picture_capture, ctx)
+            asyncio.create_task(cls._simulate_picture_capture(ctx))
 
-        def _simulate_picture_capture(cls, ctx: SharedContext):
+        async def _simulate_picture_capture(cls, ctx: SharedContext):
             """Simulate async picture capture"""
-            sleep(3)  # Simulate capture time
+            await asyncio.sleep(3)  # Simulate capture time
             ctx.send_message({"type": "picture_complete", "success": True})
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             if ctx.msg and ctx.msg.get("type") == "picture_complete":
                 if ctx.msg.get("success"):
                     return Imaging.T.PICTURE_TAKEN
                 else:
                     return Imaging.T.FAILED
 
-        def on_timeout(cls, ctx: SharedContext):
+        async def on_timeout(cls, ctx: SharedContext):
             print("Picture capture timed out")
-            Retry
+            return Retry
 
-        def on_fail(cls, ctx: SharedContext):
+        async def on_fail(cls, ctx: SharedContext):
             print("Picture capture failed after all retries")
             return Imaging.T.FAILED
 
 
-def example_imaging_fsm():
+async def example_imaging_fsm():
     """Example 2: Imaging system with state grouping"""
     print("\n" + "=" * 50)
     print("Example 2: Imaging System FSM")
@@ -255,7 +254,7 @@ def example_imaging_fsm():
 
     # Run FSM
     try:
-        fsm.run()
+        await fsm.run()
     except StateMachineComplete:
         pass
 
@@ -282,7 +281,7 @@ class PushPop:
                 LabeledTransition(PushPop.T.EXIT, ProcessingState),
             )
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             if ctx.msg and ctx.msg.get("action") == "enter_submenu":
                 return PushPop.T.ENTER_SUBMENU
             elif ctx.msg and ctx.msg.get("action") == "exit":
@@ -299,7 +298,7 @@ class PushPop:
                 ),
             )
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             if ctx.msg and ctx.msg.get("action") == "back":
                 return PushPop.T.BACK
             elif ctx.msg and ctx.msg.get("action") == "enter_item":
@@ -311,12 +310,12 @@ class PushPop:
         def transitions(cls):
             return [LabeledTransition(PushPop.T.BACK, Pop)]
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             if ctx.msg and ctx.msg.get("action") == "back":
                 return PushPop.T.BACK
 
 
-def example_menu_fsm():
+async def example_menu_fsm():
     """Example 3: Menu system with push/pop"""
     print("\n" + "=" * 50)
     print("Example 3: Menu System FSM")
@@ -337,49 +336,34 @@ def example_menu_fsm():
     print(flowchart)
 
     # Simulate menu navigation
-    def simulate_menu_navigation():
-        sleep(1)
+    async def simulate_menu_navigation():
+        await asyncio.sleep(0.5)
+        print("  -> Entering submenu")
         fsm.send_message({"action": "enter_submenu"})
-        sleep(1)
+        await asyncio.sleep(0.5)
+        print("  -> Entering menu item")
         fsm.send_message({"action": "enter_item"})
-        sleep(1)
+        await asyncio.sleep(0.5)
+        print("  -> Going back from item")
         fsm.send_message({"action": "back"})
-        sleep(1)
+        await asyncio.sleep(0.5)
+        print("  -> Going back from submenu")
         fsm.send_message({"action": "back"})
-        sleep(1)
+        await asyncio.sleep(0.5)
+        print("  -> Exiting")
         fsm.send_message({"action": "exit"})
-
-    # Start simulation
-    spawn(simulate_menu_navigation)
 
     fsm.print_push_pop_analysis()
 
     # Run FSM with menu navigation
     print("\nRunning menu navigation simulation...")
 
-    def simulate_menu_navigation():
-        sleep(0.5)
-        print("  -> Entering submenu")
-        fsm.send_message({"action": "enter_submenu"})
-        sleep(0.5)
-        print("  -> Entering menu item")
-        fsm.send_message({"action": "enter_item"})
-        sleep(0.5)
-        print("  -> Going back from item")
-        fsm.send_message({"action": "back"})
-        sleep(0.5)
-        print("  -> Going back from submenu")
-        fsm.send_message({"action": "back"})
-        sleep(0.5)
-        print("  -> Exiting")
-        fsm.send_message({"action": "exit"})
-
     # Start simulation
-    spawn(simulate_menu_navigation)
+    asyncio.create_task(simulate_menu_navigation())
 
     # Run FSM
     try:
-        fsm.run()
+        await fsm.run()
     except StateMachineComplete:
         pass
 
@@ -418,7 +402,7 @@ class Workflow:
                 LabeledTransition(Workflow.T.FINISH, Workflow.ProcessingState),
             )
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             pass
 
     class TaskExecution(State):
@@ -437,8 +421,11 @@ class Workflow:
                 ),
             )
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             pass
+
+        async def on_timeout(cls, ctx: SharedContext):
+            return Workflow.T.COMPLETE_TASK
 
     class TaskCleanup(State):
         CONFIG = StateConfiguration(timeout=5.0)
@@ -449,8 +436,11 @@ class Workflow:
                 LabeledTransition(Workflow.T.TIMEOUT, Pop),
             )
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             pass
+
+        async def on_timeout(cls, ctx: SharedContext):
+            return Workflow.T.TIMEOUT
 
     class InterruptHandler(State):
         CONFIG = StateConfiguration(timeout=3.0)
@@ -463,17 +453,20 @@ class Workflow:
                 LabeledTransition(Workflow.T.TIMEOUT, Pop),
             )
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             pass
+
+        async def on_timeout(cls, ctx: SharedContext):
+            return Workflow.T.TIMEOUT
 
     class ProcessingState(State):
         CONFIG = StateConfiguration(terminal=True)
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             pass
 
 
-def example_push_pop_detailed():
+async def example_push_pop_detailed():
     """Test the improved analysis with multiple pop targets"""
     print("=" * 60)
     print("Testing Multiple Pop Target Analysis")
@@ -495,7 +488,6 @@ def example_push_pop_detailed():
     fsm.print_push_pop_analysis(Workflow.TaskExecution)
     fsm.print_push_pop_analysis(Workflow.TaskCleanup)
   
-
     # Generate and display flowchart
     print("\nMermaid Flowchart (showing all pop targets):")
     print("-" * 40)
@@ -518,7 +510,7 @@ class Deep:
                 ),
             )
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             pass
 
     class Level2(State):
@@ -532,7 +524,7 @@ class Deep:
                 LabeledTransition(Deep.T.SURFACE, Pop),
             )
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             pass
 
     class Level3(State):
@@ -543,7 +535,7 @@ class Deep:
                 LabeledTransition(Deep.T.SURFACE, Pop),
             ]
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             pass
 
     class Shared(State):
@@ -556,11 +548,11 @@ class Deep:
                 ),  # Can pop to Level1, Level2, or others
             ]
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             pass
 
 
-def deep_stack_analysis():
+async def deep_stack_analysis():
     print("\n" + "=" * 50)
     print("Example: Deep Stack Analysis")
     print("=" * 50)
@@ -584,7 +576,7 @@ def deep_stack_analysis():
     print(f"  Max stack depth: {shared_info.get('max_stack_depth', 0)}")
 
 
-def example_validation_errors():
+async def example_validation_errors():
     """Example showing validation errors"""
     print("\n" + "=" * 50)
     print("Example: Validation Errors")
@@ -604,7 +596,7 @@ def example_validation_errors():
                 )
             ]
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             pass
 
     try:
@@ -623,10 +615,11 @@ def example_validation_errors():
                 # Also, note the single returned state
                 Retry
             )
-            
 
-        def on_state(cls, ctx: SharedContext):
+        async def on_state(cls, ctx: SharedContext):
             pass
+
+        # Note: Missing on_timeout implementation will generate warning
 
     try:
         fsm = StateMachine(initial_state=TimeoutState, error_state=ErrorState)
@@ -636,14 +629,18 @@ def example_validation_errors():
         raise e
 
 
-if __name__ == "__main__":
-    # Run all examples
-    example_network_fsm()
-    example_imaging_fsm()
-    example_menu_fsm()
-    example_push_pop_detailed()
-    deep_stack_analysis()
-    example_validation_errors()
+async def main():
+    """Run all examples"""
+    await example_network_fsm()
+    await example_imaging_fsm()
+    await example_menu_fsm()
+    await example_push_pop_detailed()
+    await deep_stack_analysis()
+    await example_validation_errors()
 
     print("\n" + "=" * 50)
     print("All examples completed!")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

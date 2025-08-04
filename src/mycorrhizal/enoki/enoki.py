@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Enoki - A finite state machine framework
+Enoki - A finite state machine framework (Asyncio Version)
 
 Key Features:
 - States are collections of static/class methods (no instantiation)
 - Declarative transitions via enums for static analysis
 - String-based state resolution to break circular imports
-- Gevent-based timeouts and message handling
+- Asyncio-based timeouts and message handling
 - Comprehensive validation at construction time
 - Push/Pop context resolution for accurate analysis
 """
@@ -32,6 +32,7 @@ from typing import (
     Tuple,
     Hashable,
     Set,
+    Awaitable,
 )
 import importlib
 import importlib.util, sys, os, types, inspect
@@ -43,13 +44,8 @@ import inspect
 import os
 from functools import cache
 
-import gevent
-from gevent import spawn, sleep, Greenlet
-from gevent.queue import (
-    Queue as GeventQueue,
-    Empty,
-    PriorityQueue as GeventPriorityQueue,
-)
+import asyncio
+from asyncio import Queue, PriorityQueue, QueueEmpty, create_task, sleep, Task
 import traceback
 
 
@@ -318,24 +314,24 @@ class State(StateTransition, ABC, metaclass=StateMeta):
         return dict()
 
     @abstractmethod
-    def on_state(cls, ctx: SharedContext):
+    async def on_state(cls, ctx: SharedContext):
         """Main state logic"""
         pass
 
-    def on_enter(cls, ctx: SharedContext) -> None:
+    async def on_enter(cls, ctx: SharedContext) -> None:
         """Called when entering the state"""
         pass
 
-    def on_leave(cls, ctx: SharedContext) -> None:
+    async def on_leave(cls, ctx: SharedContext) -> None:
         """Called when leaving the state"""
         pass
 
-    def on_fail(cls, ctx: SharedContext):
+    async def on_fail(cls, ctx: SharedContext):
         """Called when retry limit is exceeded"""
         pass
 
     @abstractmethod
-    def on_timeout(cls, ctx: SharedContext):
+    async def on_timeout(cls, ctx: SharedContext):
         """Called when state times out"""
         pass
 
@@ -689,17 +685,18 @@ class StateRegistry:
 
         self._transition_cache[state_name] = resolved_transitions
         return resolved_transitions
-    
-    
+
+
 class DefaultStates:
     class Error(State):
         CONFIG = StateConfiguration(terminal=True)
-        def on_state(cls, ctx):
-            ctx.log('Error, terminating state machine')
+
+        async def on_state(cls, ctx):
+            ctx.log("Error, terminating state machine")
 
 
 class StateMachine:
-    """State Machine with gevent-based async support"""
+    """State Machine with asyncio-based async support"""
 
     class MessagePriorities(IntEnum):
         ERROR = 0
@@ -756,9 +753,9 @@ class StateMachine:
         # Pre-compute analysis
         self._state_analysis = self._analyze_all_states()
 
-        # Gevent-based infrastructure
-        self._message_queue = GeventPriorityQueue()
-        self._timeout_greenlet = None
+        # Asyncio-based infrastructure
+        self._message_queue = PriorityQueue()
+        self._timeout_task = None
         self._timeout_counter = 0
         self._current_timeout_id = None
 
@@ -774,7 +771,14 @@ class StateMachine:
         self.retry_counters = {}
         self.state_enter_times = {}
 
-        self.reset()
+        # Initialize asynchronously
+        self._initialized = False
+
+    async def initialize(self):
+        """Initialize the state machine asynchronously"""
+        if not self._initialized:
+            await self.reset()
+            self._initialized = True
 
     def _analyze_all_states(self) -> Dict[str, Dict]:
         """Pre-compute analysis of all states using graph traversal with stack simulation"""
@@ -1062,18 +1066,32 @@ class StateMachine:
     def _send_message_internal(self, message):
         match message:
             case _ if isinstance(message, EnokiInternalMessage):
-                self._message_queue.put(
-                    PrioritizedMessage(self.MessagePriorities.INTERNAL_MESSAGE, message)
-                )
+                try:
+                    self._message_queue.put_nowait(
+                        PrioritizedMessage(
+                            self.MessagePriorities.INTERNAL_MESSAGE, message
+                        )
+                    )
+                except asyncio.QueueFull:
+                    # Handle queue full scenario
+                    pass
             case _ if isinstance(message, Exception):
-                self._message_queue.put(
-                    PrioritizedMessage(self.MessagePriorities.ERROR, message)
-                )
+                try:
+                    self._message_queue.put_nowait(
+                        PrioritizedMessage(self.MessagePriorities.ERROR, message)
+                    )
+                except asyncio.QueueFull:
+                    # Handle queue full scenario
+                    pass
             case _:
                 # standard message
-                self._message_queue.put(
-                    PrioritizedMessage(self.MessagePriorities.MESSAGE, message)
-                )
+                try:
+                    self._message_queue.put_nowait(
+                        PrioritizedMessage(self.MessagePriorities.MESSAGE, message)
+                    )
+                except asyncio.QueueFull:
+                    # Handle queue full scenario
+                    pass
 
     def _send_timeout_message(self, state_name: str, timeout_id: int, duration: float):
         """Internal method to send timeout messages"""
@@ -1091,28 +1109,29 @@ class StateMachine:
         timeout_id = self._timeout_counter
         self._current_timeout_id = timeout_id
 
-        self._timeout_greenlet = spawn(
-            self._timeout_handler,
-            state_class.name,
-            timeout_id,
-            state_class.CONFIG.timeout,
+        self._timeout_task = create_task(
+            self._timeout_handler(
+                state_class.name,
+                timeout_id,
+                state_class.CONFIG.timeout,
+            )
         )
 
         return timeout_id
 
-    def _timeout_handler(self, state_name: str, timeout_id: int, duration: float):
-        """Gevent greenlet that handles timeout"""
+    async def _timeout_handler(self, state_name: str, timeout_id: int, duration: float):
+        """Asyncio task that handles timeout"""
         try:
-            sleep(duration)
+            await sleep(duration)
             self._send_timeout_message(state_name, timeout_id, duration)
-        except Exception:
-            pass  # Greenlet was killed (timeout cancelled)
+        except asyncio.CancelledError:
+            pass  # Task was cancelled (timeout cancelled)
 
     def _cancel_timeout(self):
         """Cancel any active timeout"""
-        if self._timeout_greenlet is not None:
-            self._timeout_greenlet.kill()
-            self._timeout_greenlet = None
+        if self._timeout_task is not None:
+            self._timeout_task.cancel()
+            self._timeout_task = None
         self._current_timeout_id = None
 
     def _handle_timeout_message(self) -> bool:
@@ -1136,7 +1155,7 @@ class StateMachine:
         self._cancel_timeout()
         return True
 
-    def reset(self):
+    async def reset(self):
         """Reset the state machine to initial state"""
         self._cancel_timeout()
         self.state_stack = []
@@ -1147,24 +1166,29 @@ class StateMachine:
         while not self._message_queue.empty():
             try:
                 self._message_queue.get_nowait()
-            except:
+            except asyncio.QueueEmpty:
                 break
 
         # Transition into our initial state
-        self._transition_to_state(self.initial_state)
+        await self._transition_to_state(self.initial_state)
 
     def log(self, message: str):
         """Log a message"""
         print(f"[FSM] {message}")
 
-    def tick(self, timeout: Optional[Union[float, int]] = 0):
+    async def tick(self, timeout: Optional[Union[float, int]] = 0):
         """Process one state machine tick"""
+        if not self._initialized:
+            await self.initialize()
+
         if not self.current_state:
             raise NoStateToTick()
 
         match timeout:
             case x if x and not isinstance(x, (int, float)):
-                raise ValueError(f"Tick timeout must be None, or an integer/float >= 0, got {type(x)}")
+                raise ValueError(
+                    f"Tick timeout must be None, or an integer/float >= 0, got {type(x)}"
+                )
             case 0:
                 block = False
             case None:
@@ -1183,9 +1207,10 @@ class StateMachine:
                 if isinstance(self.context.msg, TimeoutMessage):
                     if not self._handle_timeout_message():
                         return
-                    transition = self.current_state.on_timeout(self.context)
+                    transition = await self.current_state.on_timeout(self.context)
                 else:
-                    transition = self.current_state.on_state(self.context)
+                    transition = await self.current_state.on_state(self.context)
+
                 if self.current_state.CONFIG.terminal:
                     raise StateMachineComplete
 
@@ -1194,15 +1219,20 @@ class StateMachine:
 
                 self.context.msg = None
 
-                should_check_queue = self._process_transition(transition)
+                should_check_queue = await self._process_transition(transition)
 
                 if should_check_queue:
                     if block:
-                        message = self._message_queue.get(timeout=timeout).item
+                        message = await asyncio.wait_for(
+                            self._message_queue.get(), timeout=timeout
+                        )
+                        message = message.item
                     else:
                         message = self._message_queue.get_nowait().item
                     self.context.msg = message
-            except Empty:
+            except asyncio.QueueEmpty:
+                break
+            except asyncio.TimeoutError:
                 break
             except Exception as e:
                 # While it's true that 'Pokemon errors' are typically
@@ -1219,21 +1249,29 @@ class StateMachine:
 
                 next_transition = self._on_err_fn(self.context, e)
                 if next_transition:
-                    self._process_transition(next_transition)
+                    await self._process_transition(next_transition)
                 else:
                     raise
 
-    def _process_transition(self, transition: Union[TransitionType, Enum]) -> bool:
+    def tick_nowait(self):
+        """Non-blocking tick that processes available messages without waiting"""
+        return asyncio.create_task(self.tick(timeout=0))
+
+    async def _process_transition(
+        self, transition: Union[TransitionType, Enum]
+    ) -> bool:
         """Process a state transition"""
         valid_transitions = self.registry.get_transitions(self.current_state)
 
         target = valid_transitions.get(transition)
-        
+
         if transition is not None:
-            if  target is None and transition in valid_transitions.values():
+            if target is None and transition in valid_transitions.values():
                 target = transition
             else:
-                raise ValueError(f"ERROR: Unknown transition {transition}: {valid_transitions}")
+                raise ValueError(
+                    f"ERROR: Unknown transition {transition}: {valid_transitions}"
+                )
 
         if transition in (None, Unhandled):
             if (
@@ -1244,29 +1282,29 @@ class StateMachine:
                 f"{self.current_state.name} cannot dwell and does not have a timeout"
             )
         elif isinstance(target, type) and issubclass(target, State):
-            self._transition_to_state(target)
+            await self._transition_to_state(target)
         elif isinstance(target, Push):
-            self._handle_push(target)
+            await self._handle_push(target)
         elif isinstance(target, Pop) or issubclass(target, Pop):
-            self._handle_pop()
+            await self._handle_pop()
         elif target == Again:
-            # TODO: Fix this, I hate it, should probably just return false.
-            spawn(self.tick, block=False)
+            # Schedule another tick without blocking
+            asyncio.create_task(self.tick(timeout=0))
         elif target == Repeat:
-            self._transition_to_state(type(self.current_state))
+            await self._transition_to_state(type(self.current_state))
         elif target == Restart:
             self._reset_state_context()
-            self._transition_to_state(type(self.current_state))
+            await self._transition_to_state(type(self.current_state))
             return True
         elif target == Retry:
-            self._handle_retry()
+            await self._handle_retry()
 
         return False
 
-    def _transition_to_state(self, next_state: Type[State]):
+    async def _transition_to_state(self, next_state: Type[State]):
         """Transition to a new state"""
         if self.current_state:
-            self.current_state.on_leave(self.context)
+            await self.current_state.on_leave(self.context)
             self._cancel_timeout()
 
         self.current_state = next_state
@@ -1274,9 +1312,9 @@ class StateMachine:
         self.log(f"Transitioned to {next_state.name}")
 
         self._start_timeout(next_state)
-        next_state.on_enter(self.context)
+        await next_state.on_enter(self.context)
 
-    def _handle_retry(self):
+    async def _handle_retry(self):
         """Handle retry logic with counter"""
         state_name = self.current_state.name
 
@@ -1290,10 +1328,10 @@ class StateMachine:
             and self.retry_counters[state_name] > self.current_state.CONFIG.retries
         ):
             self.log(f"Retry limit exceeded for {state_name}")
-            transition = self.current_state.on_fail(self.context)
-            self._process_transition(transition)
+            transition = await self.current_state.on_fail(self.context)
+            await self._process_transition(transition)
         else:
-            self._transition_to_state(self.current_state)
+            await self._transition_to_state(self.current_state)
 
     def _reset_state_context(self):
         """Reset context for current state"""
@@ -1301,25 +1339,30 @@ class StateMachine:
         if state_name in self.retry_counters:
             del self.retry_counters[state_name]
 
-    def _handle_push(self, push: Push):
+    async def _handle_push(self, push: Push):
         """Handle push transition"""
         resolved_states = [self.registry.resolve_state(s) for s in push.push_states]
 
         for state in reversed(resolved_states[1:]):
             self.state_stack.append(state)
 
-        self._transition_to_state(resolved_states[0])
+        await self._transition_to_state(resolved_states[0])
 
-    def _handle_pop(self):
+    async def _handle_pop(self):
         """Handle pop transition"""
         if not self.state_stack:
             raise PopFromEmptyStack
 
         next_state = self.state_stack.pop()
-        self._transition_to_state(next_state)
+        await self._transition_to_state(next_state)
 
-    def run(self, max_iterations: Optional[int] = None, timeout: Optional[float] = 1):
+    async def run(
+        self, max_iterations: Optional[int] = None, timeout: Optional[float] = 1
+    ):
         """Run the state machine until terminal state"""
+        if not self._initialized:
+            await self.initialize()
+
         iteration = 0
 
         while True:
@@ -1331,14 +1374,14 @@ class StateMachine:
                 break
 
             try:
-                self.tick(timeout=timeout)
+                await self.tick(timeout=timeout)
                 iteration += 1
             except StateMachineComplete:
                 raise
             except Exception as e:
                 self.log(f"Error in FSM: {e}")
                 if self.error_state:
-                    self._transition_to_state(self.error_state)
+                    await self._transition_to_state(self.error_state)
                 else:
                     raise
 
@@ -1395,7 +1438,7 @@ class StateMachine:
                             }
                         )
                     else:
-                        # Error case: "Pop -> <error>"
+                        # Error case: "Pop -> <e>"
                         pop_targets.append(
                             {
                                 "transition": transition_name,
