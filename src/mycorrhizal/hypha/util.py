@@ -4,7 +4,7 @@ Cordyceps Asyncio Petri Net Utilities: Parametric Fork and Join Interfaces
 
 Updated for the autonomous asyncio architecture with PlaceName enum support.
 """
-from .core import Interface, Place, Transition, Arc, PlaceName, DispatchPolicy
+from .core import Interface, Place, Transition, Arc, PlaceName
 from typing import Type, Dict, List
 from enum import Enum, auto
 import asyncio

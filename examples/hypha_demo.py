@@ -11,7 +11,6 @@ This example demonstrates:
 - Gevent execution model
 - Mermaid diagram generation
 - Fully qualified names
-- Policy-based transitions (no guards/consume)
 """
 
 import signal
@@ -29,7 +28,6 @@ from mycorrhizal.hypha import (
     IOOutputPlace,
     create_simple_token,
     PlaceName,
-    DispatchPolicy,
 )
 from enum import Enum, auto
 from typing import Dict, List, Optional
@@ -141,8 +139,6 @@ class TaskGeneratorInterface(Interface):
             FROM_SOURCE = auto()
             TO_QUEUE = auto()
 
-        DISPATCH_POLICY = DispatchPolicy.ALL
-
         def input_arcs(self) -> Dict[PlaceName, Arc]:
             return {
                 self.ArcNames.FROM_SOURCE: Arc(TaskGeneratorInterface.TaskSourcePlace)
@@ -189,8 +185,6 @@ class TaskProcessorInterface(Interface):
             TO_PROCESSING = auto()
             TO_COMPLETED = auto()
             TO_FAILED = auto()
-
-        DISPATCH_POLICY = DispatchPolicy.ALL
 
         def input_arcs(self) -> Dict[PlaceName, Arc]:
             return {
@@ -317,8 +311,6 @@ class NotificationInterface(Interface):
             TO_SMS = auto()
             TO_LOG = auto()
 
-        DISPATCH_POLICY = DispatchPolicy.ALL
-
         def input_arcs(self) -> Dict[PlaceName, Arc]:
             return {
                 self.ArcNames.FROM_INPUT: Arc(
@@ -333,17 +325,18 @@ class NotificationInterface(Interface):
                 self.ArcNames.TO_LOG: Arc(NotificationInterface.LogOutputPlace),
             }
 
-        async def on_fire(
-            self, consumed: Dict[PlaceName, List[Token]]
-        ) -> Dict[PlaceName, List[Token]]:
-            notifications = consumed[self.ArcNames.FROM_INPUT]
+        # No need to modify this method, it simply forwards all inputs to all outputs
+        # async def on_fire(
+        #     self, consumed: Dict[PlaceName, List[Token]]
+        # ) -> Dict[PlaceName, List[Token]]:
+        #     notifications = consumed[self.ArcNames.FROM_INPUT]
 
-            # Send each notification to all channels
-            return {
-                self.ArcNames.TO_EMAIL: notifications,
-                self.ArcNames.TO_SMS: notifications,
-                self.ArcNames.TO_LOG: notifications,
-            }
+        #     # Send each notification to all channels
+        #     return {
+        #         self.ArcNames.TO_EMAIL: notifications,
+        #         self.ArcNames.TO_SMS: notifications,
+        #         self.ArcNames.TO_LOG: notifications,
+        #     }
 
 
 class ErrorHandlingInterface(Interface):
@@ -361,12 +354,6 @@ class ErrorHandlingInterface(Interface):
             if isinstance(token, ErrorToken):
                 timestamp = time.strftime("%H:%M:%S")
                 print(f"❌ ERROR [{timestamp}]: {token.error_type} - {token.message}")
-            if self.net:
-                self.net.tasks_completed += 1
-            print(
-                f"📊 Progress: {self.net.tasks_completed}/{self.net.total_tasks_to_process} tasks completed"
-            )
-
             return None
 
     class HandleErrorsTransition(Transition):
@@ -376,8 +363,6 @@ class ErrorHandlingInterface(Interface):
             FROM_ERROR = auto()
             TO_LOG = auto()
 
-        DISPATCH_POLICY = DispatchPolicy.ALL
-
         def input_arcs(self) -> Dict[PlaceName, Arc]:
             return {
                 self.ArcNames.FROM_ERROR: Arc(ErrorHandlingInterface.ErrorInputPlace)
@@ -386,12 +371,13 @@ class ErrorHandlingInterface(Interface):
         def output_arcs(self) -> Dict[PlaceName, Arc]:
             return {self.ArcNames.TO_LOG: Arc(ErrorHandlingInterface.ErrorLogPlace)}
 
-        async def on_fire(
-            self, consumed: Dict[PlaceName, List[Token]]
-        ) -> Dict[PlaceName, List[Token]]:
-            errors = consumed[self.ArcNames.FROM_ERROR]
-            # Forward all errors to logging
-            return {self.ArcNames.TO_LOG: errors}
+        # By default, we simply forward all inputs to all outputs, no need to modify
+        # async def on_fire(
+        #     self, consumed: Dict[PlaceName, List[Token]]
+        # ) -> Dict[PlaceName, List[Token]]:
+        #     errors = consumed[self.ArcNames.FROM_ERROR]
+        #     # Forward all errors to logging
+        #     return {self.ArcNames.TO_LOG: errors}
 
 
 # === MAIN SYSTEM ===
@@ -424,7 +410,7 @@ class TaskProcessingSystem(PetriNet):
         """Tracks completed tasks and signals when all are done"""
 
         async def on_token_added(self, token: Token) -> Optional[Token]:
-            if isinstance(token, ProcessedTaskToken):
+            if isinstance(token, (ProcessedTaskToken, ErrorToken)):
                 net = self.net
                 if net:
                     net.tasks_completed += 1
@@ -448,8 +434,6 @@ class TaskProcessingSystem(PetriNet):
             FROM_GENERATOR = auto()
             TO_PROCESSOR = auto()
 
-        DISPATCH_POLICY = DispatchPolicy.ALL
-
         def input_arcs(self) -> Dict[PlaceName, Arc]:
             return {
                 self.ArcNames.FROM_GENERATOR: Arc(
@@ -464,12 +448,6 @@ class TaskProcessingSystem(PetriNet):
                 )
             }
 
-        async def on_fire(
-            self, consumed: Dict[PlaceName, List[Token]]
-        ) -> Dict[PlaceName, List[Token]]:
-            tasks = consumed[self.ArcNames.FROM_GENERATOR]
-            return {self.ArcNames.TO_PROCESSOR: tasks}
-
     class ConnectProcessorToNotificationTransition(Transition):
         """Connects processor output to notification system and completion tracking"""
 
@@ -477,8 +455,6 @@ class TaskProcessingSystem(PetriNet):
             FROM_COMPLETED = auto()
             TO_NOTIFICATION = auto()
             TO_TRACKER = auto()
-
-        DISPATCH_POLICY = DispatchPolicy.ALL
 
         def input_arcs(self) -> Dict[PlaceName, Arc]:
             return {
@@ -524,8 +500,6 @@ class TaskProcessingSystem(PetriNet):
             TO_ERROR_HANDLER = auto()
             TO_TRACKER = auto()
 
-        DISPATCH_POLICY = DispatchPolicy.ALL
-
         def input_arcs(self) -> Dict[PlaceName, Arc]:
             return {
                 self.ArcNames.FROM_FAILED: Arc(
@@ -541,11 +515,13 @@ class TaskProcessingSystem(PetriNet):
                 self.ArcNames.TO_TRACKER: Arc(TaskProcessingSystem.CompletionTracker),
             }
 
-        async def on_fire(
-            self, consumed: Dict[PlaceName, List[Token]]
-        ) -> Dict[PlaceName, List[Token]]:
-            errors = consumed[self.ArcNames.FROM_FAILED]
-            return {self.ArcNames.TO_ERROR_HANDLER: errors}
+        # By default, we simply forward all inputs to all outputs, no need to modify
+        # async def on_fire(
+        #     self, consumed: Dict[PlaceName, List[Token]]
+        # ) -> Dict[PlaceName, List[Token]]:
+        #     errors = consumed[self.ArcNames.FROM_FAILED]
+        #     return {self.ArcNames.TO_ERROR_HANDLER: errors,
+        #             self.ArcNames.TO_TRACKER: errors}
 
 
 async def demonstrate_comprehensive_system():
@@ -558,7 +534,6 @@ async def demonstrate_comprehensive_system():
     print("- Fully qualified names for all components")
     print("- Configurable IOInputPlace")
     print("- IOOutputPlace with error handling and termination")
-    print("- Policy-based transitions (no guards)")
     print("- Multiple output channels")
     print("- Error handling and logging")
     print("- Graceful shutdown with gevent events")
@@ -631,19 +606,19 @@ async def demonstrate_comprehensive_system():
     try:
         print("Running system until all tasks are processed...")
         print("Watch the autonomous processing with reusable interfaces:")
-        print()
 
         # Wait for completion or signal (with reasonable timeout)
         await system.finished_event.wait()
 
     finally:
         print(f"\nStopping system...")
-        await system.stop()
+        # Give some time for final processing        
+        await system.stop(timeout=1)
 
     elapsed = time.time() - start_time
 
     print(f"\n" + "=" * 60)
-    print(f"System Completed in {elapsed:.1f}s")
+    print(f"System Completed in {elapsed:.4f}s")
     print("=" * 60)
 
     # Show final statistics

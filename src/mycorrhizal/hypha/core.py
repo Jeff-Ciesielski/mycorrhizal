@@ -18,6 +18,7 @@ from asyncio import (
     wait_for,
     gather,
     wait,
+    wait_for,
     FIRST_COMPLETED,
     CancelledError,
 )
@@ -26,11 +27,24 @@ import traceback
 from abc import ABC, ABCMeta, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set, Type, Union, Callable, Tuple
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Type,
+    Union,
+    Callable,
+    Tuple,
+    Iterable,
+)
 from collections import defaultdict
 from enum import Enum
+from itertools import combinations, product
 import weakref
 import time
+
 
 class PlaceName(Enum):
     """Base class for place name enumerations - enforces IDE type checking"""
@@ -95,6 +109,7 @@ class QualifiedNameConflict(Exception):
 
 class PetriNetDeadlock(Exception):
     """Raised when the Petri net is deadlocked."""
+
     pass
 
 
@@ -131,33 +146,34 @@ class Place(ABC):
     """
     Base class for all places in the Petri net system.
 
-    Places are now backed by asyncio queues and operate autonomously.
-    Each place has exactly one associated transition (one-to-one mapping).
+    Each Place can only act as input to a single transition
     """
 
     MAX_CAPACITY: Optional[int] = None
     ACCEPTED_TOKEN_TYPES: Optional[Set[Type[Token]]] = None
 
     def __init__(self):
-        self._queue: Queue = None  # Will be set during net construction
+        self._tokens: List[Token] = []
         self._total_tokens_processed = 0
         self._net: Optional["PetriNet"] = None
         self._qualified_name: Optional[str] = None
         self._task: Optional[Task] = None
+        self._token_pulse: Event = Event()
+        self._has_capacity: Event = Event()
+        self._not_empty: Event = Event()
+
+        self._has_capacity.set()
 
     def _attach_to_net(self, net: "PetriNet"):
         """Called when place is attached to a net."""
         self._net = net
-        # Create queue with capacity if specified
-        maxsize = self.MAX_CAPACITY if self.MAX_CAPACITY is not None else 0
-        self._queue = Queue(maxsize=maxsize)
 
     def _set_qualified_name(self, qualified_name: str):
         """Set the fully qualified name for this place."""
         self._qualified_name = qualified_name
 
     @property
-    def net(self) -> "PetriNet":
+    def net(self) -> Optional["PetriNet"]:
         return self._net
 
     @property
@@ -168,7 +184,7 @@ class Place(ABC):
     @property
     def token_count(self) -> int:
         """Returns the current number of tokens in this place."""
-        return self._queue.qsize() if self._queue else 0
+        return len(self._tokens)
 
     @property
     def is_empty(self) -> bool:
@@ -192,6 +208,10 @@ class Place(ABC):
 
         return True
 
+    async def wait_for_tokens(self):
+        await self._token_pulse.wait()
+        self._token_pulse.clear()
+
     async def add_token(self, token: Token, timeout: Optional[float] = None):
         """
         Add a token to this place's queue.
@@ -200,83 +220,35 @@ class Place(ABC):
             token: Token to add
             timeout: Timeout for blocking operation
 
-        Raises:
-            InvalidTokenType: If token type is not accepted
-            QueueFull: If queue is full and would block
         """
-        if not self.can_accept_token(token):
-            if self.is_full:
-                raise InsufficientTokens(f"Place {self.qualified_name} is at capacity")
-            else:
-                raise InvalidTokenType(
-                    f"Place {self.qualified_name} cannot accept token type {type(token)}"
-                )
-
-        if timeout is not None:
-            await wait_for(self._queue.put(token), timeout=timeout)
-        else:
-            await self._queue.put(token)
+        while True:
+            await wait_for(self._has_capacity.wait(), timeout)
+            # If we have multiple writers waiting, the first will await, then clear this second barrier,
+            # Subsequent writers will keep waiting their turn
+            if self._has_capacity.is_set():
+                break
+        self._tokens.append(token)
+        if self.MAX_CAPACITY is not None and self.token_count >= self.MAX_CAPACITY:
+            self._has_capacity.clear()
 
         self._total_tokens_processed += 1
         token.on_produced()
         await self.on_token_added(token)
+        self._not_empty.set()  # Signal that we have tokens now
+        self._token_pulse.set()
+        self._token_pulse.clear()
 
-    def add_token_nowait(self, token: Token):
-        """Add a token without waiting."""
-        if not self.can_accept_token(token):
-            if self.is_full:
-                raise InsufficientTokens(f"Place {self.qualified_name} is at capacity")
-            else:
-                raise InvalidTokenType(
-                    f"Place {self.qualified_name} cannot accept token type {type(token)}"
-                )
+    def remove_token(self, token: Token):
+        """Remove a token from this place's bag."""
+        self._tokens.remove(token)
+        if self.MAX_CAPACITY is not None and self.token_count < self.MAX_CAPACITY:
+            self._has_capacity.set()
+        if self.token_count == 0:
+            self._not_empty.clear()
 
-        self._queue.put_nowait(token)
-        self._total_tokens_processed += 1
-        token.on_produced()
-        # Note: can't await on_token_added here since this is sync
-
-    async def get_token(self, timeout: Optional[float] = None) -> Token:
-        """
-        Get a token from this place's queue.
-
-        Args:
-            timeout: Timeout for blocking operation
-
-        Returns:
-            Token from the queue
-
-        Raises:
-            QueueEmpty: If queue is empty and would block
-        """
-        if timeout is not None:
-            token = await wait_for(self._queue.get(), timeout=timeout)
-        else:
-            token = await self._queue.get()
-
-        token.on_consumed()
-        await self.on_token_removed(token)
-        return token
-
-    def get_token_nowait(self) -> Token:
-        """Get a token without waiting."""
-        token = self._queue.get_nowait()
-        token.on_consumed()
-        return token
-
-    async def peek_token(self, timeout: Optional[float] = None) -> Optional[Token]:
-        """Peek at the next token without removing it."""
-        # asyncio.Queue doesn't have peek, so we get and put back
-        try:
-            if timeout is not None:
-                token = await wait_for(self._queue.get(), timeout=timeout)
-            else:
-                token = await self._queue.get()
-            # Put it back immediately
-            self._queue.put_nowait(token)
-            return token
-        except (QueueEmpty, QueueFull, asyncio.TimeoutError):
-            return None
+    def combinations(self, r: int) -> Iterable[Tuple[Token, ...]]:
+        """Get all combinations of tokens in this place."""
+        return combinations(self._tokens, r)
 
     async def on_token_added(self, token: Token):
         """Called when a token is added to this place."""
@@ -294,57 +266,17 @@ class IOOutputPlace(Place):
     """
     Output IO places that send tokens to external systems.
 
-    These places run autonomous tasks that continuously drain their queues
-    and send tokens to external systems.
+    These places sink tokens produced by transitions and handle them autonomously.
     """
 
-    def _start_output_task(self):
-        """Start the output processing task."""
-        if self._task is None:
-            self._task = create_task(self._output_loop())
-            if self._net:
-                self._net._running_tasks.add(self._task)
+    async def add_token(self, token: Token, timeout: float | None = None):
+        # Asynchronously handle the token addition as the on_token_added method may
+        # perform IO operations that should not block the main event loop.
+        async def _sink(self):
+            await super().add_token(token, timeout)
+            self.remove_token(token)
 
-    async def _output_loop(self):
-        """Main output loop - continuously processes tokens from queue."""
-        try:
-            await self.on_output_start()
-
-            while True:
-                try:
-                    # await on queue without timeout
-                    token = await self._queue.get()
-
-                    # Process the token
-                    error_token = await self.on_token_added(token)
-
-                    if error_token is None:
-                        # Success
-                        await self.on_io_success(token)
-                    else:
-                        # Failed - put error token back in queue
-                        self._queue.put_nowait(error_token)
-                        await self.on_io_error(token, error_token)
-
-                except CancelledError:
-                    # Clean shutdown
-                    break
-                except Exception as e:
-                    await self.log(
-                        f"Unexpected error in IO output place {self.qualified_name}: {e}"
-                    )
-                    await self.on_io_error(token if "token" in locals() else None, None)
-
-            await self.on_output_stop()
-
-        except CancelledError:
-            await self.on_output_stop()
-            raise
-        except Exception as e:
-            await self.log(f"Fatal error in output loop for {self.qualified_name}: {e}")
-        finally:
-            if self._net and self._task in self._net._running_tasks:
-                self._net._running_tasks.discard(self._task)
+        self.net._running_tasks.add(create_task(_sink(self)))
 
     async def on_token_added(self, token: Token) -> Optional[Token]:
         """
@@ -408,14 +340,14 @@ class IOInputPlace(Place):
                     result = await self.on_input()
 
                     if isinstance(result, Token):
-                        await self._queue.put(result)
+                        await self.add_token(result)
                         result.on_produced()
                         await self.on_token_added(result)
                     elif isinstance(result, list) and all(
                         isinstance(x, Token) for x in result
                     ):
                         for token in result:
-                            await self._queue.put(token)
+                            await self.add_token(token)
                             token.on_produced()
                             await self.on_token_added(token)
                     elif result is None:
@@ -494,280 +426,14 @@ class Arc:
                 self.label = "unnamed_arc"
 
 
-class DispatchPolicy(Enum):
-    """Policies for when transitions should fire."""
-
-    ANY = "any"  # Fire when any input place has required tokens
-    ALL = "all"  # Fire when all input places have required tokens
-
-
-class PolicyDispatcher:
-    """
-    Manages token collection and transition firing based on policy.
-
-    Replaces the guard system with policy-based dispatching.
-    """
-
-    def __init__(self, transition: "Transition", policy: DispatchPolicy):
-        self.transition = transition
-        self.policy = policy
-        self.input_places: Dict[PlaceName, Place] = {}
-        self.input_weights: Dict[PlaceName, int] = {}
-        self.collector_queues: Dict[PlaceName, Queue] = {}
-        self._task: Optional[Task] = None
-        self._collector_tasks: List[Task] = []
-        self._waiting_on: Set[PlaceName] = set()  # Track what we're waiting for
-
-    def add_input(self, label: PlaceName, place: Place, weight: int):
-        """Add an input place with its weight."""
-        self.input_places[label] = place
-        self.input_weights[label] = weight
-
-        if weight > 1:
-            # Create collector queue for batching
-            self.collector_queues[label] = Queue()
-
-    def start(self):
-        """Start the dispatcher task."""
-        if self._task is None:
-            self._task = create_task(self._dispatch_loop())
-            if self.transition._net:
-                self.transition._net._running_tasks.add(self._task)
-
-    async def _dispatch_loop(self):
-        """Main dispatch loop."""
-        try:
-            # Start collector tasks for weighted inputs
-            for label, weight in self.input_weights.items():
-                if weight > 1:
-                    collector = create_task(self._collector_loop(label, weight))
-                    self._collector_tasks.append(collector)
-                    if self.transition._net:
-                        self.transition._net._running_tasks.add(collector)
-
-            while True:
-                try:
-                    # Collect tokens based on policy
-                    token_batch = await self._collect_tokens()
-
-                    if token_batch:
-                        # Forward to transition
-                        await self.transition._input_queue.put(token_batch)
-
-                except CancelledError:
-                    break
-                except Exception as e:
-                    if self.transition._net:
-                        await self.transition._net.log(
-                            f"Error in dispatcher for {self.transition.qualified_name}: {e}"
-                        )
-
-            # Clean up collector tasks
-            for collector in self._collector_tasks:
-                collector.cancel()
-            
-            # Wait for them to finish
-            if self._collector_tasks:
-                await gather(*self._collector_tasks, return_exceptions=True)
-
-        except CancelledError:
-            # Clean shutdown
-            for collector in self._collector_tasks:
-                collector.cancel()
-            if self._collector_tasks:
-                await gather(*self._collector_tasks, return_exceptions=True)
-            raise
-        except Exception as e:
-            if self.transition._net:
-                await self.transition._net.log(
-                    f"Fatal error in dispatcher for {self.transition.qualified_name}: {e}"
-                )
-        finally:
-            if (
-                self.transition._net
-                and self._task in self.transition._net._running_tasks
-            ):
-                self.transition._net._running_tasks.discard(self._task)
-
-    async def _collector_loop(self, label: PlaceName, weight: int):
-        """Collector task for batching tokens from weighted arcs."""
-        place = self.input_places[label]
-        collector_queue = self.collector_queues[label]
-
-        try:
-            while True:
-                batch = []
-
-                # Collect required number of tokens
-                for i in range(weight):
-                    try:
-                        token = await place.get_token()
-                        batch.append(token)
-                    except CancelledError:
-                        # Put back any partial batch
-                        for token in reversed(batch):
-                            place._queue.put_nowait(token)
-                        raise
-
-                if len(batch) == weight:
-                    # Forward complete batch to collector queue
-                    await collector_queue.put(batch)
-
-        except CancelledError:
-            raise
-        except Exception as e:
-            if self.transition._net:
-                await self.transition._net.log(
-                    f"Error in collector for {self.transition.qualified_name}.{label}: {e}"
-                )
-
-    async def _collect_tokens(self) -> Optional[Dict[PlaceName, List[Token]]]:
-        """Collect tokens based on dispatch policy."""
-        
-        if self.policy == DispatchPolicy.ANY:
-            return await self._collect_any_policy()
-        elif self.policy == DispatchPolicy.ALL:
-            return await self._collect_all_policy()
-        
-        return None
-
-    async def _collect_any_policy(self) -> Optional[Dict[PlaceName, List[Token]]]:
-        """Collect tokens using ANY policy - fire when any input has tokens."""
-        # Create tasks for getting from each input
-        get_tasks = {}
-        for label in self.input_places:
-            if label in self.collector_queues:
-                # Weighted input - get from collector queue
-                get_tasks[label] = create_task(self.collector_queues[label].get())
-            else:
-                # Regular input - get from place queue
-                place = self.input_places[label]
-                get_tasks[label] = create_task(place.get_token())
-        
-        # Update what we're waiting on for deadlock detection
-        self._waiting_on = set(get_tasks.keys())
-        
-        try:
-            # Wait for any to complete
-            done, pending = await wait(get_tasks.values(), return_when=FIRST_COMPLETED)
-            
-            # Cancel pending tasks
-            for task in pending:
-                task.cancel()
-            
-            # Gather results from completed tasks
-            result = {}
-            for label, task in get_tasks.items():
-                if task in done:
-                    try:
-                        token_or_batch = await task
-                        if isinstance(token_or_batch, list):
-                            result[label] = token_or_batch
-                        else:
-                            result[label] = [token_or_batch]
-                    except CancelledError:
-                        pass
-            
-            self._waiting_on.clear()
-            return result if result else None
-            
-        except CancelledError:
-            # Cancel all get tasks
-            for task in get_tasks.values():
-                task.cancel()
-            await gather(*get_tasks.values(), return_exceptions=True)
-            self._waiting_on.clear()
-            raise
-
-    async def _collect_all_policy(self) -> Optional[Dict[PlaceName, List[Token]]]:
-        """Collect tokens using ALL policy - fire only when all inputs have tokens."""
-        # Create tasks for getting from each input
-        get_tasks = {}
-        for label in self.input_places:
-            if label in self.collector_queues:
-                # Weighted input - get from collector queue
-                get_tasks[label] = create_task(self.collector_queues[label].get())
-            else:
-                # Regular input - get from place queue
-                place = self.input_places[label]
-                get_tasks[label] = create_task(place.get_token())
-        
-        # Update what we're waiting on for deadlock detection
-        self._waiting_on = set(get_tasks.keys())
-        
-        try:
-            # Wait for all to complete
-            results = await gather(*get_tasks.values())
-            
-            # Build result dictionary
-            result = {}
-            for label, token_or_batch in zip(get_tasks.keys(), results):
-                if isinstance(token_or_batch, list):
-                    result[label] = token_or_batch
-                else:
-                    result[label] = [token_or_batch]
-            
-            self._waiting_on.clear()
-            return result
-            
-        except CancelledError:
-            # Cancel all get tasks
-            for task in get_tasks.values():
-                if not task.done():
-                    task.cancel()
-            
-            # Wait for cancellations and put tokens back
-            for label, task in get_tasks.items():
-                try:
-                    token_or_batch = await task
-                    # Put back what we got
-                    if label in self.collector_queues:
-                        await self.collector_queues[label].put(token_or_batch)
-                    else:
-                        place = self.input_places[label]
-                        if isinstance(token_or_batch, list):
-                            for token in reversed(token_or_batch):
-                                place._queue.put_nowait(token)
-                        else:
-                            place._queue.put_nowait(token_or_batch)
-                except (CancelledError, Exception):
-                    pass
-            
-            self._waiting_on.clear()
-            raise
-
-    async def _put_back_tokens(self, token_dict: Dict[PlaceName, List[Token]]):
-        """Put tokens back into their places."""
-        for label, tokens in token_dict.items():
-            if label in self.collector_queues:
-                # Put back into collector queue
-                if tokens:
-                    await self.collector_queues[label].put(tokens)
-            else:
-                # Put back into place queue
-                place = self.input_places[label]
-                for token in reversed(tokens):
-                    place._queue.put_nowait(token)
-
-    def is_waiting(self) -> bool:
-        """Check if dispatcher is currently waiting for tokens."""
-        return len(self._waiting_on) > 0
-
-    def get_waiting_places(self) -> Set[PlaceName]:
-        """Get the places this dispatcher is waiting on."""
-        return self._waiting_on.copy()
-
-
 # Core Transition System
 class Transition(ABC):
     """
     Base class for all transitions in the Petri net system.
 
     In the autonomous model, transitions run as independent tasks
-    waiting on input queues managed by policy dispatchers.
+    waiting on their input places
     """
-
-    DISPATCH_POLICY: DispatchPolicy = DispatchPolicy.ALL  # Default policy
 
     def __init__(self):
         self._fire_count = 0
@@ -775,14 +441,27 @@ class Transition(ABC):
         self._net: Optional["PetriNet"] = None
         self._qualified_name: Optional[str] = None
         self._interface_path: Optional[str] = None
-        self._input_queue: Queue = Queue()
         self._output_places: Dict[PlaceName, Place] = {}
-        self._dispatcher: Optional[PolicyDispatcher] = None
+        self._input_places: Dict[PlaceName, Place] = {}
+
         self._task: Optional[Task] = None
+        self._waiting: bool = False
 
     def _attach_to_net(self, net: "PetriNet"):
         """Called when transition is attached to a net."""
         self._net = net
+
+        self._input_places = {}
+        self._output_places = {}
+
+        output_arcs = self.output_arcs()
+        for label, arc in output_arcs.items():
+            place = self._net._resolve_place_from_arc(arc)
+            self._output_places[label] = place
+        input_arcs = self.input_arcs()
+        for label, arc in input_arcs.items():
+            place = self._net._resolve_place_from_arc(arc)
+            self._input_places[label] = place
 
     def _set_qualified_name(self, qualified_name: str):
         """Set the fully qualified name for this transition."""
@@ -819,15 +498,9 @@ class Transition(ABC):
         """Timestamp of last firing."""
         return self._last_fired
 
-    def _setup_dispatcher(self):
-        """Set up the policy dispatcher for this transition."""
-        self._dispatcher = PolicyDispatcher(self, self.DISPATCH_POLICY)
-
-        # Add input places to dispatcher
-        input_arcs = self.input_arcs()
-        for label, arc in input_arcs.items():
-            place = self._net._resolve_place_from_arc(arc)
-            self._dispatcher.add_input(label, place, arc.weight)
+    def guard(self, tokens: Dict[PlaceName, List[Token]]) -> bool:
+        """Check if the transition can fire with the given tokens."""
+        return True
 
     def _start_transition_task(self):
         """Start the transition processing task."""
@@ -836,16 +509,43 @@ class Transition(ABC):
             if self._net:
                 self._net._running_tasks.add(self._task)
 
-        if self._dispatcher:
-            self._dispatcher.start()
-
     async def _transition_loop(self):
-        """Main transition loop - processes token batches from dispatcher."""
+        """Main transition loop - processes token batches ."""
         try:
             while True:
                 try:
-                    # Properly await on queue without timeout
-                    token_batch = await self._input_queue.get()
+                    # Wait until all input places have _enough_ tokens to meet the arc weight requirement
+                    self._waiting = True
+                    for label, arc in self.input_arcs().items():
+                        place = self._input_places[label]
+                        while not place.token_count >= arc.weight:
+                            # Every added token will pulse an event, so we can wait for that OR the shutdown event
+                            await place.wait_for_tokens()
+                    # Generate combinations for each input place
+                    guard_passed = False
+                    token_combinations = {}
+                    for label, arc in self.input_arcs().items():
+                        place = self._input_places[label]
+                        token_combinations[label] = place.combinations(arc.weight)
+
+                    # Generate the Cartesian product of token combinations
+                    token_batch = {}
+                    all_combinations = list(product(*token_combinations.values()))
+                    for combo in all_combinations:
+                        token_batch = dict(zip(token_combinations.keys(), combo))
+                        if self.guard(token_batch):
+                            guard_passed = True
+                            # Remove tokens from input places
+                            for label, tokens in token_batch.items():
+                                place = self._input_places[label]
+                                for token in tokens:
+                                    place.remove_token(token)
+                            break
+
+                    # No valid combination found, wait for new tokens
+                    if not guard_passed:
+                        continue
+                    self._waiting = False
 
                     # Fire the transition
                     await self._fire_with_tokens(token_batch)
@@ -885,7 +585,7 @@ class Transition(ABC):
                         if isinstance(tokens, Token):
                             tokens = [tokens]
                         for token in tokens:
-                            place.add_token_nowait(token)
+                            await place.add_token(token)
 
             self._fire_count += 1
             self._last_fired = datetime.now()
@@ -979,9 +679,7 @@ class Transition(ABC):
 
     def is_waiting(self) -> bool:
         """Check if this transition is waiting for tokens."""
-        if self._dispatcher:
-            return self._dispatcher.is_waiting()
-        return False
+        return self._waiting
 
     def __repr__(self):
         return f"{self.qualified_name}(fired={self.fire_count})"
@@ -1078,7 +776,7 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         self._cycles: float = 0
         self._cycle_task: Optional[Task] = None
         self._cycle_units: Set[float] = set()
-        
+
         # Deadlock detection
         self._deadlock_check_task: Optional[Task] = None
         self._deadlock_check_interval: float = 1.0  # Check every second
@@ -1127,9 +825,6 @@ class PetriNet(metaclass=DeclarativeABCMeta):
 
         # Third pass: instantiate everything
         self._instantiate_components()
-
-        # Fourth pass: set up autonomous execution
-        self._setup_autonomous_execution()
 
     def _register_components(self, prefix: str, cls: Type):
         """Register components with their qualified names."""
@@ -1255,19 +950,6 @@ class PetriNet(metaclass=DeclarativeABCMeta):
                 transition_instance._attach_to_net(self)
                 self._transitions.append(transition_instance)
 
-    def _setup_autonomous_execution(self):
-        """Set up autonomous execution for all transitions and places."""
-        # Set up transitions with their dispatchers and output places
-        for transition in self._transitions:
-            # Map output places
-            output_arcs = transition.output_arcs()
-            for label, arc in output_arcs.items():
-                place = self._resolve_place_from_arc(arc)
-                transition._output_places[label] = place
-
-            # Set up dispatcher
-            transition._setup_dispatcher()
-
     async def log(self, message: str):
         """Log a message."""
         self._log_fn(f"[{datetime.now()}] {message}")
@@ -1324,18 +1006,19 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         try:
             while True:
                 await sleep(self._deadlock_check_interval)
-                
+                if self._shutdown_event.is_set():
+                    break
                 if await self.is_deadlocked():
                     await self.log("DEADLOCK DETECTED!")
                     await self.on_deadlock()
-                    
+
         except CancelledError:
             raise
 
     async def is_deadlocked(self) -> bool:
         """
         Check if the net is deadlocked.
-        
+
         A deadlock occurs when:
         1. All transitions are waiting for tokens
         2. No IO input places are active (or they've signaled completion)
@@ -1343,27 +1026,26 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         """
         # Check if all transitions are waiting
         all_waiting = all(t.is_waiting() for t in self._transitions)
-        
+
         if not all_waiting:
             return False
-        
+
         # Check if any IO inputs are still producing
         # This is a bit tricky - we need a way for IOInputPlaces to signal they're done
         # For now, check if the net has a 'finished' flag (like in the demo)
-        if hasattr(self, 'finished') and self.finished:
+        if hasattr(self, "finished") and self.finished:
             # Net has indicated it's finished producing
             return True
-        
+
         # Check if there are any active IO input tasks that might produce tokens
         active_inputs = any(
-            place._task and not place._task.done() 
-            for place in self._io_input_places
+            place._task and not place._task.done() for place in self._io_input_places
         )
-        
+
         if active_inputs:
             # Still have active inputs, not deadlocked yet
             return False
-        
+
         # All transitions waiting, no active inputs
         return True
 
@@ -1382,7 +1064,7 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         self._cycles = 0
         self._cycle_task = create_task(self._cycle_loop())
         self._running_tasks.add(self._cycle_task)
-        
+
         # Start deadlock detector
         self._deadlock_check_task = create_task(self._deadlock_check_loop())
         self._running_tasks.add(self._deadlock_check_task)
@@ -1391,17 +1073,13 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         for io_input_place in self._io_input_places:
             io_input_place._start_input_task()
 
-        # Start all IO output places
-        for io_output_place in self._io_output_places:
-            io_output_place._start_output_task()
-
         # Start all transitions
         for transition in self._transitions:
             transition._start_transition_task()
 
         await self.log(f"Net: {self.__class__.__name__} tasks started")
 
-    async def stop(self):
+    async def stop(self, timeout: Optional[float] = 0):
         """Stop the autonomous Petri net execution."""
         if self._shutdown_event.is_set():
             return
@@ -1409,14 +1087,17 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         await self.log(f"Stopping Net: {self.__class__.__name__}")
         self._shutdown_event.set()
 
-        # Cancel all running tasks
-        for task in self._running_tasks:
-            if not task.done():
-                task.cancel()
-
-        # Wait for all tasks to complete
-        if self._running_tasks:
-            await gather(*self._running_tasks, return_exceptions=True)
+        try:
+            # Wait for all tasks to complete with timeout
+            await wait_for(
+                gather(
+                    *[task for task in self._running_tasks if not task.done()],
+                    return_exceptions=True,
+                ),
+                timeout=timeout,
+            )
+        except (asyncio.TimeoutError):
+            pass
 
         self._running_tasks.clear()
         await self.log(f"Net: {self.__class__.__name__} stopped")
@@ -1445,7 +1126,6 @@ class PetriNet(metaclass=DeclarativeABCMeta):
                 transition.qualified_name: {
                     "fire_count": transition.fire_count,
                     "last_fired": transition.last_fired,
-                    "dispatch_policy": transition.DISPATCH_POLICY.value,
                     "is_waiting": transition.is_waiting(),
                 }
                 for transition in self._transitions
@@ -1482,9 +1162,8 @@ class PetriNet(metaclass=DeclarativeABCMeta):
             qualified_name = transition.qualified_name
             safe_name = qualified_name.replace(".", "_")
             fire_count = transition.fire_count
-            policy = transition.DISPATCH_POLICY.value
             lines.append(
-                f'    {safe_name}["{qualified_name}<br/>(fired {fire_count}x)<br/>Policy: {policy}"]'
+                f'    {safe_name}["{qualified_name}<br/>(fired {fire_count}x)"]'
             )
 
         # Group nodes in subgraphs for interfaces

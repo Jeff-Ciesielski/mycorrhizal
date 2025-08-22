@@ -19,7 +19,6 @@ from mycorrhizal.hypha import (
     IOInputPlace,
     IOOutputPlace,
     PlaceName,
-    DispatchPolicy,
 )
 from enum import Enum, auto
 from typing import Dict, List, Optional
@@ -79,8 +78,6 @@ class MinimalNet(PetriNet):
             FROM_SOURCE = auto()
             TO_QUEUE = auto()
 
-        DISPATCH_POLICY = DispatchPolicy.ALL
-
         def input_arcs(self) -> Dict[PlaceName, Arc]:
             return {self.ArcNames.FROM_SOURCE: Arc(MinimalNet.TokenSource)}
 
@@ -105,8 +102,6 @@ class MinimalNet(PetriNet):
         class ArcNames(PlaceName):
             FROM_QUEUE = auto()
             TO_PROCESSED = auto()
-
-        DISPATCH_POLICY = DispatchPolicy.ALL
 
         def input_arcs(self) -> Dict[PlaceName, Arc]:
             return {self.ArcNames.FROM_QUEUE: Arc(MinimalNet.TokenQueue)}
@@ -155,8 +150,7 @@ async def main():
 
     print("\nTransitions:")
     for transition in net._transitions:
-        policy = transition.DISPATCH_POLICY.value
-        print(f"  {transition.qualified_name} (policy: {policy})")
+        print(f"  {transition.qualified_name}")
 
     # Generate Mermaid diagram
     print("\nMermaid Diagram:")

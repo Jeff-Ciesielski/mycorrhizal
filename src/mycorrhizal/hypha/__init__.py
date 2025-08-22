@@ -8,7 +8,6 @@ from .core import (
     IOInputPlace,
     IOOutputPlace,
     PlaceName,
-    DispatchPolicy,
     create_simple_token
 )
 
