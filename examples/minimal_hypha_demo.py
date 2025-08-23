@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Minimal Hypha Petri Net Demo - Gevent Version
+Minimal Hypha Petri Net Demo
 - One token source
 - One queue
 - One processor
@@ -128,7 +128,7 @@ class MinimalNet(PetriNet):
 async def main():
     """Run the minimal demo"""
     print("=" * 50)
-    print("Minimal Cordyceps Demo - Gevent Version")
+    print("Minimal Hypha Demo")
     print("=" * 50)
 
     # Create network with 5 tokens

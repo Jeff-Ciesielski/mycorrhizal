@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Hypha Comprehensive Demo - Gevent Architecture
+Hypha Comprehensive Demo 
 
 This example demonstrates:
 - Proper interface composition with reusable interfaces
@@ -8,7 +8,6 @@ This example demonstrates:
 - IOOutputPlace with error handling and termination
 - Graceful shutdown mechanisms
 - Token-based communication
-- Gevent execution model
 - Mermaid diagram generation
 - Fully qualified names
 """
@@ -525,20 +524,10 @@ class TaskProcessingSystem(PetriNet):
 
 
 async def demonstrate_comprehensive_system():
-    """Demonstrate all major Cordyceps features with reusable interface composition"""
+    """Demonstrate all major Hypha features with reusable interface composition"""
     print("=" * 60)
-    print("Cordyceps Comprehensive Demo - Gevent Architecture")
+    print("Hypha Comprehensive Demo")
     print("=" * 60)
-    print("Features demonstrated:")
-    print("- Reusable interface composition")
-    print("- Fully qualified names for all components")
-    print("- Configurable IOInputPlace")
-    print("- IOOutputPlace with error handling and termination")
-    print("- Multiple output channels")
-    print("- Error handling and logging")
-    print("- Graceful shutdown with gevent events")
-    print("- Gevent execution model")
-    print()
 
     # Create system with reusable interface composition
     system = TaskProcessingSystem()
