@@ -45,10 +45,48 @@ from itertools import combinations, product
 import weakref
 import time
 
+from contextvars import ContextVar
+
+# A per-task stack of currently-building declarative namespaces (innermost at the end)
+_DECL_STACK: ContextVar[tuple] = ContextVar("_DECL_STACK", default=())
+
+def _decl_stack_get() -> list:
+    """Return a copy of the current declarative-namespace stack (outer..inner)."""
+    return list(_DECL_STACK.get())
+
+def _decl_stack_push(ns: dict) -> None:
+    stack = list(_DECL_STACK.get())
+    stack.append(ns)
+    _DECL_STACK.set(tuple(stack))
+
+def _decl_stack_pop(ns: dict) -> None:
+    stack = list(_DECL_STACK.get())
+    if stack and stack[-1] is ns:
+        stack.pop()
+    else:
+        # Fallback: remove first matching (handles odd nesting/cross-calls defensively)
+        for i in range(len(stack) - 1, -1, -1):
+            if stack[i] is ns:
+                del stack[i]
+                break
+    _DECL_STACK.set(tuple(stack))
+
+class _DeclarativeNamespace(dict):
+    """
+    Namespace mapping returned by DeclarativeMeta.__prepare__.
+
+    It allows helpers to (a) recognize "we are inside a declarative class body",
+    and (b) inject attributes into the *actual* class namespace.
+    """
+    __slots__ = ("__declarative_meta__",)
+
+    def __init__(self, meta):
+        super().__init__()
+        # Not a class attribute; just a marker on the mapping object itself
+        self.__declarative_meta__ = meta
 
 class PlaceName(Enum):
     """Base class for place name enumerations - enforces IDE type checking"""
-
     pass
 
 
@@ -685,41 +723,72 @@ class Transition(ABC):
         return f"{self.qualified_name}(fired={self.fire_count})"
 
 
-# Declarative Composition System (unchanged from original)
+
 class DeclarativeMeta(type):
     """Metaclass that handles declarative composition."""
 
+    @classmethod
+    def __prepare__(mcls, name, bases, **kwargs):
+        """
+        Return the mapping used as `locals()` while executing the class body.
+        We push it onto a context stack so helpers can inject into it.
+        """
+        ns = _DeclarativeNamespace(mcls)
+        _decl_stack_push(ns)
+        return ns
+
     def __new__(mcs, name, bases, namespace, **kwargs):
-        cls = super().__new__(mcs, name, bases, namespace)
+        """
+        Build the class from the prepared mapping, then run the discovery you already had.
+        We pop the mapping off the context stack afterwards.
+        """
+        try:
+            # IMPORTANT: pass a plain dict into type.__new__
+            cls = super().__new__(mcs, name, bases, dict(namespace), **kwargs)
 
-        # Find all nested classes and organize them
-        cls._discovered_places = []
-        cls._discovered_transitions = []
-        cls._discovered_interfaces = []
+            # Find all nested classes and organize them
+            cls._discovered_places = []
+            cls._discovered_transitions = []
+            cls._discovered_interfaces = []
 
-        for attr_name, attr_value in namespace.items():
-            if inspect.isclass(attr_value):
-                attr_value._outer_class = cls
-                attr_value._attr_name = attr_name
+            for attr_name, attr_value in namespace.items():
+                if inspect.isclass(attr_value):
+                    attr_value._outer_class = cls
+                    attr_value._attr_name = attr_name
 
-                if issubclass(attr_value, Place):
-                    cls._discovered_places.append(attr_value)
-                elif issubclass(attr_value, Transition):
-                    cls._discovered_transitions.append(attr_value)
-                elif issubclass(attr_value, Interface):
-                    cls._discovered_interfaces.append(attr_value)
+                    if issubclass(attr_value, Place):
+                        cls._discovered_places.append(attr_value)
+                    elif issubclass(attr_value, Transition):
+                        cls._discovered_transitions.append(attr_value)
+                    elif issubclass(attr_value, Interface):
+                        cls._discovered_interfaces.append(attr_value)
+                elif isinstance(attr_value, list) and all(
+                    inspect.isclass(x) and issubclass(x, Place) for x in attr_value
+                ):
+                    cls._discovered_places.extend(attr_value)
+                elif isinstance(attr_value, list) and all(
+                    inspect.isclass(x) and issubclass(x, Transition) for x in attr_value
+                ):
+                    cls._discovered_transitions.extend(attr_value)
+                elif isinstance(attr_value, list) and all(
+                    inspect.isclass(x) and issubclass(x, Interface) for x in attr_value
+                ):
+                    cls._discovered_interfaces.extend(attr_value)
 
-        # Inherit from parent classes
-        for base in bases:
-            if hasattr(base, "_discovered_places"):
-                cls._discovered_places.extend(base._discovered_places)
-            if hasattr(base, "_discovered_transitions"):
-                cls._discovered_transitions.extend(base._discovered_transitions)
-            if hasattr(base, "_discovered_interfaces"):
-                cls._discovered_interfaces.extend(base._discovered_interfaces)
+            # Inherit from parent classes
+            for base in bases:
+                if hasattr(base, "_discovered_places"):
+                    cls._discovered_places.extend(base._discovered_places)
+                if hasattr(base, "_discovered_transitions"):
+                    cls._discovered_transitions.extend(base._discovered_transitions)
+                if hasattr(base, "_discovered_interfaces"):
+                    cls._discovered_interfaces.extend(base._discovered_interfaces)
 
-        return cls
+            return cls
 
+        finally:
+            # Always pop the active namespace for this class body
+            _decl_stack_pop(namespace)
 
 class DeclarativeABCMeta(DeclarativeMeta, ABCMeta):
     """Combined metaclass that supports both ABC and declarative composition."""
@@ -964,7 +1033,7 @@ class PetriNet(metaclass=DeclarativeABCMeta):
     def _get_place_by_type(self, place_type: Type[Place]) -> Place:
         """Get a place by type."""
         if place_type not in self._places_by_type:
-            raise KeyError(f"Place type {place_type.__name__} not found")
+            raise KeyError(f"Place type {place_type.__name__} not found in {self._places_by_type}")
         return self._places_by_type[place_type]
 
     def _get_place_by_qualified_name(self, qualified_name: str) -> Place:
@@ -1168,7 +1237,9 @@ class PetriNet(metaclass=DeclarativeABCMeta):
 
         # Group nodes in subgraphs for interfaces
         for interface_name, components in self._interface_hierarchy.items():
+            print(interface_name)
             if components:
+                print(components)
                 safe_interface_name = interface_name.replace(".", "_")
                 lines.append(f'    subgraph {safe_interface_name} ["{interface_name}"]')
                 for component_name in components:

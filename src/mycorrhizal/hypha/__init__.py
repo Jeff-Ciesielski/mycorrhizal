@@ -11,7 +11,7 @@ from .core import (
     create_simple_token
 )
 
-from .util import ForkN, JoinN, Fork, Join, Merge, Buffer, RateLimiter
+from .util import ForkN, Fork, Join, Merge, Buffer, RateLimiter
 
 __all__ = [
     "Token",
