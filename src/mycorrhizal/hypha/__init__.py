@@ -1,5 +1,4 @@
 from .core import (
-    Token,
     Place,
     Transition,
     PetriNet,
@@ -8,13 +7,11 @@ from .core import (
     IOInputPlace,
     IOOutputPlace,
     PlaceName,
-    create_simple_token
 )
 
 from .util import ForkN, Fork, Join, Merge, Buffer, RateLimiter
 
 __all__ = [
-    "Token",
     "Place",
     "Transition",
     "PetriNet",
@@ -22,9 +19,7 @@ __all__ = [
     "IOInputPlace",
     "IOOutputPlace",
     "PlaceName",
-    "DispatchPolicy",
     "Interface",
-    "create_simple_token",
     # Util
     "ForkN",
     "JoinN",

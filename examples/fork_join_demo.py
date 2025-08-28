@@ -28,12 +28,7 @@ print(f"PetriNet metaclass: {PetriNet.__class__}")
 print(f"PetriNet MRO: {PetriNet.__class__.__mro__}")
 print(f"Has DeclarativeMeta in MRO: {'DeclarativeMeta' in [cls.__name__ for cls in PetriNet.__class__.__mro__]}")
 class SimpleToken(Token):
-    def __init__(self, value):
-        super().__init__({"value": value})
-        self.value = value
-
-    def __repr__(self):
-        return f"SimpleToken({self.value})"
+    pass
 
 
 class ForkJoinNet(PetriNet):
@@ -55,7 +50,7 @@ class ForkJoinNet(PetriNet):
                 if self.net:
                     self.net.finished = True
                 return None
-            token = SimpleToken(self.generated)
+            token = SimpleToken(data=self.generated)
             self.generated += 1
             print(f"[Source] Produced: {token}")
             await self.net.sleep_cycles(0.5)

@@ -21,16 +21,11 @@ from mycorrhizal.hypha import (
     PlaceName,
 )
 from enum import Enum, auto
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 
 class SimpleToken(Token):
-    def __init__(self, value):
-        super().__init__({"value": value})
-        self.value = value
-
-    def __repr__(self):
-        return f"SimpleToken({self.value})"
+    pass
 
 
 class MinimalNet(PetriNet):
@@ -65,7 +60,7 @@ class MinimalNet(PetriNet):
                     self.net.finished = True
                 return None
 
-            token = SimpleToken(self.generated)
+            token = SimpleToken(data=self.generated)
             self.generated += 1
             print(f"[Source] Produced: {token}")
             await self.net.sleep_cycles(0.5)  # Simulate generation delay

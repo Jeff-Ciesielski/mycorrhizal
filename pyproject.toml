@@ -5,14 +5,16 @@ description = "Utilities and DSLs for modelling and implementing safe, performan
 readme = "README.md"
 authors = [{ name = "Jeff Ciesielski", email = "jeffciesielski@gmail.com" }]
 requires-python = ">=3.10"
-dependencies = ["typeguard==4.4.4", "gevent==25.5.1"]
+dependencies = [
+    "typeguard==4.4.4",
+    "pydantic>=2.11.7",
+]
 
 [project.optional-dependencies]
 test = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-timeout>=2.0.0",
-    "pytest-gevent"
 ]
 
 

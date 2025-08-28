@@ -13,7 +13,7 @@ from .core import (
     PetriNet,
     _decl_stack_get,
     DeclarativeMeta,
-    _DeclarativeNamespace
+    _DeclarativeNamespace,
 )
 from typing import NamedTuple, Type, Dict, List, Optional, Tuple, Any
 from enum import Enum, auto
@@ -24,7 +24,7 @@ import inspect
 from abc import ABC, ABCMeta
 from typing import Optional, NamedTuple
 from types import FrameType
-
+from collections import defaultdict
 
 def _inject(name: str, obj: object, target_depth: int = 0) -> bool:
     """
@@ -113,6 +113,13 @@ def _gen_prefix() -> str:
     return f"{qualname}_L{lineno}_{next_index}"
 
 
+def NewPlace() -> Type[Place]:
+    """
+    Create a new Place subclass with a unique name.
+    """
+    return type("", (Place,), {})
+
+
 def ForkN(n: int, input: Type[Place]) -> List[Type[Place]]:
     """
     Returns an Interface subclass with 1 input place, n output places, and a transition
@@ -172,10 +179,10 @@ def Fork(from_place_class: Type[Place], to_place_classes: List[Type[Place]]):
 
             return result
 
-    _inject_into_innermost(f"{prefix}_ForkTransition", ForkTransition)
+    _inject_into_innermost(f"{prefix}_Fork", ForkTransition)
 
 
-def Forward(input: Type[Place], output: Type[Place]):
+def Forward(input: Type[Place], output: Type[Place], input_arc_weight: int = 1, transition_name: str|None =None):
     """
     Declaratively create a forward transition from one place to another.
     Usage: Forward(MyInterface.Input, MyInterface.Output)
@@ -187,13 +194,15 @@ def Forward(input: Type[Place], output: Type[Place]):
 
     class ForwardTransition(Transition):
         def input_arcs(self) -> Dict[PlaceName, Arc]:
-            return {ForwardPlaceName.INPUT: Arc(input)}
+            return {ForwardPlaceName.INPUT: Arc(input, weight=input_arc_weight)}
 
         def output_arcs(self) -> Dict[PlaceName, Arc]:
             return {ForwardPlaceName.OUTPUT: Arc(output)}
 
-    prefix = _gen_prefix()
-    _inject_into_innermost(f"{prefix}_ForwardTransition", ForwardTransition)
+    if not transition_name:
+        transition_name = f"{input.__name__}_to_{output.__name__}"
+    
+    _inject_into_innermost(transition_name, ForwardTransition)
 
 
 def ForwardFrom(input: Type[Place]) -> Type[Place]:
@@ -207,7 +216,7 @@ def ForwardFrom(input: Type[Place]) -> Type[Place]:
     return output_place
 
 
-def Join(from_place_classes: List[Type[Place]], to_place_class: Type[Place]):
+def Join(from_place_classes: List[Type[Place]], to_place_class: Type[Place], transition_name: str|None = None):
     """
     Declaratively create a join transition from multiple places to one place.
     Usage: Join([MyInterface.Input1, MyInterface.Input2], MyInterface.Output)
@@ -247,7 +256,10 @@ def Join(from_place_classes: List[Type[Place]], to_place_class: Type[Place]):
                 all_tokens.extend(tokens)
             return {enum_mapping[to_place_class]: all_tokens}
 
-    _inject_into_innermost(f"{prefix}_JoinTransition", JoinTransition)
+    if not transition_name:
+        transition_name = f"Join_to_{to_place_class.__name__}"
+
+    _inject_into_innermost(transition_name, JoinTransition)
 
 
 def JoinFrom(inputs: List[Type[Place]]) -> Type[Place]:
@@ -290,7 +302,7 @@ def Merge(inputs: List[Type[Place]], output: Type[Place]):
     for i in range(len(inputs)):
         created_transition = create_transition(i)
         # Rename the transition class
-        _inject_into_innermost(f"{prefix}_MergeTransition_{i+1}", created_transition)
+        _inject_into_innermost(f"{prefix}_Merge_{i+1}", created_transition)
 
 
 def MergeFrom(inputs: List[Type[Place]]):
@@ -302,6 +314,44 @@ def MergeFrom(inputs: List[Type[Place]]):
     output = type(f"{prefix}_Output", (Place,), {})
     Merge(inputs, output)
 
+
+def Route(input: Type[Place], outputs: Dict[Type[Any], Type[Place]]):
+    """
+    Create a router transition that dispatches tokens based on their type.
+    """
+    # Now, create our enum using the output place names
+    RouterPlaceNames = Enum(
+        "RouterPlaceNames",
+        {**{f"OUTPUT_{k.__name__}": v for k, v in outputs.items()}, **{f"INPUT": "input"}},
+        type=PlaceName,
+    )
+
+    # Create mapping
+    enum_mapping = {input: RouterPlaceNames.INPUT}
+    for i, (k, v) in enumerate(outputs.items()):
+        enum_key = getattr(RouterPlaceNames, f"OUTPUT_{k.__name__}")
+        enum_mapping[v] = enum_key
+
+    # Now create the transition that dispatches tokens from the input place to
+    # the appropriate output place based on token type
+    class RouterTransition(Transition):
+        def input_arcs(self) -> Dict[PlaceName, Arc]:
+            return {RouterPlaceNames.INPUT: Arc(input)}
+
+        def output_arcs(self) -> Dict[PlaceName, Arc]:
+           # We need to create an output arc for every output place
+           return {enum_mapping[output]: Arc(output) for output in outputs.values()}
+
+        def on_fire(self, consumed: Dict[PlaceName, List]) -> Dict[PlaceName, List]:
+            result = defaultdict(list)
+            # Dispatch tokens to the appropriate output place
+            for token in consumed[RouterPlaceNames.INPUT]:
+                output_place = enum_mapping[type(token)]
+                result[output_place].append(token)
+                # Route the token to the correct output place
+            return result
+
+    _inject_into_innermost(f"{_gen_prefix()}RouterTransition", RouterTransition)
 
 def Buffer(capacity: int) -> Type[Interface]:
     """

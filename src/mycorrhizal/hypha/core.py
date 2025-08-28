@@ -38,26 +38,32 @@ from typing import (
     Callable,
     Tuple,
     Iterable,
+    TypeVar,
 )
 from collections import defaultdict
 from enum import Enum
 from itertools import combinations, product
+from functools import reduce
 import weakref
 import time
+from uuid import uuid4, UUID
 
 from contextvars import ContextVar
 
 # A per-task stack of currently-building declarative namespaces (innermost at the end)
 _DECL_STACK: ContextVar[tuple] = ContextVar("_DECL_STACK", default=())
 
+
 def _decl_stack_get() -> list:
     """Return a copy of the current declarative-namespace stack (outer..inner)."""
     return list(_DECL_STACK.get())
+
 
 def _decl_stack_push(ns: dict) -> None:
     stack = list(_DECL_STACK.get())
     stack.append(ns)
     _DECL_STACK.set(tuple(stack))
+
 
 def _decl_stack_pop(ns: dict) -> None:
     stack = list(_DECL_STACK.get())
@@ -71,6 +77,7 @@ def _decl_stack_pop(ns: dict) -> None:
                 break
     _DECL_STACK.set(tuple(stack))
 
+
 class _DeclarativeNamespace(dict):
     """
     Namespace mapping returned by DeclarativeMeta.__prepare__.
@@ -78,6 +85,7 @@ class _DeclarativeNamespace(dict):
     It allows helpers to (a) recognize "we are inside a declarative class body",
     and (b) inject attributes into the *actual* class namespace.
     """
+
     __slots__ = ("__declarative_meta__",)
 
     def __init__(self, meta):
@@ -85,8 +93,10 @@ class _DeclarativeNamespace(dict):
         # Not a class attribute; just a marker on the mapping object itself
         self.__declarative_meta__ = meta
 
+
 class PlaceName(Enum):
     """Base class for place name enumerations - enforces IDE type checking"""
+
     pass
 
 
@@ -151,35 +161,6 @@ class PetriNetDeadlock(Exception):
     pass
 
 
-# Core Token System
-class Token(ABC):
-    """
-    Base class for all tokens in the Petri net system.
-
-    Tokens are the data carriers that flow through the system between places.
-    """
-
-    def __init__(self, data: Any = None):
-        self.data = data
-        self.created_at = datetime.now()
-        self.id = id(self)
-
-    def __repr__(self):
-        return f"{self.__class__.__name__}(id={self.id}, data={self.data})"
-
-    def on_created(self):
-        """Called when token is first created."""
-        pass
-
-    def on_consumed(self):
-        """Called when token is consumed by a transition."""
-        pass
-
-    def on_produced(self):
-        """Called when token is produced into a place."""
-        pass
-
-
 class Place(ABC):
     """
     Base class for all places in the Petri net system.
@@ -188,10 +169,10 @@ class Place(ABC):
     """
 
     MAX_CAPACITY: Optional[int] = None
-    ACCEPTED_TOKEN_TYPES: Optional[Set[Type[Token]]] = None
+    ACCEPTED_TOKEN_TYPES: Optional[Set[Type[Any]]] = None
 
     def __init__(self):
-        self._tokens: List[Token] = []
+        self._tokens: List[Any] = []
         self._total_tokens_processed = 0
         self._net: Optional["PetriNet"] = None
         self._qualified_name: Optional[str] = None
@@ -211,7 +192,9 @@ class Place(ABC):
         self._qualified_name = qualified_name
 
     @property
-    def net(self) -> Optional["PetriNet"]:
+    def net(self) -> "PetriNet":
+        if not self._net:
+            raise ValueError("Place is not attached to a Petri net.")
         return self._net
 
     @property
@@ -236,7 +219,7 @@ class Place(ABC):
             return False
         return self.token_count >= self.MAX_CAPACITY
 
-    def can_accept_token(self, token: Token) -> bool:
+    def can_accept_token(self, token: Any) -> bool:
         """Check if this place can accept the given token."""
         if self.is_full:
             return False
@@ -250,7 +233,7 @@ class Place(ABC):
         await self._token_pulse.wait()
         self._token_pulse.clear()
 
-    async def add_token(self, token: Token, timeout: Optional[float] = None):
+    async def add_token(self, token: Any, timeout: Optional[float] = None):
         """
         Add a token to this place's queue.
 
@@ -270,13 +253,12 @@ class Place(ABC):
             self._has_capacity.clear()
 
         self._total_tokens_processed += 1
-        token.on_produced()
         await self.on_token_added(token)
         self._not_empty.set()  # Signal that we have tokens now
         self._token_pulse.set()
         self._token_pulse.clear()
 
-    def remove_token(self, token: Token):
+    def remove_token(self, token: Any):
         """Remove a token from this place's bag."""
         self._tokens.remove(token)
         if self.MAX_CAPACITY is not None and self.token_count < self.MAX_CAPACITY:
@@ -284,15 +266,15 @@ class Place(ABC):
         if self.token_count == 0:
             self._not_empty.clear()
 
-    def combinations(self, r: int) -> Iterable[Tuple[Token, ...]]:
+    def combinations(self, r: int) -> Iterable[Tuple[Any, ...]]:
         """Get all combinations of tokens in this place."""
         return combinations(self._tokens, r)
 
-    async def on_token_added(self, token: Token):
+    async def on_token_added(self, token: Any):
         """Called when a token is added to this place."""
         pass
 
-    async def on_token_removed(self, token: Token):
+    async def on_token_removed(self, token: Any):
         """Called when a token is removed from this place."""
         pass
 
@@ -307,7 +289,7 @@ class IOOutputPlace(Place):
     These places sink tokens produced by transitions and handle them autonomously.
     """
 
-    async def add_token(self, token: Token, timeout: float | None = None):
+    async def add_token(self, token: Any, timeout: float | None = None):
         # Asynchronously handle the token addition as the on_token_added method may
         # perform IO operations that should not block the main event loop.
         async def _sink(self):
@@ -316,13 +298,9 @@ class IOOutputPlace(Place):
 
         self.net._running_tasks.add(create_task(_sink(self)))
 
-    async def on_token_added(self, token: Token) -> Optional[Token]:
+    async def on_token_added(self, token: Any):
         """
         Handle outgoing token. Override this for output places.
-
-        Returns:
-            None if successful (token is consumed)
-            Error token if failed (replaces original token)
         """
         # Default implementation just logs and succeeds
         await self.log(f"IO Output: {token}")
@@ -336,11 +314,11 @@ class IOOutputPlace(Place):
         """Called when output processing stops."""
         pass
 
-    async def on_io_success(self, token: Token):
+    async def on_io_success(self, token: Any):
         """Called when IO operation succeeds."""
         pass
 
-    async def on_io_error(self, token: Token, error_token: Optional[Token]):
+    async def on_io_error(self, token: Any, error_token: Optional[Any]):
         """Called when IO operation fails."""
         pass
 
@@ -377,23 +355,15 @@ class IOInputPlace(Place):
                     # Call user-defined input handler
                     result = await self.on_input()
 
-                    if isinstance(result, Token):
-                        await self.add_token(result)
-                        result.on_produced()
-                        await self.on_token_added(result)
-                    elif isinstance(result, list) and all(
-                        isinstance(x, Token) for x in result
-                    ):
+                    if result is None:
+                        pass
+                    elif isinstance(result, (list, tuple)):
                         for token in result:
                             await self.add_token(token)
-                            token.on_produced()
                             await self.on_token_added(token)
-                    elif result is None:
-                        pass
                     else:
-                        raise TypeError(
-                            f"IOInput Places must produce Tokens or Lists of Tokens, got: {result}"
-                        )
+                        await self.add_token(result)
+                        await self.on_token_added(result)
 
                     # Yield control so other tasks can run
                     await sleep(0)
@@ -422,7 +392,7 @@ class IOInputPlace(Place):
         """Called when input starts."""
         pass
 
-    async def on_input(self) -> Union[Token, List[Token], None]:
+    async def on_input(self) -> Union[Any, List[Any], None]:
         """
         Main input handler - override this to generate tokens.
 
@@ -451,7 +421,7 @@ class Arc:
 
     place: Union[Type[Place], str]  # Place reference - class or qualified name string
     weight: int = 1
-    token_type: Optional[Type[Token]] = None
+    token_type: Optional[Type[Any]] = None
     label: Optional[str] = None
 
     def __post_init__(self):
@@ -510,7 +480,9 @@ class Transition(ABC):
         self._interface_path = interface_path
 
     @property
-    def net(self):
+    def net(self) -> "PetriNet":
+        if not self._net:
+            raise ValueError("Transition is not attached to a Petri net.")
         return self._net
 
     @property
@@ -536,7 +508,7 @@ class Transition(ABC):
         """Timestamp of last firing."""
         return self._last_fired
 
-    def guard(self, tokens: Dict[PlaceName, List[Token]]) -> bool:
+    def guard(self, tokens: Dict[PlaceName, List[Any]]) -> bool:
         """Check if the transition can fire with the given tokens."""
         return True
 
@@ -606,7 +578,7 @@ class Transition(ABC):
             if self._net and self._task in self._net._running_tasks:
                 self._net._running_tasks.discard(self._task)
 
-    async def _fire_with_tokens(self, consumed_tokens: Dict[PlaceName, List[Token]]):
+    async def _fire_with_tokens(self, consumed_tokens: Dict[PlaceName, List[Any]]):
         """Fire the transition with the given consumed tokens."""
         try:
             await self.on_before_fire(consumed_tokens)
@@ -620,7 +592,7 @@ class Transition(ABC):
                 for label, tokens in output_tokens.items():
                     if label in output_arcs:
                         place = self._output_places[label]
-                        if isinstance(tokens, Token):
+                        if isinstance(tokens, Any):
                             tokens = [tokens]
                         for token in tokens:
                             await place.add_token(token)
@@ -638,8 +610,8 @@ class Transition(ABC):
             await self._handle_error(e, consumed_tokens)
 
     async def on_fire(
-        self, consumed: Dict[PlaceName, List[Token]]
-    ) -> Optional[Dict[PlaceName, List[Token]]]:
+        self, consumed: Dict[PlaceName, List[Any]]
+    ) -> Optional[Dict[PlaceName, List[Any]]]:
         """
         User-defined firing logic. Override this method.
 
@@ -663,20 +635,20 @@ class Transition(ABC):
 
         return result
 
-    async def on_before_fire(self, consumed: Dict[PlaceName, List[Token]]):
+    async def on_before_fire(self, consumed: Dict[PlaceName, List[Any]]):
         """Called before transition fires."""
         pass
 
     async def on_after_fire(
         self,
-        consumed: Dict[PlaceName, List[Token]],
-        produced: Optional[Dict[PlaceName, List[Token]]],
+        consumed: Dict[PlaceName, List[Any]],
+        produced: Optional[Dict[PlaceName, List[Any]]],
     ):
         """Called after transition fires successfully."""
         pass
 
     async def _handle_error(
-        self, error: Exception, consumed_tokens: Dict[PlaceName, List[Token]]
+        self, error: Exception, consumed_tokens: Dict[PlaceName, List[Any]]
     ):
         """Handle transition errors."""
         if self._net and hasattr(self._net, "on_transition_error"):
@@ -695,7 +667,7 @@ class Transition(ABC):
         # Default: re-raise the error
         raise error
 
-    async def _rollback_tokens(self, consumed_tokens: Dict[PlaceName, List[Token]]):
+    async def _rollback_tokens(self, consumed_tokens: Dict[PlaceName, List[Any]]):
         """Put consumed tokens back into their places for error recovery."""
         input_arcs = self.input_arcs()
 
@@ -721,7 +693,6 @@ class Transition(ABC):
 
     def __repr__(self):
         return f"{self.qualified_name}(fired={self.fire_count})"
-
 
 
 class DeclarativeMeta(type):
@@ -751,6 +722,7 @@ class DeclarativeMeta(type):
             cls._discovered_transitions = []
             cls._discovered_interfaces = []
 
+            # TODO: Make these tolerante of instances (need to back them down to types)
             for attr_name, attr_value in namespace.items():
                 if inspect.isclass(attr_value):
                     attr_value._outer_class = cls
@@ -789,6 +761,7 @@ class DeclarativeMeta(type):
         finally:
             # Always pop the active namespace for this class body
             _decl_stack_pop(namespace)
+
 
 class DeclarativeABCMeta(DeclarativeMeta, ABCMeta):
     """Combined metaclass that supports both ABC and declarative composition."""
@@ -854,7 +827,7 @@ class PetriNet(metaclass=DeclarativeABCMeta):
 
     def set_error_handler(
         self,
-        handler: Callable[[Transition, Exception, Dict[PlaceName, List[Token]]], str],
+        handler: Callable[[Transition, Exception, Dict[PlaceName, List[Any]]], str],
     ):
         """
         Set error handler for transition failures.
@@ -867,7 +840,7 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         self,
         transition: Transition,
         error: Exception,
-        consumed_tokens: Dict[PlaceName, List[Token]],
+        consumed_tokens: Dict[PlaceName, List[Any]],
     ) -> str:
         """Handle transition errors."""
         if self._error_handler:
@@ -953,14 +926,12 @@ class PetriNet(metaclass=DeclarativeABCMeta):
 
     def _validate_interface_boundaries(self):
         """Validate that transitions don't cross interface boundaries."""
-        # Implementation same as original, just without async/await since this is setup
         pass
 
     def _validate_transition_boundaries(
         self, transition_qualified_name: str, transition_class: Type[Transition]
     ):
         """Validate that a transition doesn't violate interface boundaries."""
-        # Implementation same as original, just without async/await since this is setup
         pass
 
     def _validate_arc_boundary(
@@ -979,8 +950,7 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         self, place_qualified_name: str, transition_interface: str
     ) -> bool:
         """Allow access to any place that is a direct child or descendant of the transition's interface."""
-        # Implementation same as original, just without async/await since this is setup
-        return True  # Simplified for brevity
+        return True
 
     def _instantiate_components(self):
         """Instantiate all registered components."""
@@ -1033,7 +1003,9 @@ class PetriNet(metaclass=DeclarativeABCMeta):
     def _get_place_by_type(self, place_type: Type[Place]) -> Place:
         """Get a place by type."""
         if place_type not in self._places_by_type:
-            raise KeyError(f"Place type {place_type.__name__} not found in {self._places_by_type}")
+            raise KeyError(
+                f"Place type {place_type.__name__} not found in {self._places_by_type}"
+            )
         return self._places_by_type[place_type]
 
     def _get_place_by_qualified_name(self, qualified_name: str) -> Place:
@@ -1042,7 +1014,7 @@ class PetriNet(metaclass=DeclarativeABCMeta):
             raise KeyError(f"Place {qualified_name} not found")
         return self._places_by_qualified_name[qualified_name]
 
-    async def produce_token(self, place_type: Type[Place], token: Token):
+    async def produce_token(self, place_type: Type[Place], token: Any):
         """Produce a token to the specified place."""
         place = self._get_place_by_type(place_type)
         await place.add_token(token)
@@ -1165,7 +1137,7 @@ class PetriNet(metaclass=DeclarativeABCMeta):
                 ),
                 timeout=timeout,
             )
-        except (asyncio.TimeoutError):
+        except asyncio.TimeoutError:
             pass
 
         self._running_tasks.clear()
@@ -1202,17 +1174,59 @@ class PetriNet(metaclass=DeclarativeABCMeta):
             "running_tasks": len(self._running_tasks),
         }
 
-    def generate_mermaid_diagram(self) -> str:
-        """Generate a Mermaid diagram representing the Petri net structure."""
-        lines = ["graph TD"]
+    def generate_mermaid_diagram(self, left_to_right: bool = False) -> str:
+        """Generate a Mermaid diagram representing the Petri net structure with nested interface subgraphs."""
+        lines = ["graph LR" if left_to_right else "graph TD"]
 
-        # Add places with their qualified names
+        # Build a nested tree of interfaces
+        def build_interface_tree():
+            tree = {}
+            # Sort keys so parents come before children
+            for interface in sorted(
+                self._interface_hierarchy.keys(), key=lambda x: x.count(".")
+            ):
+                parts = interface.split(".")
+                node = tree
+                for part in parts:
+                    node = node.setdefault(part, {})
+                node["_components"] = self._interface_hierarchy[interface]
+            return tree
+
+        # Recursively emit subgraphs for all interfaces, nesting children
+        def emit_subgraph(node, name="", indent=1, parent_path=""):
+            if name:
+                interface_name: str = reduce(
+                    lambda x, y: f"{x}.{y}" if x else y, [parent_path, name], ""
+                )
+                safe_interface_name: str = interface_name.replace(".", "_")
+                lines.append(
+                    "    " * indent
+                    + f"subgraph {safe_interface_name} ['{interface_name}']"
+                )
+            # Emit components and child interfaces
+            for key, child in node.items():
+                if key == "_components":
+                    for comp in child:
+                        # If comp is a child interface, skip (will be handled as a node)
+                        if comp in self._interface_hierarchy:
+                            continue
+                        safe_component_name = comp.replace(".", "_")
+                        lines.append("    " * (indent + 1) + safe_component_name)
+                else:
+                    new_parent_path: str = reduce(
+                        lambda x, y: f"{x}.{y}" if x else y,
+                        [parent_path, name],
+                        "",
+                    ) or key
+                    emit_subgraph(child, key, indent + 1, new_parent_path)
+            if name:
+                lines.append("    " * indent + "end")
+
+        # Add all places and transitions as nodes (flat, so arcs can reference them)
         for place in self._places_by_type.values():
             qualified_name = place.qualified_name
-            # Use safe node IDs (replace dots with underscores)
             safe_name = qualified_name.replace(".", "_")
             token_count = place.token_count
-
             if isinstance(place, IOInputPlace):
                 lines.append(
                     f'    {safe_name}(("→ {qualified_name}<br/>({token_count} tokens)<br/>[INPUT]"))'
@@ -1225,8 +1239,6 @@ class PetriNet(metaclass=DeclarativeABCMeta):
                 lines.append(
                     f'    {safe_name}(("{qualified_name}<br/>({token_count} tokens)"))'
                 )
-
-        # Add transitions with their qualified names
         for transition in self._transitions:
             qualified_name = transition.qualified_name
             safe_name = qualified_name.replace(".", "_")
@@ -1235,55 +1247,37 @@ class PetriNet(metaclass=DeclarativeABCMeta):
                 f'    {safe_name}["{qualified_name}<br/>(fired {fire_count}x)"]'
             )
 
-        # Group nodes in subgraphs for interfaces
-        for interface_name, components in self._interface_hierarchy.items():
-            print(interface_name)
-            if components:
-                print(components)
-                safe_interface_name = interface_name.replace(".", "_")
-                lines.append(f'    subgraph {safe_interface_name} ["{interface_name}"]')
-                for component_name in components:
-                    safe_component_name = component_name.replace(".", "_")
-                    lines.append(f"        {safe_component_name}")
-                lines.append("    end")
+        # Recursively emit subgraphs starting from the tree root
+        tree = build_interface_tree()
+        for key, node in tree.items():
+            emit_subgraph(node, key, indent=1, parent_path="")
 
         # Add arcs
         for transition in self._transitions:
             transition_safe_name = transition.qualified_name.replace(".", "_")
-
-            # Input arcs - handle PlaceName enum keys
             try:
                 input_arcs = transition.input_arcs()
                 for enum_key, arc in input_arcs.items():
                     place = self._resolve_place_from_arc(arc)
                     place_safe_name = place.qualified_name.replace(".", "_")
-
-                    # Create edge label with enum name and weight
                     edge_label = enum_key.name
                     if arc.weight > 1:
                         edge_label += f" ({arc.weight})"
-
                     lines.append(
                         f'    {place_safe_name} -->|"{edge_label}"| {transition_safe_name}'
                     )
             except Exception as e:
-                # Can't use await in sync method
                 print(
                     f"Warning: Could not generate input arcs for {transition.qualified_name}: {e}"
                 )
-
-            # Output arcs - handle PlaceName enum keys
             try:
                 output_arcs = transition.output_arcs()
                 for enum_key, arc in output_arcs.items():
                     place = self._resolve_place_from_arc(arc)
                     place_safe_name = place.qualified_name.replace(".", "_")
-
-                    # Create edge label with enum name
                     edge_label = enum_key.name
                     if arc.weight > 1:
                         edge_label += f" ({arc.weight})"
-
                     lines.append(
                         f'    {transition_safe_name} -->|"{edge_label}"| {place_safe_name}'
                     )
@@ -1294,24 +1288,14 @@ class PetriNet(metaclass=DeclarativeABCMeta):
 
         return "\n".join(lines)
 
-    def save_mermaid_diagram(self, filename: str):
+    def save_mermaid_diagram(self, filename: str, left_to_right: bool = False):
         """Save the Mermaid diagram to a file."""
         with open(filename, "w") as f:
-            f.write(self.generate_mermaid_diagram())
+            f.write(self.generate_mermaid_diagram(left_to_right=left_to_right))
 
-    def print_mermaid_diagram(self):
+    def print_mermaid_diagram(self, left_to_right: bool = False):
         """Print the Mermaid diagram to console."""
-        print(self.generate_mermaid_diagram())
+        print(self.generate_mermaid_diagram(left_to_right=left_to_right))
 
     def __repr__(self):
         return f"PetriNet(places={len(self._places_by_type)}, transitions={len(self._transitions)}, running={not self._shutdown_event.is_set()})"
-
-
-# Utility Functions
-def create_simple_token(data: Any = None) -> Token:
-    """Create a simple token with the given data."""
-
-    class SimpleToken(Token):
-        pass
-
-    return SimpleToken(data)
