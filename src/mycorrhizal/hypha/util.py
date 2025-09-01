@@ -297,7 +297,6 @@ def Merge(inputs: List[Type[Place]], output: Type[Place]):
 
         return _MergeTransition
 
-    transitions = []
     prefix = _gen_prefix()
     for i in range(len(inputs)):
         created_transition = create_transition(i)
@@ -314,6 +313,31 @@ def MergeFrom(inputs: List[Type[Place]]):
     output = type(f"{prefix}_Output", (Place,), {})
     Merge(inputs, output)
 
+
+def Cast(input: Type[Place], output: Type[Place], cast_fn, name=None):
+    """
+    Declaratively create a cast transition from one place to another, applying cast_fn to each token.
+    Usage: Cast(MyInterface.Input, MyInterface.Output, lambda t: MyTokenType(t.data))
+    """
+    class CastPlaceName(PlaceName):
+        INPUT = "input"
+        OUTPUT = "output"
+
+    class CastTransition(Transition):
+        def input_arcs(self) -> Dict[PlaceName, Arc]:
+            return {CastPlaceName.INPUT: Arc(input)}
+
+        def output_arcs(self) -> Dict[PlaceName, Arc]:
+            return {CastPlaceName.OUTPUT: Arc(output)}
+
+        async def on_fire(
+            self, consumed: Dict[PlaceName, List]
+        ) -> Dict[PlaceName, List]:
+            input_tokens = consumed[CastPlaceName.INPUT]
+            output_tokens = [cast_fn(token) for token in input_tokens]
+            return {CastPlaceName.OUTPUT: output_tokens}
+
+    _inject_into_innermost(name or "Cast", CastTransition)
 
 def Route(input: Type[Place], outputs: Dict[Type[Any], Type[Place]]):
     """
