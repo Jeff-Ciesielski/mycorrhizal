@@ -421,7 +421,6 @@ class Arc:
 
     place: Union[Type[Place], str]  # Place reference - class or qualified name string
     weight: int = 1
-    token_type: Optional[Type[Any]] = None
     label: Optional[str] = None
 
     def __post_init__(self):
@@ -592,7 +591,8 @@ class Transition(ABC):
                 for label, tokens in output_tokens.items():
                     if label in output_arcs:
                         place = self._output_places[label]
-                        if isinstance(tokens, Any):
+                        arc = output_arcs[label]
+                        if not isinstance(tokens, (list, tuple)):
                             tokens = [tokens]
                         for token in tokens:
                             await place.add_token(token)
@@ -676,16 +676,9 @@ class Transition(ABC):
                 arc = input_arcs[label]
                 place = self._net._resolve_place_from_arc(arc)
 
-                # Put tokens back in reverse order to maintain FIFO
-                for token in reversed(tokens):
-                    try:
-                        place._queue.put_nowait(token)
-                    except QueueFull:
-                        # If we can't put it back, we have a problem
-                        if self._net:
-                            await self._net.log(
-                                f"WARNING: Could not rollback token to {place.qualified_name}"
-                            )
+                # Put tokens back
+                place._tokens.extend(tokens)
+
 
     def is_waiting(self) -> bool:
         """Check if this transition is waiting for tokens."""
