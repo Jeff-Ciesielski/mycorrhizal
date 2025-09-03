@@ -17,7 +17,6 @@ from asyncio import (
     sleep,
     wait_for,
     gather,
-    wait,
     wait_for,
     FIRST_COMPLETED,
     CancelledError,
@@ -38,16 +37,11 @@ from typing import (
     Callable,
     Tuple,
     Iterable,
-    TypeVar,
 )
-from collections import defaultdict
 from enum import Enum
 from itertools import combinations, product
 from functools import reduce
-import weakref
-import time
-from uuid import uuid4, UUID
-
+import sys
 from contextvars import ContextVar
 
 # A per-task stack of currently-building declarative namespaces (innermost at the end)
@@ -292,11 +286,11 @@ class IOOutputPlace(Place):
     async def add_token(self, token: Any, timeout: float | None = None):
         # Asynchronously handle the token addition as the on_token_added method may
         # perform IO operations that should not block the main event loop.
-        async def _sink(self):
+        async def _sink():
             await super().add_token(token, timeout)
             self.remove_token(token)
 
-        self.net._running_tasks.add(create_task(_sink(self)))
+        self.net.add_task_fn(_sink)
 
     async def on_token_added(self, token: Any):
         """
@@ -341,49 +335,30 @@ class IOInputPlace(Place):
     def _start_input_task(self):
         """Start the input processing task."""
         if self._task is None:
-            self._task = create_task(self._input_loop())
-            if self._net:
-                self._net._running_tasks.add(self._task)
+            self._task = self.net.add_task_fn(self._input_loop)
 
     async def _input_loop(self):
         """Main input loop - calls on_input() and puts tokens in queue."""
         try:
             await self.on_input_start()
-
             while True:
-                try:
-                    # Call user-defined input handler
-                    result = await self.on_input()
+                # Call user-defined input handler
+                result = await self.on_input()
 
-                    if result is None:
-                        pass
-                    elif isinstance(result, (list, tuple)):
-                        for token in result:
-                            await self.add_token(token)
-                            await self.on_token_added(token)
-                    else:
-                        await self.add_token(result)
-                        await self.on_token_added(result)
+                if result is None:
+                    pass
+                elif isinstance(result, (list, tuple)):
+                    for token in result:
+                        await self.add_token(token)
+                        await self.on_token_added(token)
+                else:
+                    await self.add_token(result)
+                    await self.on_token_added(result)
 
-                    # Yield control so other tasks can run
-                    await sleep(0)
-
-                except CancelledError:
-                    # Clean shutdown
-                    break
-                except Exception as e:
-                    await self.log(
-                        f"Error in input loop for {self.qualified_name}: {e}"
-                    )
-                    await sleep(0)  # Back off on error
-
-            await self.on_input_stop()
-
+                # Yield control so other tasks can run
+                await sleep(0)
         except CancelledError:
             await self.on_input_stop()
-            raise
-        except Exception as e:
-            await self.log(f"Fatal error in input loop for {self.qualified_name}: {e}")
         finally:
             if self._net and self._task in self._net._running_tasks:
                 self._net._running_tasks.discard(self._task)
@@ -514,100 +489,83 @@ class Transition(ABC):
     def _start_transition_task(self):
         """Start the transition processing task."""
         if self._task is None:
-            self._task = create_task(self._transition_loop())
-            if self._net:
-                self._net._running_tasks.add(self._task)
+            self.net.add_task_fn(self._transition_loop)
 
     async def _transition_loop(self):
         """Main transition loop - processes token batches ."""
         try:
             while True:
-                try:
-                    # Wait until all input places have _enough_ tokens to meet the arc weight requirement
-                    self._waiting = True
-                    for label, arc in self.input_arcs().items():
-                        place = self._input_places[label]
-                        while not place.token_count >= arc.weight:
-                            # Every added token will pulse an event, so we can wait for that OR the shutdown event
-                            await place.wait_for_tokens()
-                    # Generate combinations for each input place
-                    guard_passed = False
-                    token_combinations = {}
-                    for label, arc in self.input_arcs().items():
-                        place = self._input_places[label]
-                        token_combinations[label] = place.combinations(arc.weight)
+                # Wait until all input places have _enough_ tokens to meet the arc weight requirement
+                self._waiting = True
+                for label, arc in self.input_arcs().items():
+                    place = self._input_places[label]
+                    while not place.token_count >= arc.weight:
+                        # Every added token will pulse an event, so we can wait for that OR the shutdown event
+                        await place.wait_for_tokens()
+                # Generate combinations for each input place
+                guard_passed = False
+                token_combinations = {}
+                for label, arc in self.input_arcs().items():
+                    place = self._input_places[label]
+                    token_combinations[label] = place.combinations(arc.weight)
 
-                    # Generate the Cartesian product of token combinations
-                    token_batch = {}
-                    all_combinations = list(product(*token_combinations.values()))
-                    for combo in all_combinations:
-                        token_batch = dict(zip(token_combinations.keys(), combo))
-                        if self.guard(token_batch):
-                            guard_passed = True
-                            # Remove tokens from input places
-                            for label, tokens in token_batch.items():
-                                place = self._input_places[label]
-                                for token in tokens:
-                                    place.remove_token(token)
-                            break
+                # Generate the Cartesian product of token combinations.
+                # Transitions need to check against all possible
+                # combinations of tokens in their input places
+                token_batch = {}
+                all_combinations = product(*token_combinations.values())
+                for combo in all_combinations:
+                    token_batch = dict(zip(token_combinations.keys(), combo))                        
+                    if self.guard(token_batch):
+                        guard_passed = True
+                        # Remove tokens from input places
+                        for label, tokens in token_batch.items():
+                            place = self._input_places[label]
+                            for token in tokens:
+                                place.remove_token(token)
+                        break
 
-                    # No valid combination found, wait for new tokens
-                    if not guard_passed:
-                        continue
-                    self._waiting = False
+                # No valid combination found, yield and then wait for new tokens
+                if not guard_passed:
+                    await sleep(0)
+                    continue
+                self._waiting = False
 
-                    # Fire the transition
-                    await self._fire_with_tokens(token_batch)
-
-                except CancelledError:
-                    break
-                except Exception as e:
-                    await self._handle_error(
-                        e, token_batch if "token_batch" in locals() else {}
-                    )
+                # Fire the transition
+                await self._fire_with_tokens(token_batch)
 
         except CancelledError:
-            raise
-        except Exception as e:
-            if self._net:
-                await self._net.log(
-                    f"Fatal error in transition loop for {self.qualified_name}: {e}"
-                )
+            pass
         finally:
             if self._net and self._task in self._net._running_tasks:
                 self._net._running_tasks.discard(self._task)
 
     async def _fire_with_tokens(self, consumed_tokens: Dict[PlaceName, List[Any]]):
         """Fire the transition with the given consumed tokens."""
-        try:
-            await self.on_before_fire(consumed_tokens)
+        await self.on_before_fire(consumed_tokens)
 
-            # Call user-defined firing logic
-            output_tokens = await self.on_fire(consumed_tokens)
+        # Call user-defined firing logic
+        output_tokens = await self.on_fire(consumed_tokens)
 
-            # Produce output tokens
-            if output_tokens:
-                output_arcs = self.output_arcs()
-                for label, tokens in output_tokens.items():
-                    if label in output_arcs:
-                        place = self._output_places[label]
-                        arc = output_arcs[label]
-                        if not isinstance(tokens, (list, tuple)):
-                            tokens = [tokens]
-                        for token in tokens:
-                            await place.add_token(token)
+        # Produce output tokens
+        if output_tokens:
+            output_arcs = self.output_arcs()
+            for label, tokens in output_tokens.items():
+                if label in output_arcs:
+                    place = self._output_places[label]
+                    arc = output_arcs[label]
+                    if not isinstance(tokens, (list, tuple)):
+                        tokens = [tokens]
+                    for token in tokens:
+                        await place.add_token(token)
 
-            self._fire_count += 1
-            self._last_fired = datetime.now()
+        self._fire_count += 1
+        self._last_fired = datetime.now()
 
-            await self.on_after_fire(consumed_tokens, output_tokens)
+        await self.on_after_fire(consumed_tokens, output_tokens)
 
-            if self._net:
-                await self._net.log(f"Fired transition: {self.qualified_name}")
-
-        except Exception as e:
-            # Handle error and potentially rollback
-            await self._handle_error(e, consumed_tokens)
+        if self._net:
+            await self._net.log(f"Fired transition: {self.qualified_name}")
 
     async def on_fire(
         self, consumed: Dict[PlaceName, List[Any]]
@@ -647,25 +605,6 @@ class Transition(ABC):
         """Called after transition fires successfully."""
         pass
 
-    async def _handle_error(
-        self, error: Exception, consumed_tokens: Dict[PlaceName, List[Any]]
-    ):
-        """Handle transition errors."""
-        if self._net and hasattr(self._net, "on_transition_error"):
-            action = await self._net.on_transition_error(self, error, consumed_tokens)
-
-            if action == "restart":
-                # Put tokens back and continue
-                await self._rollback_tokens(consumed_tokens)
-                return
-            elif action == "kill":
-                # Shut down the net
-                if self._net:
-                    await self._net.stop()
-                return
-
-        # Default: re-raise the error
-        raise error
 
     async def _rollback_tokens(self, consumed_tokens: Dict[PlaceName, List[Any]]):
         """Put consumed tokens back into their places for error recovery."""
@@ -674,7 +613,7 @@ class Transition(ABC):
         for label, tokens in consumed_tokens.items():
             if label in input_arcs:
                 arc = input_arcs[label]
-                place = self._net._resolve_place_from_arc(arc)
+                place = self.net._resolve_place_from_arc(arc)
 
                 # Put tokens back
                 place._tokens.extend(tokens)
@@ -795,6 +734,7 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         self._io_output_places: List[IOOutputPlace] = []
 
         self._log_fn = log_fn or (lambda x: None)
+        self._typecheck_arcs: bool = False
 
         # Event handling for coordinated shutdown
         self._shutdown_event = Event()
@@ -828,23 +768,6 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         Handler should return one of: "restart", "kill", or re-raise the exception.
         """
         self._error_handler = handler
-
-    async def on_transition_error(
-        self,
-        transition: Transition,
-        error: Exception,
-        consumed_tokens: Dict[PlaceName, List[Any]],
-    ) -> str:
-        """Handle transition errors."""
-        if self._error_handler:
-            result = self._error_handler(transition, error, consumed_tokens)
-            if asyncio.iscoroutine(result):
-                return await result
-            return result
-
-        # Default: log and restart
-        await self.log(f"Error in transition {transition.qualified_name}: {error}")
-        return "restart"
 
     def get_place(self, place_type: Type[Place]) -> Place:
         """Public API: Get a place instance by its class."""
@@ -936,7 +859,6 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         skip_boundary_check: bool = False,
     ):
         """Validate that an arc doesn't cross interface boundaries or reference missing places."""
-        # Implementation same as original, just without async/await since this is setup
         pass
 
     def _is_within_interface_boundary(
@@ -1048,6 +970,19 @@ class PetriNet(metaclass=DeclarativeABCMeta):
 
         except CancelledError:
             raise
+        
+    def add_task_fn(self, task_fn) -> asyncio.Task:
+        """ Add a guarded task to the event loop and return a handle to it"""
+        async def run_guarded(aw):
+            try:
+                await aw
+            except:
+                traceback.print_exc()
+                sys.exit(1)
+
+        task = create_task(run_guarded(task_fn()))
+        self._running_tasks.add(task)
+        return task
 
     async def is_deadlocked(self) -> bool:
         """
@@ -1063,13 +998,6 @@ class PetriNet(metaclass=DeclarativeABCMeta):
 
         if not all_waiting:
             return False
-
-        # Check if any IO inputs are still producing
-        # This is a bit tricky - we need a way for IOInputPlaces to signal they're done
-        # For now, check if the net has a 'finished' flag (like in the demo)
-        if hasattr(self, "finished") and self.finished:
-            # Net has indicated it's finished producing
-            return True
 
         # Check if there are any active IO input tasks that might produce tokens
         active_inputs = any(
@@ -1088,11 +1016,12 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         # Default: raise exception to stop the net
         raise PetriNetDeadlock("Petri net is deadlocked - no transitions can fire")
 
-    async def start(self):
+    async def start(self, typecheck_arcs: bool = False):
         """Start the autonomous Petri net execution."""
 
         await self.log(f"Starting Net: {self.__class__.__name__}")
         self._shutdown_event.clear()
+        self._typecheck_arcs = typecheck_arcs
 
         # Start our cycle counter
         self._cycles = 0
@@ -1206,11 +1135,14 @@ class PetriNet(metaclass=DeclarativeABCMeta):
                         safe_component_name = comp.replace(".", "_")
                         lines.append("    " * (indent + 1) + safe_component_name)
                 else:
-                    new_parent_path: str = reduce(
-                        lambda x, y: f"{x}.{y}" if x else y,
-                        [parent_path, name],
-                        "",
-                    ) or key
+                    new_parent_path: str = (
+                        reduce(
+                            lambda x, y: f"{x}.{y}" if x else y,
+                            [parent_path, name],
+                            "",
+                        )
+                        or key
+                    )
                     emit_subgraph(child, key, indent + 1, new_parent_path)
             if name:
                 lines.append("    " * indent + "end")
