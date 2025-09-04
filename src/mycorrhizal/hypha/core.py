@@ -564,9 +564,6 @@ class Transition(ABC):
 
         await self.on_after_fire(consumed_tokens, output_tokens)
 
-        if self._net:
-            await self._net.log(f"Fired transition: {self.qualified_name}")
-
     async def on_fire(
         self, consumed: Dict[PlaceName, List[Any]]
     ) -> Optional[Dict[PlaceName, List[Any]]]:
