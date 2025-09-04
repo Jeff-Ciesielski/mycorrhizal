@@ -287,7 +287,7 @@ class IOOutputPlace(Place):
         # Asynchronously handle the token addition as the on_token_added method may
         # perform IO operations that should not block the main event loop.
         async def _sink():
-            await super().add_token(token, timeout)
+            await super(IOOutputPlace, self).add_token(token, timeout)
             self.remove_token(token)
 
         self.net.add_task_fn(_sink)
@@ -626,7 +626,6 @@ class Transition(ABC):
     def __repr__(self):
         return f"{self.qualified_name}(fired={self.fire_count})"
 
-
 class DeclarativeMeta(type):
     """Metaclass that handles declarative composition."""
 
@@ -654,7 +653,7 @@ class DeclarativeMeta(type):
             cls._discovered_transitions = []
             cls._discovered_interfaces = []
 
-            # TODO: Make these tolerante of instances (need to back them down to types)
+            # TODO: Make these tolerant of instances (need to back them down to types)
             for attr_name, attr_value in namespace.items():
                 if inspect.isclass(attr_value):
                     attr_value._outer_class = cls
@@ -687,6 +686,7 @@ class DeclarativeMeta(type):
                     cls._discovered_transitions.extend(base._discovered_transitions)
                 if hasattr(base, "_discovered_interfaces"):
                     cls._discovered_interfaces.extend(base._discovered_interfaces)
+                    
 
             return cls
 

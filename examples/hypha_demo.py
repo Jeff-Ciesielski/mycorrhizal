@@ -17,7 +17,6 @@ import time
 import asyncio
 from asyncio import sleep, Event
 from mycorrhizal.hypha import (
-    Token,
     Place,
     Transition,
     Interface,
@@ -25,21 +24,19 @@ from mycorrhizal.hypha import (
     Arc,
     IOInputPlace,
     IOOutputPlace,
-    create_simple_token,
     PlaceName,
 )
 from enum import Enum, auto
-from typing import Dict, List, Optional
-
+from typing import Dict, List, Optional, Any
+from mycorrhizal.hypha.util import Forward, Route, Fork, NewPlace
 
 # === TOKEN DEFINITIONS ===
 
 
-class TaskToken(Token):
+class TaskToken():
     """Represents a task to be processed"""
 
     def __init__(self, task_id: str, task_type: str):
-        super().__init__({"task_id": task_id, "task_type": task_type})
         self.task_id = task_id
         self.task_type = task_type
 
@@ -47,13 +44,10 @@ class TaskToken(Token):
         return f"TaskToken({self.task_id}, {self.task_type})"
 
 
-class ProcessedTaskToken(Token):
+class ProcessedTaskToken():
     """Represents a completed task"""
 
     def __init__(self, task_id: str, result: str, processing_time: float):
-        super().__init__(
-            {"task_id": task_id, "result": result, "processing_time": processing_time}
-        )
         self.task_id = task_id
         self.result = result
         self.processing_time = processing_time
@@ -62,11 +56,10 @@ class ProcessedTaskToken(Token):
         return f"ProcessedTaskToken({self.task_id}, {self.result})"
 
 
-class NotificationToken(Token):
+class NotificationToken():
     """Represents a notification to be sent"""
 
     def __init__(self, recipient: str, message: str, urgent: bool = False):
-        super().__init__({"recipient": recipient, "message": message, "urgent": urgent})
         self.recipient = recipient
         self.message = message
         self.urgent = urgent
@@ -75,11 +68,10 @@ class NotificationToken(Token):
         return f"NotificationToken({self.recipient}, urgent={self.urgent})"
 
 
-class ErrorToken(Token):
+class ErrorToken():
     """Represents an error condition"""
 
-    def __init__(self, error_type: str, message: str, original_token: Token = None):
-        super().__init__({"error_type": error_type, "message": message})
+    def __init__(self, error_type: str, message: str, original_token: Any = None):
         self.error_type = error_type
         self.message = message
         self.original_token = original_token
@@ -131,27 +123,7 @@ class TaskGeneratorInterface(Interface):
 
         MAX_CAPACITY = 20  # Prevent unbounded growth
 
-    class MoveTasksTransition(Transition):
-        """Moves tasks from generator to queue"""
-
-        class ArcNames(PlaceName):
-            FROM_SOURCE = auto()
-            TO_QUEUE = auto()
-
-        def input_arcs(self) -> Dict[PlaceName, Arc]:
-            return {
-                self.ArcNames.FROM_SOURCE: Arc(TaskGeneratorInterface.TaskSourcePlace)
-            }
-
-        def output_arcs(self) -> Dict[PlaceName, Arc]:
-            return {self.ArcNames.TO_QUEUE: Arc(TaskGeneratorInterface.TaskQueuePlace)}
-
-        async def on_fire(
-            self, consumed: Dict[PlaceName, List[Token]]
-        ) -> Dict[PlaceName, List[Token]]:
-            tasks = consumed[self.ArcNames.FROM_SOURCE]
-            return {self.ArcNames.TO_QUEUE: tasks}
-
+    Forward(TaskSourcePlace, TaskQueuePlace, name="TaskGenForward")
 
 class TaskProcessorInterface(Interface):
     """Reusable interface for processing tasks (simplified - no priority routing)"""
@@ -200,8 +172,8 @@ class TaskProcessorInterface(Interface):
             }
 
         async def on_fire(
-            self, consumed: Dict[PlaceName, List[Token]]
-        ) -> Dict[PlaceName, List[Token]]:
+            self, consumed: Dict[PlaceName, List[Any]]
+        ) -> Dict[PlaceName, List[Any]]:
             results = {
                 self.ArcNames.TO_PROCESSING: [],
                 self.ArcNames.TO_COMPLETED: [],
@@ -237,11 +209,7 @@ class TaskProcessorInterface(Interface):
 
 class NotificationInterface(Interface):
     """Reusable interface for sending notifications via different channels"""
-
-    class NotificationInputPlace(Place):
-        """Input place for notifications to be sent"""
-
-        pass
+    NotificationInputPlace = NewPlace()
 
     class EmailOutputPlace(IOOutputPlace):
         """Sends email notifications"""
@@ -250,7 +218,7 @@ class NotificationInterface(Interface):
             super().__init__()
             self.sent_emails = []
 
-        async def on_token_added(self, token: Token) -> Optional[Token]:
+        async def on_token_added(self, token: Any) -> Optional[Any]:
             if isinstance(token, NotificationToken):
                 # Simulate email sending
                 await self.net.sleep_cycles(0.1)
@@ -276,7 +244,7 @@ class NotificationInterface(Interface):
             super().__init__()
             self.sent_sms = []
 
-        async def on_token_added(self, token: Token) -> Optional[Token]:
+        async def on_token_added(self, token: Any) -> Optional[Any]:
             if isinstance(token, NotificationToken) and token.urgent:
                 # Simulate SMS sending
                 await self.net.sleep_cycles(0.05)
@@ -293,50 +261,15 @@ class NotificationInterface(Interface):
     class LogOutputPlace(IOOutputPlace):
         """Logs all notifications"""
 
-        async def on_token_added(self, token: Token) -> Optional[Token]:
+        async def on_token_added(self, token: Any) -> Optional[Any]:
             if isinstance(token, NotificationToken):
                 timestamp = time.strftime("%H:%M:%S")
                 print(f"📋 LOG [{timestamp}]: {token.recipient} - {token.message}")
                 return None
 
             return None
-
-    class SendNotificationTransition(Transition):
-        """Sends notifications to multiple channels"""
-
-        class ArcNames(PlaceName):
-            FROM_INPUT = auto()
-            TO_EMAIL = auto()
-            TO_SMS = auto()
-            TO_LOG = auto()
-
-        def input_arcs(self) -> Dict[PlaceName, Arc]:
-            return {
-                self.ArcNames.FROM_INPUT: Arc(
-                    NotificationInterface.NotificationInputPlace
-                )
-            }
-
-        def output_arcs(self) -> Dict[PlaceName, Arc]:
-            return {
-                self.ArcNames.TO_EMAIL: Arc(NotificationInterface.EmailOutputPlace),
-                self.ArcNames.TO_SMS: Arc(NotificationInterface.SMSOutputPlace),
-                self.ArcNames.TO_LOG: Arc(NotificationInterface.LogOutputPlace),
-            }
-
-        # No need to modify this method, it simply forwards all inputs to all outputs
-        # async def on_fire(
-        #     self, consumed: Dict[PlaceName, List[Token]]
-        # ) -> Dict[PlaceName, List[Token]]:
-        #     notifications = consumed[self.ArcNames.FROM_INPUT]
-
-        #     # Send each notification to all channels
-        #     return {
-        #         self.ArcNames.TO_EMAIL: notifications,
-        #         self.ArcNames.TO_SMS: notifications,
-        #         self.ArcNames.TO_LOG: notifications,
-        #     }
-
+        
+    Fork(NotificationInputPlace, [EmailOutputPlace, SMSOutputPlace, LogOutputPlace], name="NotificationFork")
 
 class ErrorHandlingInterface(Interface):
     """Reusable interface for handling errors and retries"""
@@ -349,34 +282,14 @@ class ErrorHandlingInterface(Interface):
     class ErrorLogPlace(IOOutputPlace):
         """Logs errors to external system"""
 
-        async def on_token_added(self, token: Token) -> Optional[Token]:
+        async def on_token_added(self, token: Any) -> Optional[Any]:
             if isinstance(token, ErrorToken):
                 timestamp = time.strftime("%H:%M:%S")
                 print(f"❌ ERROR [{timestamp}]: {token.error_type} - {token.message}")
             return None
 
-    class HandleErrorsTransition(Transition):
-        """Handles processing errors"""
 
-        class ArcNames(PlaceName):
-            FROM_ERROR = auto()
-            TO_LOG = auto()
-
-        def input_arcs(self) -> Dict[PlaceName, Arc]:
-            return {
-                self.ArcNames.FROM_ERROR: Arc(ErrorHandlingInterface.ErrorInputPlace)
-            }
-
-        def output_arcs(self) -> Dict[PlaceName, Arc]:
-            return {self.ArcNames.TO_LOG: Arc(ErrorHandlingInterface.ErrorLogPlace)}
-
-        # By default, we simply forward all inputs to all outputs, no need to modify
-        # async def on_fire(
-        #     self, consumed: Dict[PlaceName, List[Token]]
-        # ) -> Dict[PlaceName, List[Token]]:
-        #     errors = consumed[self.ArcNames.FROM_ERROR]
-        #     # Forward all errors to logging
-        #     return {self.ArcNames.TO_LOG: errors}
+    Forward(ErrorInputPlace, ErrorLogPlace, name="ErrorForward")
 
 
 # === MAIN SYSTEM ===
@@ -408,7 +321,7 @@ class TaskProcessingSystem(PetriNet):
     class CompletionTracker(IOOutputPlace):
         """Tracks completed tasks and signals when all are done"""
 
-        async def on_token_added(self, token: Token) -> Optional[Token]:
+        async def on_token_added(self, token: Any) -> Optional[Any]:
             if isinstance(token, (ProcessedTaskToken, ErrorToken)):
                 net = self.net
                 if net:
@@ -426,26 +339,8 @@ class TaskProcessingSystem(PetriNet):
             return None
 
     # Top-level transitions that connect interfaces
-    class ConnectGeneratorToProcessorTransition(Transition):
-        """Connects task generator to processor"""
-
-        class ArcNames(PlaceName):
-            FROM_GENERATOR = auto()
-            TO_PROCESSOR = auto()
-
-        def input_arcs(self) -> Dict[PlaceName, Arc]:
-            return {
-                self.ArcNames.FROM_GENERATOR: Arc(
-                    TaskProcessingSystem.TaskGen.TaskQueuePlace
-                )
-            }
-
-        def output_arcs(self) -> Dict[PlaceName, Arc]:
-            return {
-                self.ArcNames.TO_PROCESSOR: Arc(
-                    TaskProcessingSystem.TaskProc.TaskInputPlace
-                )
-            }
+    
+    Forward(TaskGen.TaskQueuePlace, TaskProc.TaskInputPlace)
 
     class ConnectProcessorToNotificationTransition(Transition):
         """Connects processor output to notification system and completion tracking"""
@@ -471,8 +366,8 @@ class TaskProcessingSystem(PetriNet):
             }
 
         async def on_fire(
-            self, consumed: Dict[PlaceName, List[Token]]
-        ) -> Dict[PlaceName, List[Token]]:
+            self, consumed: Dict[PlaceName, List[Any]]
+        ) -> Dict[PlaceName, List[Any]]:
             completed_tasks = consumed[self.ArcNames.FROM_COMPLETED]
 
             # Create notifications for completed tasks
@@ -491,36 +386,7 @@ class TaskProcessingSystem(PetriNet):
                 self.ArcNames.TO_TRACKER: completed_tasks,
             }
 
-    class ConnectProcessorToErrorHandlingTransition(Transition):
-        """Connects processor errors to error handling"""
-
-        class ArcNames(PlaceName):
-            FROM_FAILED = auto()
-            TO_ERROR_HANDLER = auto()
-            TO_TRACKER = auto()
-
-        def input_arcs(self) -> Dict[PlaceName, Arc]:
-            return {
-                self.ArcNames.FROM_FAILED: Arc(
-                    TaskProcessingSystem.TaskProc.FailedPlace
-                )
-            }
-
-        def output_arcs(self) -> Dict[PlaceName, Arc]:
-            return {
-                self.ArcNames.TO_ERROR_HANDLER: Arc(
-                    TaskProcessingSystem.ErrorHandle.ErrorInputPlace
-                ),
-                self.ArcNames.TO_TRACKER: Arc(TaskProcessingSystem.CompletionTracker),
-            }
-
-        # By default, we simply forward all inputs to all outputs, no need to modify
-        # async def on_fire(
-        #     self, consumed: Dict[PlaceName, List[Token]]
-        # ) -> Dict[PlaceName, List[Token]]:
-        #     errors = consumed[self.ArcNames.FROM_FAILED]
-        #     return {self.ArcNames.TO_ERROR_HANDLER: errors,
-        #             self.ArcNames.TO_TRACKER: errors}
+    Fork(TaskProc.FailedPlace, [ErrorHandle.ErrorInputPlace, CompletionTracker], name="FailedToErrorAndLog")
 
 
 async def demonstrate_comprehensive_system():
@@ -598,6 +464,7 @@ async def demonstrate_comprehensive_system():
 
         # Wait for completion or signal (with reasonable timeout)
         await system.finished_event.wait()
+        await sleep(0.5)
 
     finally:
         print(f"\nStopping system...")
