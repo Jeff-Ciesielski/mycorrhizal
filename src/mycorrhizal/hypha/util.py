@@ -140,7 +140,11 @@ def ForkN(n: int, input: Type[Place]) -> List[Type[Place]]:
     return output_classes
 
 
-def Fork(from_place_class: Type[Place], to_place_classes: List[Type[Place]]):
+def Fork(
+    from_place_class: Type[Place],
+    to_place_classes: List[Type[Place]],
+    name: str | None = None,
+):
     """
     Declaratively create a fork transition from one place to multiple places.
     Usage: Fork(MyInterface.InputPlace, [MyInterface.Output1, MyInterface.Output2])
@@ -180,14 +184,19 @@ def Fork(from_place_class: Type[Place], to_place_classes: List[Type[Place]]):
 
             return result
 
-    _inject_into_innermost(f"{prefix}_Fork", ForkTransition)
+    if not name:
+        name = f"{from_place_class.__name__}_to_" + "_".join(
+            [cls.__name__ for cls in to_place_classes]
+        )
+
+    _inject_into_innermost(name, ForkTransition)
 
 
 def Forward(
     input: Type[Place],
     output: Type[Place],
     input_arc_weight: int = 1,
-    transition_name: str | None = None,
+    name: str | None = None,
 ):
     """
     Declaratively create a forward transition from one place to another.
@@ -205,10 +214,10 @@ def Forward(
         def output_arcs(self) -> Dict[PlaceName, Arc]:
             return {ForwardPlaceName.OUTPUT: Arc(output)}
 
-    if not transition_name:
-        transition_name = f"{input.__name__}_to_{output.__name__}"
+    if not name:
+        name = f"{input.__name__}_to_{output.__name__}"
 
-    _inject_into_innermost(transition_name, ForwardTransition)
+    _inject_into_innermost(name, ForwardTransition)
 
 
 def ForwardFrom(input: Type[Place]) -> Type[Place]:
@@ -225,7 +234,7 @@ def ForwardFrom(input: Type[Place]) -> Type[Place]:
 def Join(
     from_place_classes: List[Type[Place]],
     to_place_class: Type[Place],
-    transition_name: str | None = None,
+    name: str | None = None,
 ):
     """
     Declaratively create a join transition from multiple places to one place.
@@ -266,10 +275,10 @@ def Join(
                 all_tokens.extend(tokens)
             return {enum_mapping[to_place_class]: all_tokens}
 
-    if not transition_name:
-        transition_name = f"Join_to_{to_place_class.__name__}"
+    if not name:
+        name = f"Join_to_{to_place_class.__name__}"
 
-    _inject_into_innermost(transition_name, JoinTransition)
+    _inject_into_innermost(name, JoinTransition)
 
 
 def JoinFrom(inputs: List[Type[Place]]) -> Type[Place]:
@@ -390,7 +399,7 @@ def Route(input: Type[Place], outputs: Dict[Type[Any], Type[Place]]):
             result = defaultdict(list)
             # Dispatch tokens to the appropriate output place
             for token in consumed[RouterPlaceNames.INPUT]:
-                # Route the token to the correct output place                
+                # Route the token to the correct output place
                 output_place = enum_mapping[type(token)]
                 result[output_place].append(token)
             return result
