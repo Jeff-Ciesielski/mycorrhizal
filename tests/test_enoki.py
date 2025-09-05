@@ -13,7 +13,7 @@ import gevent
 from gevent import sleep, spawn
 from enum import auto, Enum
 
-from mycorrhizal.enoki.enoki import TimeoutMessage
+from mycorrhizal.enoki.core import TimeoutMessage
 
 # Import the Enoki modules
 from mycorrhizal.enoki import (

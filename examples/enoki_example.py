@@ -11,7 +11,7 @@ import asyncio
 from enum import auto, Enum
 from random import randint
 from typing import List, Union
-from mycorrhizal.enoki import (
+from mycorrhizal.enoki.core import (
     State,
     StateMachine,
     StateConfiguration,
