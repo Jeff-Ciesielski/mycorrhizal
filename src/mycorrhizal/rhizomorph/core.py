@@ -10,13 +10,20 @@ import inspect
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union, Set
 from typing import Sequence as SequenceT
+from types import SimpleNamespace
+from abc import ABC, abstractmethod
+from datetime import datetime
+from time import time, monotonic
+
+from mycorrhizal.common.timebase import *
 
 
 # ======================================================================================
 # Status / helpers
 # ======================================================================================
+
 
 class Status(Enum):
     SUCCESS = 1
@@ -33,35 +40,21 @@ def _name_of(obj: Any) -> str:
         return str(obj.name)
     return f"{obj.__class__.__name__}@{id(obj):x}"
 
-
 # ======================================================================================
-# Blackboard
+# Recursion Detection
 # ======================================================================================
 
-class Blackboard(dict):
-    """Dict-like blackboard with async helpers and a virtual-clock seam."""
 
-    def __getattr__(self, key: str) -> Any:
-        try:
-            return self[key]
-        except KeyError as e:
-            raise AttributeError(key) from e
+class RecursionError(Exception):
+    """Raised when recursive behavior tree structure is detected"""
 
-    def __setattr__(self, key: str, value: Any) -> None:
-        if key.startswith("_"):
-            return super().__setattr__(key, value)
-        self[key] = value
-
-    async def sleep(self, seconds: float) -> None:
-        await asyncio.sleep(seconds)
-
-    def now(self) -> float:
-        return time.monotonic()
+    pass
 
 
 # ======================================================================================
 # Node model
 # ======================================================================================
+
 
 class Node:
     """Abstract BT node; override `tick` and (optionally) lifecycle hooks."""
@@ -72,29 +65,31 @@ class Node:
         self._entered: bool = False
         self._last_status: Optional[Status] = None
 
-    async def tick(self, bb: Blackboard) -> Status:
+    async def tick(self, bb: Any, tb: Timebase) -> Status:
         raise NotImplementedError
 
-    async def on_enter(self, bb: Blackboard) -> None:
+    async def on_enter(self, bb: Any, tb: Timebase) -> None:
+        # print(f"Entering: {self.name}")
         return
 
-    async def on_exit(self, bb: Blackboard, status: Status) -> None:
+    async def on_exit(self, bb: Any, status: Status, tb: Timebase) -> None:
+        # print(f"Exiting: {self.name} | {status}")
         return
 
     def reset(self) -> None:
         self._entered = False
         self._last_status = None
 
-    async def _ensure_entered(self, bb: Blackboard) -> None:
+    async def _ensure_entered(self, bb: Any, tb: Timebase) -> None:
         if not self._entered:
-            await self.on_enter(bb)
+            await self.on_enter(bb, tb)
             self._entered = True
 
-    async def _finish(self, bb: Blackboard, status: Status) -> Status:
+    async def _finish(self, bb: Any, status: Status, tb: Timebase) -> Status:
         self._last_status = status
         if status is not Status.RUNNING:
             try:
-                await self.on_exit(bb, status)
+                await self.on_exit(bb, status, tb)
             finally:
                 self._entered = False
         return status
@@ -104,6 +99,7 @@ class Node:
 # Leaves
 # ======================================================================================
 
+
 class Action(Node):
     """Leaf wrapping a sync/async function -> Status | bool | None."""
 
@@ -111,47 +107,64 @@ class Action(Node):
         super().__init__(name=_name_of(func))
         self._func = func
 
-    async def tick(self, bb: Blackboard) -> Status:
-        await self._ensure_entered(bb)
+    async def tick(self, bb: Any, tb: Timebase) -> Status:
+        await self._ensure_entered(bb, tb)
         try:
-            result = await self._func(bb) if inspect.iscoroutinefunction(self._func) else self._func(bb)
+            result = (
+                await self._func(bb)
+                if inspect.iscoroutinefunction(self._func)
+                else self._func(bb)
+            )
         except asyncio.CancelledError:
-            return await self._finish(bb, Status.CANCELLED)
+            return await self._finish(bb, Status.CANCELLED, tb)
         except Exception:
-            return await self._finish(bb, Status.ERROR)
+            return await self._finish(bb, Status.ERROR, tb)
 
         if isinstance(result, Status):
-            return await self._finish(bb, result)
+            return await self._finish(bb, result, tb)
         if isinstance(result, bool):
-            return await self._finish(bb, Status.SUCCESS if result else Status.FAILURE)
-        return await self._finish(bb, Status.SUCCESS)
+            return await self._finish(bb, Status.SUCCESS if result else Status.FAILURE, tb)
+        return await self._finish(bb, Status.SUCCESS, tb)
 
 
 class Condition(Action):
     """Boolean leaf: True→SUCCESS, False→FAILURE (Status accepted but discouraged)."""
 
-    async def tick(self, bb: Blackboard) -> Status:
-        await self._ensure_entered(bb)
+    async def tick(self, bb: Any, tb: Timebase) -> Status:
+        await self._ensure_entered(bb, tb)
         try:
-            result = await self._func(bb) if inspect.iscoroutinefunction(self._func) else self._func(bb)
+            result = (
+                await self._func(bb)
+                if inspect.iscoroutinefunction(self._func)
+                else self._func(bb)
+            )
         except asyncio.CancelledError:
-            return await self._finish(bb, Status.CANCELLED)
+            return await self._finish(bb, Status.CANCELLED, tb)
         except Exception:
-            return await self._finish(bb, Status.ERROR)
+            return await self._finish(bb, Status.ERROR, tb)
 
         if isinstance(result, Status):
-            return await self._finish(bb, result)
-        return await self._finish(bb, Status.SUCCESS if bool(result) else Status.FAILURE)
+            return await self._finish(bb, result, tb)
+        return await self._finish(
+            bb, Status.SUCCESS if bool(result) else Status.FAILURE, tb
+        )
 
 
 # ======================================================================================
 # Composites
 # ======================================================================================
 
+
 class Sequence(Node):
     """Sequence (AND): fail/err fast; RUNNING bubbles; all SUCCESS → SUCCESS."""
 
-    def __init__(self, children: SequenceT[Node], *, memory: bool = True, name: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        children: SequenceT[Node],
+        *,
+        memory: bool = True,
+        name: Optional[str] = None,
+    ) -> None:
         super().__init__(name or "Sequence")
         self.children = list(children)
         for ch in self.children:
@@ -165,27 +178,33 @@ class Sequence(Node):
         for ch in self.children:
             ch.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
-        await self._ensure_entered(bb)
+    async def tick(self, bb: Any, tb: Timebase) -> Status:
+        await self._ensure_entered(bb, tb)
         start = self._idx if self.memory else 0
         for i in range(start, len(self.children)):
-            st = await self.children[i].tick(bb)
+            st = await self.children[i].tick(bb, tb)
             if st is Status.RUNNING:
                 if self.memory:
                     self._idx = i
                 return Status.RUNNING
             if st in (Status.FAILURE, Status.ERROR, Status.CANCELLED):
                 self._idx = 0
-                return await self._finish(bb, st)
+                return await self._finish(bb, st, tb)
         self._idx = 0
-        return await self._finish(bb, Status.SUCCESS)
+        return await self._finish(bb, Status.SUCCESS, tb)
 
 
 class Selector(Node):
     """Selector (Fallback): first SUCCESS wins; RUNNING bubbles; else FAILURE."""
 
-    def __init__(self, children: SequenceT[Node], *, memory: bool = True, reactive: bool = False,
-                 name: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        children: SequenceT[Node],
+        *,
+        memory: bool = True,
+        reactive: bool = False,
+        name: Optional[str] = None,
+    ) -> None:
         super().__init__(name or "Selector")
         self.children = list(children)
         for ch in self.children:
@@ -200,20 +219,20 @@ class Selector(Node):
         for ch in self.children:
             ch.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
-        await self._ensure_entered(bb)
+    async def tick(self, bb: Any, tb: Timebase) -> Status:
+        await self._ensure_entered(bb, tb)
         start = 0 if self.reactive else (self._idx if self.memory else 0)
         for i in range(start, len(self.children)):
-            st = await self.children[i].tick(bb)
+            st = await self.children[i].tick(bb, tb)
             if st is Status.SUCCESS:
                 self._idx = 0
-                return await self._finish(bb, Status.SUCCESS)
+                return await self._finish(bb, Status.SUCCESS, tb)
             if st is Status.RUNNING:
                 if self.memory and not self.reactive:
                     self._idx = i
                 return Status.RUNNING
         self._idx = 0
-        return await self._finish(bb, Status.FAILURE)
+        return await self._finish(bb, Status.FAILURE, tb)
 
 
 class Parallel(Node):
@@ -224,40 +243,53 @@ class Parallel(Node):
     Otherwise RUNNING.
     """
 
-    def __init__(self, children: SequenceT[Node], *, success_threshold: int,
-                 failure_threshold: Optional[int] = None, name: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        children: SequenceT[Node],
+        *,
+        success_threshold: int,
+        failure_threshold: Optional[int] = None,
+        name: Optional[str] = None,
+    ) -> None:
         super().__init__(name or "Parallel")
         self.children = list(children)
         for ch in self.children:
             ch.parent = self
         self.n = len(self.children)
         self.k = max(1, min(success_threshold, self.n))
-        self.f = failure_threshold if failure_threshold is not None else (self.n - self.k + 1)
+        self.f = (
+            failure_threshold
+            if failure_threshold is not None
+            else (self.n - self.k + 1)
+        )
 
     def reset(self) -> None:
         super().reset()
         for ch in self.children:
             ch.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
-        await self._ensure_entered(bb)
-        tasks = [asyncio.create_task(ch.tick(bb)) for ch in self.children]
+    async def tick(self, bb: Any, tb: Timebase) -> Status:
+        await self._ensure_entered(bb, tb)
+        tasks = [asyncio.create_task(ch.tick(bb, tb)) for ch in self.children]
         try:
             results = await asyncio.gather(*tasks, return_exceptions=False)
         finally:
             pass
         succ = sum(1 for s in results if s is Status.SUCCESS)
-        fail = sum(1 for s in results if s in (Status.FAILURE, Status.ERROR, Status.CANCELLED))
+        fail = sum(
+            1 for s in results if s in (Status.FAILURE, Status.ERROR, Status.CANCELLED)
+        )
         if succ >= self.k:
-            return await self._finish(bb, Status.SUCCESS)
+            return await self._finish(bb, Status.SUCCESS, tb)
         if fail >= self.f:
-            return await self._finish(bb, Status.FAILURE)
+            return await self._finish(bb, Status.FAILURE, tb)
         return Status.RUNNING
 
 
 # ======================================================================================
 # Decorators (wrappers)
 # ======================================================================================
+
 
 class Inverter(Node):
     def __init__(self, child: Node, name: Optional[str] = None) -> None:
@@ -269,20 +301,25 @@ class Inverter(Node):
         super().reset()
         self.child.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
-        await self._ensure_entered(bb)
-        st = await self.child.tick(bb)
+    async def tick(self, bb: Any, tb: Timebase) -> Status:
+        await self._ensure_entered(bb, tb)
+        st = await self.child.tick(bb, tb)
         if st is Status.SUCCESS:
-            return await self._finish(bb, Status.FAILURE)
+            return await self._finish(bb, Status.FAILURE, tb)
         if st is Status.FAILURE:
-            return await self._finish(bb, Status.SUCCESS)
+            return await self._finish(bb, Status.SUCCESS, tb)
         return st
 
 
 class Retry(Node):
-    def __init__(self, child: Node, *, max_attempts: int,
-                 retry_on: Tuple[Status, ...] = (Status.FAILURE, Status.ERROR),
-                 name: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        child: Node,
+        *,
+        max_attempts: int,
+        retry_on: Tuple[Status, ...] = (Status.FAILURE, Status.ERROR),
+        name: Optional[str] = None,
+    ) -> None:
         super().__init__(name or f"Retry({_name_of(child)},{max_attempts})")
         self.child = child
         self.child.parent = self
@@ -295,25 +332,27 @@ class Retry(Node):
         self._attempt = 0
         self.child.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
-        await self._ensure_entered(bb)
-        st = await self.child.tick(bb)
+    async def tick(self, bb: Any, tb: Timebase) -> Status:
+        await self._ensure_entered(bb, tb)
+        st = await self.child.tick(bb, tb)
         if st is Status.RUNNING:
             return Status.RUNNING
         if st is Status.SUCCESS:
             self._attempt = 0
-            return await self._finish(bb, Status.SUCCESS)
+            return await self._finish(bb, Status.SUCCESS, tb)
         # failure-like
         self._attempt += 1
         if st in self.retry_on and self._attempt < self.max_attempts:
             self.child.reset()
             return Status.RUNNING
         self._attempt = 0
-        return await self._finish(bb, Status.FAILURE)
+        return await self._finish(bb, Status.FAILURE, tb)
 
 
 class Timeout(Node):
-    def __init__(self, child: Node, *, seconds: float, name: Optional[str] = None) -> None:
+    def __init__(
+        self, child: Node, *, seconds: float, name: Optional[str] = None
+    ) -> None:
         super().__init__(name or f"Timeout({_name_of(child)},{seconds}s)")
         self.child = child
         self.child.parent = self
@@ -325,20 +364,20 @@ class Timeout(Node):
         self._deadline = None
         self.child.reset()
 
-    async def on_enter(self, bb: Blackboard) -> None:
-        self._deadline = bb.now() + self.seconds
+    async def on_enter(self, bb: Any, tb: Timebase) -> None:
+        self._deadline = tb.now() + self.seconds
 
-    async def tick(self, bb: Blackboard) -> Status:
-        await self._ensure_entered(bb)
+    async def tick(self, bb: Any, tb: Timebase) -> Status:
+        await self._ensure_entered(bb, tb)
         if self._deadline is None:
-            self._deadline = bb.now() + self.seconds
-        if bb.now() > self._deadline:
+            self._deadline = tb.now() + self.seconds
+        if tb.now() > self._deadline:
             self.child.reset()
-            return await self._finish(bb, Status.FAILURE)
-        st = await self.child.tick(bb)
+            return await self._finish(bb, Status.FAILURE, tb)
+        st = await self.child.tick(bb, tb)
         if st is Status.RUNNING:
             return Status.RUNNING
-        return await self._finish(bb, st)
+        return await self._finish(bb, st, tb)
 
 
 class Succeeder(Node):
@@ -351,12 +390,12 @@ class Succeeder(Node):
         super().reset()
         self.child.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
-        await self._ensure_entered(bb)
-        st = await self.child.tick(bb)
+    async def tick(self, bb: Any, tb: Timebase) -> Status:
+        await self._ensure_entered(bb, tb)
+        st = await self.child.tick(bb, tb)
         if st is Status.RUNNING:
             return Status.RUNNING
-        return await self._finish(bb, Status.SUCCESS)
+        return await self._finish(bb, Status.SUCCESS, tb)
 
 
 class Failer(Node):
@@ -369,12 +408,12 @@ class Failer(Node):
         super().reset()
         self.child.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
-        await self._ensure_entered(bb)
-        st = await self.child.tick(bb)
+    async def tick(self, bb: Any, tb: Timebase) -> Status:
+        await self._ensure_entered(bb, tb)
+        st = await self.child.tick(bb, tb)
         if st is Status.RUNNING:
             return Status.RUNNING
-        return await self._finish(bb, Status.FAILURE)
+        return await self._finish(bb, Status.FAILURE, tb)
 
 
 class RateLimit(Node):
@@ -382,11 +421,25 @@ class RateLimit(Node):
     Throttle *starting* the child to at most 1 per period (or hz).
     If child is RUNNING, do not throttle (avoid starvation).
     """
-    def __init__(self, child: Node, *, hz: Optional[float] = None,
-                 period: Optional[float] = None, name: Optional[str] = None) -> None:
-        if (hz is None) == (period is None):
+
+    def __init__(
+        self,
+        child: Node,
+        *,
+        hz: Optional[float] = None,
+        period: Optional[float] = None,
+        name: Optional[str] = None,
+    ) -> None:
+        if (hz is not None) and (period is not None):
             raise ValueError("RateLimit requires exactly one of (hz, period)")
-        per = (1.0 / float(hz)) if hz is not None else float(period)
+        
+        if period is not None:
+            per = period
+        elif hz is not None:
+            per = (1.0 / float(hz))
+        else:
+            raise ValueError("RateLimit requires exactly one of (hz, period)")
+
         super().__init__(name or f"RateLimit({_name_of(child)},{per:.6f}s)")
         self.child = child
         self.child.parent = self
@@ -400,25 +453,25 @@ class RateLimit(Node):
         self._last = None
         self.child.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
-        await self._ensure_entered(bb)
+    async def tick(self, bb: Any, tb: Timebase) -> Status:
+        await self._ensure_entered(bb, tb)
         if self._last is Status.RUNNING:
-            st = await self.child.tick(bb)
+            st = await self.child.tick(bb, tb)
             self._last = st
             if st is Status.RUNNING:
                 return Status.RUNNING
-            self._next_allowed = bb.now() + self._period
-            return await self._finish(bb, st)
+            self._next_allowed = tb.now() + self._period
+            return await self._finish(bb, st, tb)
 
-        now = bb.now()
+        now = tb.now()
         if self._next_allowed is not None and now < self._next_allowed:
             return Status.RUNNING  # throttled
-        st = await self.child.tick(bb)
+        st = await self.child.tick(bb, tb)
         self._last = st
         if st is Status.RUNNING:
             return Status.RUNNING
         self._next_allowed = now + self._period
-        return await self._finish(bb, st)
+        return await self._finish(bb, st, tb)
 
 
 class Gate(Node):
@@ -428,8 +481,13 @@ class Gate(Node):
       RUNNING → RUNNING
       else    → FAILURE
     """
-    def __init__(self, condition: Node, child: Node, name: Optional[str] = None) -> None:
-        super().__init__(name or f"Gate(cond={_name_of(condition)}, child={_name_of(child)})")
+
+    def __init__(
+        self, condition: Node, child: Node, name: Optional[str] = None
+    ) -> None:
+        super().__init__(
+            name or f"Gate(cond={_name_of(condition)}, child={_name_of(child)})"
+        )
         self.condition = condition
         self.child = child
         self.condition.parent = self
@@ -440,22 +498,23 @@ class Gate(Node):
         self.condition.reset()
         self.child.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
-        await self._ensure_entered(bb)
-        c = await self.condition.tick(bb)
+    async def tick(self, bb: Any, tb: Timebase) -> Status:
+        await self._ensure_entered(bb, tb)
+        c = await self.condition.tick(bb, tb)
         if c is Status.RUNNING:
             return Status.RUNNING
         if c is not Status.SUCCESS:
-            return await self._finish(bb, Status.FAILURE)
-        st = await self.child.tick(bb)
+            return await self._finish(bb, Status.FAILURE, tb)
+        st = await self.child.tick(bb, tb)
         if st is Status.RUNNING:
             return Status.RUNNING
-        return await self._finish(bb, st)
+        return await self._finish(bb, st, tb)
 
 
 # ======================================================================================
 # Authoring DSL (NodeSpec + bt namespace)
 # ======================================================================================
+
 
 class NodeSpecKind(Enum):
     ACTION = "action"
@@ -472,9 +531,11 @@ class NodeSpecKind(Enum):
 class NodeSpec:
     kind: NodeSpecKind
     name: str
-    payload: Any = None     # leaf func / composite config (incl. factory) / decorator builder
+    payload: Any = (
+        None  # leaf func / composite config (incl. factory) / decorator builder
+    )
     children: List["NodeSpec"] = field(default_factory=list)
-    
+
     def __hash__(self):
         return hash((self.kind, self.name, id(self.payload), tuple(self.children)))
 
@@ -484,7 +545,7 @@ class NodeSpec:
                 return Action(self.payload)
             case NodeSpecKind.CONDITION:
                 return Condition(self.payload)
-            case (NodeSpecKind.SEQUENCE | NodeSpecKind.SELECTOR | NodeSpecKind.PARALLEL):
+            case NodeSpecKind.SEQUENCE | NodeSpecKind.SELECTOR | NodeSpecKind.PARALLEL:
                 owner_effective = getattr(self, "_owner_cls", None) or owner_cls
                 factory = self.payload["factory"]
                 expanded = _bt_expand_children_with_owner(factory, owner_effective)
@@ -492,17 +553,25 @@ class NodeSpec:
                 built = [ch.to_node(owner_effective) for ch in expanded]
                 match self.kind:
                     case NodeSpecKind.SEQUENCE:
-                        return Sequence(built, memory=self.payload.get("memory", True), name=self.name)
+                        return Sequence(
+                            built,
+                            memory=self.payload.get("memory", True),
+                            name=self.name,
+                        )
                     case NodeSpecKind.SELECTOR:
-                        return Selector(built,
-                                        memory=self.payload.get("memory", True),
-                                    reactive=self.payload.get("reactive", False),
-                                    name=self.name)
+                        return Selector(
+                            built,
+                            memory=self.payload.get("memory", True),
+                            reactive=self.payload.get("reactive", False),
+                            name=self.name,
+                        )
                     case NodeSpecKind.PARALLEL:
-                        return Parallel(built,
-                                        success_threshold=self.payload["success_threshold"],
-                                        failure_threshold=self.payload.get("failure_threshold"),
-                                        name=self.name)
+                        return Parallel(
+                            built,
+                            success_threshold=self.payload["success_threshold"],
+                            failure_threshold=self.payload.get("failure_threshold"),
+                            name=self.name,
+                        )
 
             case NodeSpecKind.DECORATOR:
                 assert len(self.children) == 1, "Decorator must wrap exactly one child"
@@ -527,34 +596,100 @@ class NodeSpec:
                 raise ValueError(f"Unknown spec kind: {self.kind}")
 
 
-def _bt_expand_children_with_owner(factory: Callable[..., Generator[Any, None, None]],
-                                   owner_cls: Optional[type]) -> List[NodeSpec]:
+def _bt_expand_children_with_owner(
+    factory: Callable[..., Generator[Any, None, None]],
+    owner_cls: Optional[type],
+    expansion_stack: Optional[Set[str]] = None,
+) -> List[NodeSpec]:
     """
     Execute a composite factory *after* class construction.
     Convention: factory accepts one positional arg 'N' = owner class.
     Users should write: def Root(N): yield N.Child, yield N.leaf, ...
+
+    Args:
+        factory: The generator function that yields child specs
+        owner_cls: The owner class for resolving N references
+        expansion_stack: Stack of factory names to detect recursion
     """
+    # Initialize recursion detection stack
+    if expansion_stack is None:
+        expansion_stack = set()
+
+    # Check for recursion
+    factory_name = _name_of(factory)
+    if factory_name in expansion_stack:
+        # Build recursion chain for error message
+        chain = " -> ".join(expansion_stack) + f" -> {factory_name}"
+        raise RecursionError(
+            f"Recursive behavior tree structure detected: {chain}\n"
+            f"Behavior trees must be acyclic. Consider using:\n"
+            f"  - A Selector with memory to iterate through options\n"
+            f"  - A Sequence with conditions to control flow\n"
+            f"  - A Retry decorator for repeated attempts\n"
+            f"  - State in the blackboard to track progress"
+        )
+
+    # Add current factory to stack
+    expansion_stack = expansion_stack.copy()
+    expansion_stack.add(factory_name)
+
     try:
         gen = factory(owner_cls)
     except TypeError:
         gen = factory()  # allow zero-arg factories too
 
     if not inspect.isgenerator(gen):
-        raise TypeError(f"Composite factory {factory.__name__} must be a generator (use 'yield').")
+        raise TypeError(
+            f"Composite factory {factory.__name__} must be a generator (use 'yield')."
+        )
 
     out: List[NodeSpec] = []
     for yielded in gen:
         if isinstance(yielded, (list, tuple)):
             for y in yielded:
-                out.append(bt._as_spec(y))
+                spec = bt._as_spec(y)
+                # Pass the expansion stack down for recursive checking
+                if (
+                    hasattr(spec, "payload")
+                    and isinstance(spec.payload, dict)
+                    and "factory" in spec.payload
+                ):
+                    # Mark the spec with the current expansion stack for later expansion
+                    spec._expansion_stack = expansion_stack
+                out.append(spec)
             continue
-        out.append(bt._as_spec(yielded))
+        spec = bt._as_spec(yielded)
+        # Pass the expansion stack down for recursive checking
+        if (
+            hasattr(spec, "payload")
+            and isinstance(spec.payload, dict)
+            and "factory" in spec.payload
+        ):
+            # Mark the spec with the current expansion stack for later expansion
+            spec._expansion_stack = expansion_stack
+        out.append(spec)
+
+    # For any child specs that are composites, we need to check them now
+    for spec in out:
+        if spec.kind in (
+            NodeSpecKind.SEQUENCE,
+            NodeSpecKind.SELECTOR,
+            NodeSpecKind.PARALLEL,
+        ) and hasattr(spec, "_expansion_stack"):
+            # Eagerly expand to detect recursion early
+            child_factory = spec.payload["factory"]
+            child_owner = getattr(spec, "_owner_cls", None) or owner_cls
+            _bt_expand_children_with_owner(
+                child_factory, child_owner, spec._expansion_stack
+            )
+
     return out
 
 
 # --------------------------------------------------------------------------------------
 # Fluent wrapper chain (left-to-right)
 # --------------------------------------------------------------------------------------
+
 
 class _WrapperChain:
     """
@@ -564,8 +699,11 @@ class _WrapperChain:
         yield chain(N.engage)
     """
 
-    def __init__(self, builders: Optional[List[Callable[..., Any]]] = None,
-                 labels: Optional[List[str]] = None) -> None:
+    def __init__(
+        self,
+        builders: Optional[List[Callable[..., Any]]] = None,
+        labels: Optional[List[str]] = None,
+    ) -> None:
         self._builders: List[Callable[..., Any]] = list(builders or [])
         self._labels: List[str] = list(labels or [])
 
@@ -585,26 +723,42 @@ class _WrapperChain:
         return self._append("Inverter", lambda ch, owner=None: Inverter(ch))
 
     def timeout(self, seconds: float) -> "_WrapperChain":
-        return self._append(f"Timeout({seconds}s)",
-                            lambda ch, owner=None: Timeout(ch, seconds=seconds))
+        return self._append(
+            f"Timeout({seconds}s)", lambda ch, owner=None: Timeout(ch, seconds=seconds)
+        )
 
-    def retry(self, max_attempts: int,
-              retry_on: Tuple[Status, ...] = (Status.FAILURE, Status.ERROR)) -> "_WrapperChain":
-        return self._append(f"Retry({max_attempts})",
-                            lambda ch, owner=None: Retry(ch, max_attempts=max_attempts, retry_on=retry_on))
+    def retry(
+        self,
+        max_attempts: int,
+        retry_on: Tuple[Status, ...] = (Status.FAILURE, Status.ERROR),
+    ) -> "_WrapperChain":
+        return self._append(
+            f"Retry({max_attempts})",
+            lambda ch, owner=None: Retry(
+                ch, max_attempts=max_attempts, retry_on=retry_on
+            ),
+        )
 
-    def ratelimit(self, *, hz: Optional[float] = None, period: Optional[float] = None) -> "_WrapperChain":
+    def ratelimit(
+        self, *, hz: Optional[float] = None, period: Optional[float] = None
+    ) -> "_WrapperChain":
         label = "RateLimit(?)"
         if hz is not None:
             label = f"RateLimit({1.0/float(hz):.6f}s)"
         elif period is not None:
             label = f"RateLimit({float(period):.6f}s)"
-        return self._append(label, lambda ch, owner=None: RateLimit(ch, hz=hz, period=period))
+        return self._append(
+            label, lambda ch, owner=None: RateLimit(ch, hz=hz, period=period)
+        )
 
-    def gate(self, condition_spec_or_fn: Union["NodeSpec", Callable[..., Any]]) -> "_WrapperChain":
+    def gate(
+        self, condition_spec_or_fn: Union["NodeSpec", Callable[..., Any]]
+    ) -> "_WrapperChain":
         cond_spec = bt._as_spec(condition_spec_or_fn)
-        return self._append(f"Gate(cond={_name_of(cond_spec)})",
-                            lambda ch, owner=None: Gate(cond_spec.to_node(owner_cls=owner), ch))
+        return self._append(
+            f"Gate(cond={_name_of(cond_spec)})",
+            lambda ch, owner=None: Gate(cond_spec.to_node(owner_cls=owner), ch),
+        )
 
     def __call__(self, inner: Union["NodeSpec", Callable[..., Any]]) -> "NodeSpec":
         """
@@ -617,7 +771,7 @@ class _WrapperChain:
             result = NodeSpec(
                 kind=NodeSpecKind.DECORATOR,
                 name=f"{label}({_name_of(result)})",
-                payload=builder,      # builder(child[, owner])
+                payload=builder,  # builder(child[, owner])
                 children=[result],
             )
         return result
@@ -629,6 +783,7 @@ class _WrapperChain:
 # --------------------------------------------------------------------------------------
 # User-facing decorator/constructor namespace
 # --------------------------------------------------------------------------------------
+
 
 class _BT:
     """User-facing decorator/constructor namespace."""
@@ -647,27 +802,44 @@ class _BT:
     # Composites (store factory; expand later with owner)
     def sequence(self, *, memory: bool = True):
         def deco(factory: Callable[..., Generator[Any, None, None]]) -> NodeSpec:
-            spec = NodeSpec(kind=NodeSpecKind.SEQUENCE, name=_name_of(factory),
-                            payload={"factory": factory, "memory": memory})
+            spec = NodeSpec(
+                kind=NodeSpecKind.SEQUENCE,
+                name=_name_of(factory),
+                payload={"factory": factory, "memory": memory},
+            )
             setattr(factory, "_node_spec", spec)
             return spec
+
         return deco
 
     def selector(self, *, memory: bool = True, reactive: bool = False):
         def deco(factory: Callable[..., Generator[Any, None, None]]) -> NodeSpec:
-            spec = NodeSpec(kind=NodeSpecKind.SELECTOR, name=_name_of(factory),
-                            payload={"factory": factory, "memory": memory, "reactive": reactive})
+            spec = NodeSpec(
+                kind=NodeSpecKind.SELECTOR,
+                name=_name_of(factory),
+                payload={"factory": factory, "memory": memory, "reactive": reactive},
+            )
             setattr(factory, "_node_spec", spec)
             return spec
+
         return deco
 
-    def parallel(self, *, success_threshold: int, failure_threshold: Optional[int] = None):
+    def parallel(
+        self, *, success_threshold: int, failure_threshold: Optional[int] = None
+    ):
         def deco(factory: Callable[..., Generator[Any, None, None]]) -> NodeSpec:
-            spec = NodeSpec(kind=NodeSpecKind.PARALLEL, name=_name_of(factory),
-                            payload={"factory": factory, "success_threshold": success_threshold,
-                                     "failure_threshold": failure_threshold})
+            spec = NodeSpec(
+                kind=NodeSpecKind.PARALLEL,
+                name=_name_of(factory),
+                payload={
+                    "factory": factory,
+                    "success_threshold": success_threshold,
+                    "failure_threshold": failure_threshold,
+                },
+            )
             setattr(factory, "_node_spec", spec)
             return spec
+
         return deco
 
     def inverter(self) -> _WrapperChain:
@@ -682,13 +854,18 @@ class _BT:
     def timeout(self, seconds: float) -> _WrapperChain:
         return _WrapperChain().timeout(seconds)
 
-    def retry(self, max_attempts: int, retry_on: Tuple[Status, ...] = (Status.FAILURE, Status.ERROR),
-              ) -> _WrapperChain:
+    def retry(
+        self,
+        max_attempts: int,
+        retry_on: Tuple[Status, ...] = (Status.FAILURE, Status.ERROR),
+    ) -> _WrapperChain:
         return _WrapperChain().retry(max_attempts, retry_on=retry_on)
 
-    def ratelimit(self, hz: Optional[float] = None, period: Optional[float] = None) -> _WrapperChain:
+    def ratelimit(
+        self, hz: Optional[float] = None, period: Optional[float] = None
+    ) -> _WrapperChain:
         return _WrapperChain().ratelimit(hz=hz, period=period)
-       
+
     def gate(self, condition: Union[NodeSpec, Callable[..., Any]]) -> _WrapperChain:
         cond_spec = self._as_spec(condition)
         return _WrapperChain().gate(cond_spec)
@@ -700,13 +877,21 @@ class _BT:
         For Mermaid, attach the other tree's ROOT spec so it can expand visually.
         """
         root_spec = self._as_spec(tree_cls.ROOT)
-        spec = NodeSpec(kind=NodeSpecKind.SUBTREE, name=f"Subtree({tree_cls.__name__})",
-                        payload={"tree_cls": tree_cls}, children=[root_spec])
+        spec = NodeSpec(
+            kind=NodeSpecKind.SUBTREE,
+            name=f"Subtree({tree_cls.__name__})",
+            payload={"tree_cls": tree_cls},
+            children=[root_spec],
+        )
         # Ensure the child knows its owner for expansion
-        setattr(root_spec, "_owner_cls", getattr(root_spec, "_owner_cls", None) or tree_cls)
+        setattr(
+            root_spec, "_owner_cls", getattr(root_spec, "_owner_cls", None) or tree_cls
+        )
         return spec
 
-    def bind(self, owner: type, spec_or_fn: Union[NodeSpec, Callable[..., Any]]) -> NodeSpec:
+    def bind(
+        self, owner: type, spec_or_fn: Union[NodeSpec, Callable[..., Any]]
+    ) -> NodeSpec:
         """
         Borrow a composite/spec defined on 'owner' and use it here safely.
         For Mermaid, attach the borrowed spec as a child.
@@ -714,8 +899,12 @@ class _BT:
         base = self._as_spec(spec_or_fn)
         # Ensure the borrowed spec carries its original owner for expansion
         setattr(base, "_owner_cls", getattr(base, "_owner_cls", None) or owner)
-        return NodeSpec(kind=NodeSpecKind.BIND, name=f"Bind({owner.__name__}:{_name_of(base)})",
-                        payload={"owner": owner, "spec": base}, children=[base])
+        return NodeSpec(
+            kind=NodeSpecKind.BIND,
+            name=f"Bind({owner.__name__}:{_name_of(base)})",
+            payload={"owner": owner, "spec": base},
+            children=[base],
+        )
 
     # Internals
     def _as_spec(self, maybe: Union[NodeSpec, Callable[..., Any]]) -> NodeSpec:
@@ -734,6 +923,7 @@ bt = _BT()
 # Tree container & Runner
 # ======================================================================================
 
+
 class Tree:
     ROOT: Any = None
 
@@ -751,21 +941,24 @@ class Tree:
 
 
 class Runner:
-    def __init__(self, tree_cls: type[Tree], bb: Optional[Blackboard] = None) -> None:
+    def __init__(self, tree_cls: type[Tree], bb: Optional[Any] = None, tb: Optional[Timebase] = None) -> None:
         self.tree_cls = tree_cls
-        self.bb = bb or Blackboard()
+        self.bb = bb or SimpleNamespace()
+        self.tb = tb or MonotonicClock()
         self.root: Node = tree_cls.build()
 
     async def tick(self) -> Status:
-        return await self.root.tick(self.bb)
+        result = await self.root.tick(self.bb, self.tb)
+        self.tb.advance()
+        return result 
 
     async def tick_until_complete(self, timeout: Optional[float] = None) -> Status:
-        start = self.bb.now()
+        start = self.tb.now()
         while True:
             st = await self.tick()
             if st in (Status.SUCCESS, Status.FAILURE, Status.CANCELLED, Status.ERROR):
                 return st
-            if timeout is not None and (self.bb.now() - start) > timeout:
+            if timeout is not None and (self.tb.now() - start) > timeout:
                 return Status.CANCELLED
             await asyncio.sleep(0)
 
@@ -773,6 +966,7 @@ class Runner:
 # ======================================================================================
 # Mermaid exporter (owner-aware)
 # ======================================================================================
+
 
 def to_mermaid(root_spec: NodeSpec, owner_cls: Optional[type] = None) -> str:
     """
@@ -824,13 +1018,17 @@ def to_mermaid(root_spec: NodeSpec, owner_cls: Optional[type] = None) -> str:
                 # Child is the other tree's ROOT; tag it so its composites expand
                 tree_cls = spec.payload["tree_cls"]
                 child = bt._as_spec(tree_cls.ROOT)
-                setattr(child, "_owner_cls", getattr(child, "_owner_cls", None) or tree_cls)
+                setattr(
+                    child, "_owner_cls", getattr(child, "_owner_cls", None) or tree_cls
+                )
                 spec.children = [child]
         return spec.children
 
     def walk(spec: NodeSpec) -> None:
         this_id = nid(spec)
-        shape = ("((%s))" if spec.kind in ("action", "condition") else "[\"%s\"]") % label(spec)
+        shape = (
+            "((%s))" if spec.kind in ("action", "condition") else '["%s"]'
+        ) % label(spec)
         lines.append(f"  {this_id}{shape}")
         for child in ensure_children(spec):
             child_id = nid(child)
@@ -849,50 +1047,46 @@ if __name__ == "__main__":
     # Demo showcasing fluent composition + owner-aware composites
     class Engage(Tree):
         @bt.action
-        async def engage(bb: Blackboard) -> Status:
-            steps = bb.setdefault("engage_steps", 0)
-            bb["engage_steps"] = steps + 1
-            await bb.sleep(0.02)
-            return Status.SUCCESS if bb["engage_steps"] >= 10 else Status.RUNNING
+        async def engage(bb: Any) -> Status:
+            bb.engage_steps += 1
+            return Status.SUCCESS if bb.engage_steps >= 10 else Status.RUNNING
 
         @bt.condition
-        def threat_detected(bb: Blackboard) -> bool:
-            return bb.get("counter", 0) == 3
+        def threat_detected(bb: Any) -> bool:
+            return bb.counter % 3 == 0
 
         @bt.condition
-        def battery_ok(bb: Blackboard) -> bool:
-            return bb.get("battery", 100) > 20
+        def battery_ok(bb: Any) -> bool:
+            return bb.battery > 20
 
         @bt.sequence(memory=False)
         def EngageThreat(N):
             yield N.threat_detected
             yield bt.failer().gate(N.battery_ok).timeout(0.12)(N.engage)
+
         ROOT = EngageThreat
 
     class Demo(Tree):
         # Conditions
         @bt.condition
-        def has_waypoints(bb: Blackboard) -> bool:
-            counter = bb.get("counter", 0)
+        def has_waypoints(bb: Any) -> bool:
+            counter = bb.counter
             return (counter % 2) == 1
+
         # Actions
         @bt.action
-        async def go_to_next(bb: Blackboard) -> Status:
-            progress = bb.setdefault("goto_progress", 0)
-            await bb.sleep(0.01)
-            bb["goto_progress"] = progress + 1
-            return Status.SUCCESS if bb["goto_progress"] >= 3 else Status.RUNNING
+        async def go_to_next(bb: Any) -> Status:
+            bb.goto_progress += 1
+            return Status.SUCCESS if bb.goto_progress >= 3 else Status.RUNNING
 
         @bt.action
-        async def scan_area(bb: Blackboard) -> Status:
-            attempts = bb.setdefault("scan_attempts", 0)
-            bb["scan_attempts"] = attempts + 1
-            await bb.sleep(0.005)
-            return Status.SUCCESS if bb["scan_attempts"] >= 2 else Status.FAILURE
+        async def scan_area(bb: Any) -> Status:
+            bb.scan_attempts += 1
+            return Status.SUCCESS if bb.scan_attempts >= 2 else Status.FAILURE
 
         @bt.action
-        async def telemetry_push(bb: Blackboard) -> Status:
-            bb["telemetry_count"] = bb.get("telemetry_count", 0) + 1
+        async def telemetry_push(bb: Any) -> Status:
+            bb.telemetry_count += 1
             return Status.SUCCESS
 
         # Composites (factories take N = owner class)
@@ -903,28 +1097,31 @@ if __name__ == "__main__":
             # Fluent: succeeder → retry(3) → timeout(1.0) applied to scan_area
             yield bt.succeeder().retry(3).timeout(1.0)(N.scan_area)
 
-
         @bt.selector(memory=True, reactive=True)
         def Root(N):
             yield bt.subtree(Engage)
             yield N.Patrol
-            yield bt.ratelimit(hz=5.0)(N.telemetry_push)
+            yield bt.failer().ratelimit(hz=5.0)(N.telemetry_push)
 
         ROOT = Root
 
     async def _demo():
-        bb = Blackboard()
-        bb["battery"] = 50
+        bb = SimpleNamespace()
+        bb.battery = 50
+        bb.goto_progress = 0
+        bb.scan_attempts = 0
+        bb.telemetry_count = 0
+        bb.engage_steps = 0
         runner = Runner(Demo, bb=bb)
 
         for i in range(1, 10):
-            bb["counter"] = i
+            bb.counter = i
             st = await runner.tick()
-            print(f"[tick {i}] status={st.name} "
-                  f"(goto={bb.get('goto_progress')}, scan={bb.get('scan_attempts')}, "
-                  f"eng={bb.get('engage_steps')}, tel={bb.get('telemetry_count')})")
-            if st in (Status.SUCCESS, Status.FAILURE):
-                break
+            print(
+                f"[tick {i}] status={st.name} "
+                f"(goto={bb.goto_progress}, scan={bb.scan_attempts}, "
+                f"eng={bb.engage_steps}, tel={bb.telemetry_count})"
+            )
             await asyncio.sleep(0)
 
         print("\n--- Mermaid ---")
