@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
+from typing import Sequence as SequenceT
 
 
 # ======================================================================================
@@ -150,7 +151,7 @@ class Condition(Action):
 class Sequence(Node):
     """Sequence (AND): fail/err fast; RUNNING bubbles; all SUCCESS → SUCCESS."""
 
-    def __init__(self, children: Sequence[Node], *, memory: bool = True, name: Optional[str] = None) -> None:
+    def __init__(self, children: SequenceT[Node], *, memory: bool = True, name: Optional[str] = None) -> None:
         super().__init__(name or "Sequence")
         self.children = list(children)
         for ch in self.children:
@@ -183,7 +184,7 @@ class Sequence(Node):
 class Selector(Node):
     """Selector (Fallback): first SUCCESS wins; RUNNING bubbles; else FAILURE."""
 
-    def __init__(self, children: Sequence[Node], *, memory: bool = True, reactive: bool = False,
+    def __init__(self, children: SequenceT[Node], *, memory: bool = True, reactive: bool = False,
                  name: Optional[str] = None) -> None:
         super().__init__(name or "Selector")
         self.children = list(children)
@@ -223,7 +224,7 @@ class Parallel(Node):
     Otherwise RUNNING.
     """
 
-    def __init__(self, children: Sequence[Node], *, success_threshold: int,
+    def __init__(self, children: SequenceT[Node], *, success_threshold: int,
                  failure_threshold: Optional[int] = None, name: Optional[str] = None) -> None:
         super().__init__(name or "Parallel")
         self.children = list(children)
@@ -456,9 +457,20 @@ class Gate(Node):
 # Authoring DSL (NodeSpec + bt namespace)
 # ======================================================================================
 
+class NodeSpecKind(Enum):
+    ACTION = "action"
+    CONDITION = "condition"
+    SEQUENCE = "sequence"
+    SELECTOR = "selector"
+    PARALLEL = "parallel"
+    DECORATOR = "decorator"
+    SUBTREE = "subtree"
+    BIND = "bind"
+
+
 @dataclass
 class NodeSpec:
-    kind: str  # 'action'|'condition'|'sequence'|'selector'|'parallel'|'decorator'|'subtree'|'bind'
+    kind: NodeSpecKind
     name: str
     payload: Any = None     # leaf func / composite config (incl. factory) / decorator builder
     children: List["NodeSpec"] = field(default_factory=list)
@@ -467,50 +479,52 @@ class NodeSpec:
         return hash((self.kind, self.name, id(self.payload), tuple(self.children)))
 
     def to_node(self, owner_cls: Optional[type] = None) -> Node:
-        if self.kind == "action":
-            return Action(self.payload)
-        if self.kind == "condition":
-            return Condition(self.payload)
+        match self.kind:
+            case NodeSpecKind.ACTION:
+                return Action(self.payload)
+            case NodeSpecKind.CONDITION:
+                return Condition(self.payload)
+            case (NodeSpecKind.SEQUENCE | NodeSpecKind.SELECTOR | NodeSpecKind.PARALLEL):
+                owner_effective = getattr(self, "_owner_cls", None) or owner_cls
+                factory = self.payload["factory"]
+                expanded = _bt_expand_children_with_owner(factory, owner_effective)
+                self.children = expanded  # cache for exporter
+                built = [ch.to_node(owner_effective) for ch in expanded]
+                match self.kind:
+                    case NodeSpecKind.SEQUENCE:
+                        return Sequence(built, memory=self.payload.get("memory", True), name=self.name)
+                    case NodeSpecKind.SELECTOR:
+                        return Selector(built,
+                                        memory=self.payload.get("memory", True),
+                                    reactive=self.payload.get("reactive", False),
+                                    name=self.name)
+                    case NodeSpecKind.PARALLEL:
+                        return Parallel(built,
+                                        success_threshold=self.payload["success_threshold"],
+                                        failure_threshold=self.payload.get("failure_threshold"),
+                                        name=self.name)
 
-        if self.kind in ("sequence", "selector", "parallel"):
-            owner_effective = getattr(self, "_owner_cls", None) or owner_cls
-            factory = self.payload["factory"]
-            expanded = _bt_expand_children_with_owner(factory, owner_effective)
-            self.children = expanded  # cache for exporter
-            built = [ch.to_node(owner_effective) for ch in expanded]
-            if self.kind == "sequence":
-                return Sequence(built, memory=self.payload.get("memory", True), name=self.name)
-            if self.kind == "selector":
-                return Selector(built,
-                                memory=self.payload.get("memory", True),
-                                reactive=self.payload.get("reactive", False),
-                                name=self.name)
-            return Parallel(built,
-                            success_threshold=self.payload["success_threshold"],
-                            failure_threshold=self.payload.get("failure_threshold"),
-                            name=self.name)
+            case NodeSpecKind.DECORATOR:
+                assert len(self.children) == 1, "Decorator must wrap exactly one child"
+                child_node = self.children[0].to_node(owner_cls)
+                builder = self.payload
+                try:
+                    if len(inspect.signature(builder).parameters) == 2:
+                        return builder(child_node, owner_cls)
+                except (TypeError, ValueError):
+                    pass
+                return builder(child_node)
 
-        if self.kind == "decorator":
-            assert len(self.children) == 1, "Decorator must wrap exactly one child"
-            child_node = self.children[0].to_node(owner_cls)
-            builder = self.payload
-            try:
-                if len(inspect.signature(builder).parameters) == 2:
-                    return builder(child_node, owner_cls)
-            except (TypeError, ValueError):
-                pass
-            return builder(child_node)
+            case NodeSpecKind.SUBTREE:
+                tree_cls = self.payload["tree_cls"]
+                return tree_cls.build()
 
-        if self.kind == "subtree":
-            tree_cls = self.payload["tree_cls"]
-            return tree_cls.build()
-
-        if self.kind == "bind":
-            base = self.payload["spec"]
-            owner = self.payload["owner"]
-            return base.to_node(owner_cls=owner)
-
-        raise ValueError(f"Unknown spec kind: {self.kind}")
+            case NodeSpecKind.BIND:
+                base = self.payload["spec"]
+                owner = self.payload["owner"]
+                return base.to_node(owner_cls=owner)
+            case _:
+                raise ValueError(f"Unknown spec kind: {self.kind}")
 
 
 def _bt_expand_children_with_owner(factory: Callable[..., Generator[Any, None, None]],
@@ -601,7 +615,7 @@ class _WrapperChain:
         result = spec
         for label, builder in reversed(list(zip(self._labels, self._builders))):
             result = NodeSpec(
-                kind="decorator",
+                kind=NodeSpecKind.DECORATOR,
                 name=f"{label}({_name_of(result)})",
                 payload=builder,      # builder(child[, owner])
                 children=[result],
@@ -621,19 +635,19 @@ class _BT:
 
     # Leaves
     def action(self, fn: Callable[..., Any]) -> NodeSpec:
-        spec = NodeSpec(kind="action", name=_name_of(fn), payload=fn)
+        spec = NodeSpec(kind=NodeSpecKind.ACTION, name=_name_of(fn), payload=fn)
         setattr(fn, "_node_spec", spec)
         return spec
 
     def condition(self, fn: Callable[..., Any]) -> NodeSpec:
-        spec = NodeSpec(kind="condition", name=_name_of(fn), payload=fn)
+        spec = NodeSpec(kind=NodeSpecKind.CONDITION, name=_name_of(fn), payload=fn)
         setattr(fn, "_node_spec", spec)
         return spec
 
     # Composites (store factory; expand later with owner)
     def sequence(self, *, memory: bool = True):
         def deco(factory: Callable[..., Generator[Any, None, None]]) -> NodeSpec:
-            spec = NodeSpec(kind="sequence", name=_name_of(factory),
+            spec = NodeSpec(kind=NodeSpecKind.SEQUENCE, name=_name_of(factory),
                             payload={"factory": factory, "memory": memory})
             setattr(factory, "_node_spec", spec)
             return spec
@@ -641,7 +655,7 @@ class _BT:
 
     def selector(self, *, memory: bool = True, reactive: bool = False):
         def deco(factory: Callable[..., Generator[Any, None, None]]) -> NodeSpec:
-            spec = NodeSpec(kind="selector", name=_name_of(factory),
+            spec = NodeSpec(kind=NodeSpecKind.SELECTOR, name=_name_of(factory),
                             payload={"factory": factory, "memory": memory, "reactive": reactive})
             setattr(factory, "_node_spec", spec)
             return spec
@@ -649,7 +663,7 @@ class _BT:
 
     def parallel(self, *, success_threshold: int, failure_threshold: Optional[int] = None):
         def deco(factory: Callable[..., Generator[Any, None, None]]) -> NodeSpec:
-            spec = NodeSpec(kind="parallel", name=_name_of(factory),
+            spec = NodeSpec(kind=NodeSpecKind.PARALLEL, name=_name_of(factory),
                             payload={"factory": factory, "success_threshold": success_threshold,
                                      "failure_threshold": failure_threshold})
             setattr(factory, "_node_spec", spec)
@@ -686,7 +700,7 @@ class _BT:
         For Mermaid, attach the other tree's ROOT spec so it can expand visually.
         """
         root_spec = self._as_spec(tree_cls.ROOT)
-        spec = NodeSpec(kind="subtree", name=f"Subtree({tree_cls.__name__})",
+        spec = NodeSpec(kind=NodeSpecKind.SUBTREE, name=f"Subtree({tree_cls.__name__})",
                         payload={"tree_cls": tree_cls}, children=[root_spec])
         # Ensure the child knows its owner for expansion
         setattr(root_spec, "_owner_cls", getattr(root_spec, "_owner_cls", None) or tree_cls)
@@ -700,7 +714,7 @@ class _BT:
         base = self._as_spec(spec_or_fn)
         # Ensure the borrowed spec carries its original owner for expansion
         setattr(base, "_owner_cls", getattr(base, "_owner_cls", None) or owner)
-        return NodeSpec(kind="bind", name=f"Bind({owner.__name__}:{_name_of(base)})",
+        return NodeSpec(kind=NodeSpecKind.BIND, name=f"Bind({owner.__name__}:{_name_of(base)})",
                         payload={"owner": owner, "spec": base}, children=[base])
 
     # Internals
@@ -779,36 +793,39 @@ def to_mermaid(root_spec: NodeSpec, owner_cls: Optional[type] = None) -> str:
         return node_ids[spec]
 
     def label(spec: NodeSpec) -> str:
-        if spec.kind in ("action", "condition"):
-            return f"{spec.kind.upper()}<br/>{spec.name}"
-        if spec.kind in ("sequence", "selector", "parallel"):
-            return f"{spec.kind.capitalize()}<br/>{spec.name}"
-        if spec.kind == "decorator":
-            return f"Decor<br/>{spec.name}"
-        if spec.kind == "subtree":
-            return f"Subtree<br/>{spec.name}"
-        if spec.kind == "bind":
-            return f"Bind<br/>{spec.name}"
-        return spec.name
+        match spec.kind:
+            case NodeSpecKind.ACTION | NodeSpecKind.CONDITION:
+                return f"{spec.kind.value.upper()}<br/>{spec.name}"
+            case NodeSpecKind.SEQUENCE | NodeSpecKind.SELECTOR | NodeSpecKind.PARALLEL:
+                return f"{spec.kind.value.capitalize()}<br/>{spec.name}"
+            case NodeSpecKind.DECORATOR:
+                return f"Decor<br/>{spec.name}"
+            case NodeSpecKind.SUBTREE:
+                return f"Subtree<br/>{spec.name}"
+            case NodeSpecKind.BIND:
+                return f"Bind<br/>{spec.name}"
+            case _:
+                return spec.name
 
     def ensure_children(spec: NodeSpec) -> List[NodeSpec]:
-        if spec.kind in ("sequence", "selector", "parallel"):
-            # Prefer tagged owner on the spec; fall back to the diagram owner
-            owner_for_spec = getattr(spec, "_owner_cls", None) or owner_cls
-            factory = spec.payload["factory"]
-            spec.children = _bt_expand_children_with_owner(factory, owner_for_spec)
-        elif spec.kind == "bind":
-            # Child already attached; make sure it carries the bound owner for expansion
-            base = spec.payload["spec"]
-            owner = spec.payload["owner"]
-            setattr(base, "_owner_cls", getattr(base, "_owner_cls", None) or owner)
-            spec.children = [base]
-        elif spec.kind == "subtree":
-            # Child is the other tree's ROOT; tag it so its composites expand
-            tree_cls = spec.payload["tree_cls"]
-            child = bt._as_spec(tree_cls.ROOT)
-            setattr(child, "_owner_cls", getattr(child, "_owner_cls", None) or tree_cls)
-            spec.children = [child]
+        match spec.kind:
+            case NodeSpecKind.SEQUENCE | NodeSpecKind.SELECTOR | NodeSpecKind.PARALLEL:
+                # Prefer tagged owner on the spec; fall back to the diagram owner
+                owner_for_spec = getattr(spec, "_owner_cls", None) or owner_cls
+                factory = spec.payload["factory"]
+                spec.children = _bt_expand_children_with_owner(factory, owner_for_spec)
+            case NodeSpecKind.BIND:
+                # Child already attached; make sure it carries the bound owner for expansion
+                base = spec.payload["spec"]
+                owner = spec.payload["owner"]
+                setattr(base, "_owner_cls", getattr(base, "_owner_cls", None) or owner)
+                spec.children = [base]
+            case NodeSpecKind.SUBTREE:
+                # Child is the other tree's ROOT; tag it so its composites expand
+                tree_cls = spec.payload["tree_cls"]
+                child = bt._as_spec(tree_cls.ROOT)
+                setattr(child, "_owner_cls", getattr(child, "_owner_cls", None) or tree_cls)
+                spec.children = [child]
         return spec.children
 
     def walk(spec: NodeSpec) -> None:
