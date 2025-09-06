@@ -10,9 +10,9 @@ import inspect
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union, Set
 from typing import Sequence as SequenceT
-
+from types import SimpleNamespace
 
 # ======================================================================================
 # Status / helpers
@@ -35,28 +35,12 @@ def _name_of(obj: Any) -> str:
 
 
 # ======================================================================================
-# Blackboard
+# Recursion Detection
 # ======================================================================================
 
-class Blackboard(dict):
-    """Dict-like blackboard with async helpers and a virtual-clock seam."""
-
-    def __getattr__(self, key: str) -> Any:
-        try:
-            return self[key]
-        except KeyError as e:
-            raise AttributeError(key) from e
-
-    def __setattr__(self, key: str, value: Any) -> None:
-        if key.startswith("_"):
-            return super().__setattr__(key, value)
-        self[key] = value
-
-    async def sleep(self, seconds: float) -> None:
-        await asyncio.sleep(seconds)
-
-    def now(self) -> float:
-        return time.monotonic()
+class RecursionError(Exception):
+    """Raised when recursive behavior tree structure is detected"""
+    pass
 
 
 # ======================================================================================
@@ -72,25 +56,25 @@ class Node:
         self._entered: bool = False
         self._last_status: Optional[Status] = None
 
-    async def tick(self, bb: Blackboard) -> Status:
+    async def tick(self, bb: Any) -> Status:
         raise NotImplementedError
 
-    async def on_enter(self, bb: Blackboard) -> None:
+    async def on_enter(self, bb: Any) -> None:
         return
 
-    async def on_exit(self, bb: Blackboard, status: Status) -> None:
+    async def on_exit(self, bb: Any, status: Status) -> None:
         return
 
     def reset(self) -> None:
         self._entered = False
         self._last_status = None
 
-    async def _ensure_entered(self, bb: Blackboard) -> None:
+    async def _ensure_entered(self, bb: Any) -> None:
         if not self._entered:
             await self.on_enter(bb)
             self._entered = True
 
-    async def _finish(self, bb: Blackboard, status: Status) -> Status:
+    async def _finish(self, bb: Any, status: Status) -> Status:
         self._last_status = status
         if status is not Status.RUNNING:
             try:
@@ -111,7 +95,7 @@ class Action(Node):
         super().__init__(name=_name_of(func))
         self._func = func
 
-    async def tick(self, bb: Blackboard) -> Status:
+    async def tick(self, bb: Any) -> Status:
         await self._ensure_entered(bb)
         try:
             result = await self._func(bb) if inspect.iscoroutinefunction(self._func) else self._func(bb)
@@ -130,7 +114,7 @@ class Action(Node):
 class Condition(Action):
     """Boolean leaf: True→SUCCESS, False→FAILURE (Status accepted but discouraged)."""
 
-    async def tick(self, bb: Blackboard) -> Status:
+    async def tick(self, bb: Any) -> Status:
         await self._ensure_entered(bb)
         try:
             result = await self._func(bb) if inspect.iscoroutinefunction(self._func) else self._func(bb)
@@ -165,7 +149,7 @@ class Sequence(Node):
         for ch in self.children:
             ch.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
+    async def tick(self, bb: Any) -> Status:
         await self._ensure_entered(bb)
         start = self._idx if self.memory else 0
         for i in range(start, len(self.children)):
@@ -200,7 +184,7 @@ class Selector(Node):
         for ch in self.children:
             ch.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
+    async def tick(self, bb: Any) -> Status:
         await self._ensure_entered(bb)
         start = 0 if self.reactive else (self._idx if self.memory else 0)
         for i in range(start, len(self.children)):
@@ -239,7 +223,7 @@ class Parallel(Node):
         for ch in self.children:
             ch.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
+    async def tick(self, bb: Any) -> Status:
         await self._ensure_entered(bb)
         tasks = [asyncio.create_task(ch.tick(bb)) for ch in self.children]
         try:
@@ -269,7 +253,7 @@ class Inverter(Node):
         super().reset()
         self.child.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
+    async def tick(self, bb: Any) -> Status:
         await self._ensure_entered(bb)
         st = await self.child.tick(bb)
         if st is Status.SUCCESS:
@@ -295,7 +279,7 @@ class Retry(Node):
         self._attempt = 0
         self.child.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
+    async def tick(self, bb: Any) -> Status:
         await self._ensure_entered(bb)
         st = await self.child.tick(bb)
         if st is Status.RUNNING:
@@ -325,10 +309,10 @@ class Timeout(Node):
         self._deadline = None
         self.child.reset()
 
-    async def on_enter(self, bb: Blackboard) -> None:
+    async def on_enter(self, bb: Any) -> None:
         self._deadline = bb.now() + self.seconds
 
-    async def tick(self, bb: Blackboard) -> Status:
+    async def tick(self, bb: Any) -> Status:
         await self._ensure_entered(bb)
         if self._deadline is None:
             self._deadline = bb.now() + self.seconds
@@ -351,7 +335,7 @@ class Succeeder(Node):
         super().reset()
         self.child.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
+    async def tick(self, bb: Any) -> Status:
         await self._ensure_entered(bb)
         st = await self.child.tick(bb)
         if st is Status.RUNNING:
@@ -369,7 +353,7 @@ class Failer(Node):
         super().reset()
         self.child.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
+    async def tick(self, bb: Any) -> Status:
         await self._ensure_entered(bb)
         st = await self.child.tick(bb)
         if st is Status.RUNNING:
@@ -400,7 +384,7 @@ class RateLimit(Node):
         self._last = None
         self.child.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
+    async def tick(self, bb: Any) -> Status:
         await self._ensure_entered(bb)
         if self._last is Status.RUNNING:
             st = await self.child.tick(bb)
@@ -440,7 +424,7 @@ class Gate(Node):
         self.condition.reset()
         self.child.reset()
 
-    async def tick(self, bb: Blackboard) -> Status:
+    async def tick(self, bb: Any) -> Status:
         await self._ensure_entered(bb)
         c = await self.condition.tick(bb)
         if c is Status.RUNNING:
@@ -528,12 +512,40 @@ class NodeSpec:
 
 
 def _bt_expand_children_with_owner(factory: Callable[..., Generator[Any, None, None]],
-                                   owner_cls: Optional[type]) -> List[NodeSpec]:
+                                   owner_cls: Optional[type],
+                                   expansion_stack: Optional[Set[str]] = None) -> List[NodeSpec]:
     """
     Execute a composite factory *after* class construction.
     Convention: factory accepts one positional arg 'N' = owner class.
     Users should write: def Root(N): yield N.Child, yield N.leaf, ...
+    
+    Args:
+        factory: The generator function that yields child specs
+        owner_cls: The owner class for resolving N references
+        expansion_stack: Stack of factory names to detect recursion
     """
+    # Initialize recursion detection stack
+    if expansion_stack is None:
+        expansion_stack = set()
+    
+    # Check for recursion
+    factory_name = _name_of(factory)
+    if factory_name in expansion_stack:
+        # Build recursion chain for error message
+        chain = " -> ".join(expansion_stack) + f" -> {factory_name}"
+        raise RecursionError(
+            f"Recursive behavior tree structure detected: {chain}\n"
+            f"Behavior trees must be acyclic. Consider using:\n"
+            f"  - A Selector with memory to iterate through options\n"
+            f"  - A Sequence with conditions to control flow\n"
+            f"  - A Retry decorator for repeated attempts\n"
+            f"  - State in the blackboard to track progress"
+        )
+    
+    # Add current factory to stack
+    expansion_stack = expansion_stack.copy()
+    expansion_stack.add(factory_name)
+    
     try:
         gen = factory(owner_cls)
     except TypeError:
@@ -546,9 +558,29 @@ def _bt_expand_children_with_owner(factory: Callable[..., Generator[Any, None, N
     for yielded in gen:
         if isinstance(yielded, (list, tuple)):
             for y in yielded:
-                out.append(bt._as_spec(y))
+                spec = bt._as_spec(y)
+                # Pass the expansion stack down for recursive checking
+                if hasattr(spec, 'payload') and isinstance(spec.payload, dict) and 'factory' in spec.payload:
+                    # Mark the spec with the current expansion stack for later expansion
+                    spec._expansion_stack = expansion_stack
+                out.append(spec)
             continue
-        out.append(bt._as_spec(yielded))
+        spec = bt._as_spec(yielded)
+        # Pass the expansion stack down for recursive checking
+        if hasattr(spec, 'payload') and isinstance(spec.payload, dict) and 'factory' in spec.payload:
+            # Mark the spec with the current expansion stack for later expansion
+            spec._expansion_stack = expansion_stack
+        out.append(spec)
+    
+    # For any child specs that are composites, we need to check them now
+    for spec in out:
+        if (spec.kind in (NodeSpecKind.SEQUENCE, NodeSpecKind.SELECTOR, NodeSpecKind.PARALLEL) and
+            hasattr(spec, '_expansion_stack')):
+            # Eagerly expand to detect recursion early
+            child_factory = spec.payload["factory"]
+            child_owner = getattr(spec, "_owner_cls", None) or owner_cls
+            _bt_expand_children_with_owner(child_factory, child_owner, spec._expansion_stack)
+    
     return out
 
 
@@ -751,9 +783,9 @@ class Tree:
 
 
 class Runner:
-    def __init__(self, tree_cls: type[Tree], bb: Optional[Blackboard] = None) -> None:
+    def __init__(self, tree_cls: type[Tree], bb: Optional[Any] = None) -> None:
         self.tree_cls = tree_cls
-        self.bb = bb or Blackboard()
+        self.bb = bb or SimpleNamespace()
         self.root: Node = tree_cls.build()
 
     async def tick(self) -> Status:
@@ -849,18 +881,18 @@ if __name__ == "__main__":
     # Demo showcasing fluent composition + owner-aware composites
     class Engage(Tree):
         @bt.action
-        async def engage(bb: Blackboard) -> Status:
+        async def engage(bb: Any) -> Status:
             steps = bb.setdefault("engage_steps", 0)
             bb["engage_steps"] = steps + 1
             await bb.sleep(0.02)
             return Status.SUCCESS if bb["engage_steps"] >= 10 else Status.RUNNING
 
         @bt.condition
-        def threat_detected(bb: Blackboard) -> bool:
+        def threat_detected(bb: Any) -> bool:
             return bb.get("counter", 0) == 3
 
         @bt.condition
-        def battery_ok(bb: Blackboard) -> bool:
+        def battery_ok(bb: Any) -> bool:
             return bb.get("battery", 100) > 20
 
         @bt.sequence(memory=False)
@@ -872,26 +904,26 @@ if __name__ == "__main__":
     class Demo(Tree):
         # Conditions
         @bt.condition
-        def has_waypoints(bb: Blackboard) -> bool:
+        def has_waypoints(bb: Any) -> bool:
             counter = bb.get("counter", 0)
             return (counter % 2) == 1
         # Actions
         @bt.action
-        async def go_to_next(bb: Blackboard) -> Status:
+        async def go_to_next(bb: Any) -> Status:
             progress = bb.setdefault("goto_progress", 0)
             await bb.sleep(0.01)
             bb["goto_progress"] = progress + 1
             return Status.SUCCESS if bb["goto_progress"] >= 3 else Status.RUNNING
 
         @bt.action
-        async def scan_area(bb: Blackboard) -> Status:
+        async def scan_area(bb: Any) -> Status:
             attempts = bb.setdefault("scan_attempts", 0)
             bb["scan_attempts"] = attempts + 1
             await bb.sleep(0.005)
             return Status.SUCCESS if bb["scan_attempts"] >= 2 else Status.FAILURE
 
         @bt.action
-        async def telemetry_push(bb: Blackboard) -> Status:
+        async def telemetry_push(bb: Any) -> Status:
             bb["telemetry_count"] = bb.get("telemetry_count", 0) + 1
             return Status.SUCCESS
 
@@ -913,16 +945,16 @@ if __name__ == "__main__":
         ROOT = Root
 
     async def _demo():
-        bb = Blackboard()
-        bb["battery"] = 50
+        bb = SimpleNamespace()
+        bb.battery = 50
         runner = Runner(Demo, bb=bb)
 
         for i in range(1, 10):
-            bb["counter"] = i
+            bb.counter = i
             st = await runner.tick()
             print(f"[tick {i}] status={st.name} "
-                  f"(goto={bb.get('goto_progress')}, scan={bb.get('scan_attempts')}, "
-                  f"eng={bb.get('engage_steps')}, tel={bb.get('telemetry_count')})")
+                  f"(goto={bb.goto_progress}, scan={bb.scan_attempts}, "
+                  f"eng={bb.engage_steps}, tel={bb.telemetry_count})")
             if st in (Status.SUCCESS, Status.FAILURE):
                 break
             await asyncio.sleep(0)
