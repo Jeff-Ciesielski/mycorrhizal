@@ -787,6 +787,14 @@ class _WrapperChain:
 
 class _BT:
     """User-facing decorator/constructor namespace."""
+    
+    # Utility helpers
+    
+    # Sets the ROOT of the current tree to the decorated function
+    def root(self, spec_or_fn: Union["NodeSpec", Callable[..., Any]]) -> "NodeSpec":
+        spec = self._as_spec(spec_or_fn)
+        setattr(spec, "_is_root_spec", True)
+        return spec
 
     # Leaves
     def action(self, fn: Callable[..., Any]) -> NodeSpec:
@@ -876,7 +884,7 @@ class _BT:
         Mount another Tree's root as a child in the current tree.
         For Mermaid, attach the other tree's ROOT spec so it can expand visually.
         """
-        root_spec = self._as_spec(tree_cls.ROOT)
+        root_spec = self._as_spec(tree_cls._ROOT)
         spec = NodeSpec(
             kind=NodeSpecKind.SUBTREE,
             name=f"Subtree({tree_cls.__name__})",
@@ -925,19 +933,99 @@ bt = _BT()
 
 
 class Tree:
-    ROOT: Any = None
+    _ROOT: Any = None
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        # Tag any NodeSpec attributes on the class with their owner for later expansion.
+        root_specs = []
         for _, val in vars(cls).items():
             if isinstance(val, NodeSpec):
-                setattr(val, "_owner_cls", cls)
+                # keep your existing owner tagging
+                setattr(val, "_owner_cls", getattr(val, "_owner_cls", None) or cls)
+                if getattr(val, "_is_root_spec", False):
+                    root_specs.append(val)
+
+        if root_specs:
+            if len(root_specs) > 1:
+                names = ", ".join(s.name for s in root_specs)
+                raise ValueError(f"Multiple @bt.root specs found: {names}")
+            cls._ROOT = root_specs[0]
 
     @classmethod
     def build(cls) -> Node:
-        root_spec = bt._as_spec(cls.ROOT)
+        root_spec = bt._as_spec(cls._ROOT)
         return root_spec.to_node(owner_cls=cls)
+
+    @classmethod
+    def to_mermaid(cls) -> str:
+        """
+        Render a static structure graph. Composites are expanded using the owner class.
+        Decorator nesting shows as sequential nodes.
+        Supports: bind/subtree expansion for cross-file composition.
+        """
+        lines: List[str] = ["flowchart TD"]
+        node_ids: Dict[NodeSpec, str] = {}
+        counter = 0
+
+        def nid(spec: NodeSpec) -> str:
+            nonlocal counter
+            if spec in node_ids:
+                return node_ids[spec]
+            counter += 1
+            node_ids[spec] = f"N{counter}"
+            return node_ids[spec]
+
+        def label(spec: NodeSpec) -> str:
+            match spec.kind:
+                case NodeSpecKind.ACTION | NodeSpecKind.CONDITION:
+                    return f"{spec.kind.value.upper()}<br/>{spec.name}"
+                case NodeSpecKind.SEQUENCE | NodeSpecKind.SELECTOR | NodeSpecKind.PARALLEL:
+                    return f"{spec.kind.value.capitalize()}<br/>{spec.name}"
+                case NodeSpecKind.DECORATOR:
+                    return f"Decor<br/>{spec.name}"
+                case NodeSpecKind.SUBTREE:
+                    return f"Subtree<br/>{spec.name}"
+                case NodeSpecKind.BIND:
+                    return f"Bind<br/>{spec.name}"
+                case _:
+                    return spec.name
+
+        def ensure_children(spec: NodeSpec) -> List[NodeSpec]:
+            match spec.kind:
+                case NodeSpecKind.SEQUENCE | NodeSpecKind.SELECTOR | NodeSpecKind.PARALLEL:
+                    # Prefer tagged owner on the spec; fall back to the diagram owner
+                    owner_for_spec = getattr(spec, "_owner_cls", None) or cls
+                    factory = spec.payload["factory"]
+                    spec.children = _bt_expand_children_with_owner(factory, owner_for_spec)
+                case NodeSpecKind.BIND:
+                    # Child already attached; make sure it carries the bound owner for expansion
+                    base = spec.payload["spec"]
+                    owner = spec.payload["owner"]
+                    setattr(base, "_owner_cls", getattr(base, "_owner_cls", None) or owner)
+                    spec.children = [base]
+                case NodeSpecKind.SUBTREE:
+                    # Child is the other tree's ROOT; tag it so its composites expand
+                    tree_cls = spec.payload["tree_cls"]
+                    child = bt._as_spec(tree_cls._ROOT)
+                    setattr(
+                        child, "_owner_cls", getattr(child, "_owner_cls", None) or tree_cls
+                    )
+                    spec.children = [child]
+            return spec.children
+
+        def walk(spec: NodeSpec) -> None:
+            this_id = nid(spec)
+            shape = (
+                "((%s))" if spec.kind in ("action", "condition") else '["%s"]'
+            ) % label(spec)
+            lines.append(f"  {this_id}{shape}")
+            for child in ensure_children(spec):
+                child_id = nid(child)
+                lines.append(f"  {this_id} --> {child_id}")
+                walk(child)
+
+        walk(bt._as_spec(cls._ROOT))
+        return "\n".join(lines)
 
 
 class Runner:
@@ -964,82 +1052,6 @@ class Runner:
 
 
 # ======================================================================================
-# Mermaid exporter (owner-aware)
-# ======================================================================================
-
-
-def to_mermaid(root_spec: NodeSpec, owner_cls: Optional[type] = None) -> str:
-    """
-    Render a static structure graph. Composites are expanded using the owner class.
-    Decorator nesting shows as sequential nodes.
-    Supports: bind/subtree expansion for cross-file composition.
-    """
-    lines: List[str] = ["flowchart TD"]
-    node_ids: Dict[NodeSpec, str] = {}
-    counter = 0
-
-    def nid(spec: NodeSpec) -> str:
-        nonlocal counter
-        if spec in node_ids:
-            return node_ids[spec]
-        counter += 1
-        node_ids[spec] = f"N{counter}"
-        return node_ids[spec]
-
-    def label(spec: NodeSpec) -> str:
-        match spec.kind:
-            case NodeSpecKind.ACTION | NodeSpecKind.CONDITION:
-                return f"{spec.kind.value.upper()}<br/>{spec.name}"
-            case NodeSpecKind.SEQUENCE | NodeSpecKind.SELECTOR | NodeSpecKind.PARALLEL:
-                return f"{spec.kind.value.capitalize()}<br/>{spec.name}"
-            case NodeSpecKind.DECORATOR:
-                return f"Decor<br/>{spec.name}"
-            case NodeSpecKind.SUBTREE:
-                return f"Subtree<br/>{spec.name}"
-            case NodeSpecKind.BIND:
-                return f"Bind<br/>{spec.name}"
-            case _:
-                return spec.name
-
-    def ensure_children(spec: NodeSpec) -> List[NodeSpec]:
-        match spec.kind:
-            case NodeSpecKind.SEQUENCE | NodeSpecKind.SELECTOR | NodeSpecKind.PARALLEL:
-                # Prefer tagged owner on the spec; fall back to the diagram owner
-                owner_for_spec = getattr(spec, "_owner_cls", None) or owner_cls
-                factory = spec.payload["factory"]
-                spec.children = _bt_expand_children_with_owner(factory, owner_for_spec)
-            case NodeSpecKind.BIND:
-                # Child already attached; make sure it carries the bound owner for expansion
-                base = spec.payload["spec"]
-                owner = spec.payload["owner"]
-                setattr(base, "_owner_cls", getattr(base, "_owner_cls", None) or owner)
-                spec.children = [base]
-            case NodeSpecKind.SUBTREE:
-                # Child is the other tree's ROOT; tag it so its composites expand
-                tree_cls = spec.payload["tree_cls"]
-                child = bt._as_spec(tree_cls.ROOT)
-                setattr(
-                    child, "_owner_cls", getattr(child, "_owner_cls", None) or tree_cls
-                )
-                spec.children = [child]
-        return spec.children
-
-    def walk(spec: NodeSpec) -> None:
-        this_id = nid(spec)
-        shape = (
-            "((%s))" if spec.kind in ("action", "condition") else '["%s"]'
-        ) % label(spec)
-        lines.append(f"  {this_id}{shape}")
-        for child in ensure_children(spec):
-            child_id = nid(child)
-            lines.append(f"  {this_id} --> {child_id}")
-            walk(child)
-
-    walk(root_spec)
-    return "\n".join(lines)
-
-
-# ======================================================================================
 # Demo
 # ======================================================================================
 
@@ -1059,12 +1071,11 @@ if __name__ == "__main__":
         def battery_ok(bb: Any) -> bool:
             return bb.battery > 20
 
+        @bt.root
         @bt.sequence(memory=False)
         def EngageThreat(N):
             yield N.threat_detected
             yield bt.failer().gate(N.battery_ok).timeout(0.12)(N.engage)
-
-        ROOT = EngageThreat
 
     class Demo(Tree):
         # Conditions
@@ -1097,13 +1108,13 @@ if __name__ == "__main__":
             # Fluent: succeeder → retry(3) → timeout(1.0) applied to scan_area
             yield bt.succeeder().retry(3).timeout(1.0)(N.scan_area)
 
+        @bt.root
         @bt.selector(memory=True, reactive=True)
         def Root(N):
             yield bt.subtree(Engage)
             yield N.Patrol
             yield bt.failer().ratelimit(hz=5.0)(N.telemetry_push)
 
-        ROOT = Root
 
     async def _demo():
         bb = SimpleNamespace()
@@ -1125,6 +1136,6 @@ if __name__ == "__main__":
             await asyncio.sleep(0)
 
         print("\n--- Mermaid ---")
-        print(to_mermaid(bt._as_spec(Demo.ROOT), owner_cls=Demo))
+        print(Demo.to_mermaid())
 
     asyncio.run(_demo())
