@@ -11,21 +11,23 @@ import time
 import asyncio
 from asyncio import sleep
 from mycorrhizal.hypha import (
-    Token,
     Place,
     Transition,
     PetriNet,
     Arc,
     IOInputPlace,
-    IOOutputPlace,
     PlaceName,
 )
+from mycorrhizal.common.timebase import CycleClock
+
 from enum import Enum, auto
 from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
 
 
-class SimpleToken(Token):
-    pass
+@dataclass
+class SimpleToken:
+    data: Any
 
 
 class MinimalNet(PetriNet):
@@ -57,13 +59,13 @@ class MinimalNet(PetriNet):
             if self.generated >= self.count:
                 # Signal that we're done
                 if self.net:
-                    self.net.finished = True
+                    setattr(self.net, "finished", True)
                 return None
 
             token = SimpleToken(data=self.generated)
             self.generated += 1
             print(f"[Source] Produced: {token}")
-            await self.net.sleep_cycles(0.5)  # Simulate generation delay
+            await self.net.timebase.sleep(0.5)  # Simulate generation delay
             return token
 
     class MoveToQueue(Transition):
@@ -80,8 +82,8 @@ class MinimalNet(PetriNet):
             return {self.ArcNames.TO_QUEUE: Arc(MinimalNet.TokenQueue)}
 
         async def on_fire(
-            self, consumed: Dict[PlaceName, List[Token]]
-        ) -> Dict[PlaceName, List[Token]]:
+            self, consumed: Dict[PlaceName, List[Any]]
+        ) -> Dict[PlaceName, List[Any]]:
             tokens = consumed[self.ArcNames.FROM_SOURCE]
             print(f"[MoveToQueue] Moving {len(tokens)} token(s) to Queue")
 
@@ -105,8 +107,8 @@ class MinimalNet(PetriNet):
             return {self.ArcNames.TO_PROCESSED: Arc(MinimalNet.ProcessedTokens)}
 
         async def on_fire(
-            self, consumed: Dict[PlaceName, List[Token]]
-        ) -> Dict[PlaceName, List[Token]]:
+            self, consumed: Dict[PlaceName, List[Any]]
+        ) -> Dict[PlaceName, List[Any]]:
             tokens = consumed[self.ArcNames.FROM_QUEUE]
             print(f"[ProcessTokens] Received {len(tokens)} token(s)")
 
@@ -116,7 +118,7 @@ class MinimalNet(PetriNet):
                 # Could modify the token here if needed
                 processed_tokens.append(token)
 
-            await self.net.sleep_cycles(0.2)  # Simulate processing time
+            await self.net.timebase.sleep(0.2)  # Simulate processing time
             return {self.ArcNames.TO_PROCESSED: processed_tokens}
 
 
@@ -154,13 +156,13 @@ async def main():
     print("-" * 40)
 
     print(f"\nStarting network...")
-    await net.start()
+    await net.start(timebase=CycleClock(stepsize=0.01))
 
     try:
         print("Running until all tokens are processed...")
 
         # Wait for completion
-        while not net.finished:
+        while not getattr(net, "finished", False):
             await sleep(0.1)
 
         # Show final state

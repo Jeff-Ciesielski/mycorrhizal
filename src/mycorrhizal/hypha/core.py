@@ -6,6 +6,15 @@ Ported from gevent to asyncio for autonomous execution without colored functions
 Each transition runs as an independent asyncio task waiting on input queues.
 """
 
+from mycorrhizal.common.timebase import (
+    Timebase,
+    WallClock,
+    UTCClock,
+    MonotonicClock,
+    CycleClock,
+    DictatedClock,
+)
+
 import asyncio
 from asyncio import (
     Queue,
@@ -744,16 +753,23 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         # Error handling callback
         self._error_handler: Optional[Callable] = None
 
-        # Cycle counter
-        self._cycles: float = 0
-        self._cycle_task: Optional[Task] = None
-        self._cycle_units: Set[float] = set()
+        # Timebase management for cycle counting
+        self._timebase_task: Optional[Task] = None
 
         # Deadlock detection
         self._deadlock_check_task: Optional[Task] = None
         self._deadlock_check_interval: float = 1.0  # Check every second
+        
+        # Timebase
+        self._timebase: Timebase | None = None
 
         self._auto_build()
+        
+    @property
+    def timebase(self) -> Timebase:
+        if not self._timebase:
+            raise ValueError("Timebase is not set.")
+        return self._timebase
 
     def set_error_handler(
         self,
@@ -931,28 +947,16 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         place = self._get_place_by_type(place_type)
         await place.add_token(token)
 
-    async def _cycle_loop(self):
-        """Cycle counter loop."""
+    async def _timebase_loop(self):
+        """Timebase advance loop."""
         try:
             while True:
+                # Sleep briefly to yield control to other tasks
                 await sleep(0)
-                if self._cycle_units:
-                    self._cycles += min(self._cycle_units)
-                else:
-                    self._cycles += 1
+                # Tick the timebase
+                self.timebase.advance()
         except CancelledError:
             raise
-
-    async def sleep_cycles(self, duration: float):
-        """Sleep for a given number of cycles."""
-        self._cycle_units.add(duration)
-        start = self._cycles
-        while self._cycles - start < duration:
-            await sleep(0)
-        try:
-            self._cycle_units.remove(duration)
-        except KeyError:
-            pass
 
     async def _deadlock_check_loop(self):
         """Periodically check for deadlocks."""
@@ -1013,17 +1017,19 @@ class PetriNet(metaclass=DeclarativeABCMeta):
         # Default: raise exception to stop the net
         raise PetriNetDeadlock("Petri net is deadlocked - no transitions can fire")
 
-    async def start(self, typecheck_arcs: bool = False):
+    async def start(self, typecheck_arcs: bool = False, timebase: Optional[Timebase] = None):
         """Start the autonomous Petri net execution."""
 
         await self.log(f"Starting Net: {self.__class__.__name__}")
         self._shutdown_event.clear()
         self._typecheck_arcs = typecheck_arcs
 
-        # Start our cycle counter
-        self._cycles = 0
-        self._cycle_task = create_task(self._cycle_loop())
-        self._running_tasks.add(self._cycle_task)
+        self._timebase = timebase or MonotonicClock()
+
+        # Start our timebase service loop if necessary
+        if isinstance(self.timebase, CycleClock):
+            self._timebase_task = create_task(self._timebase_loop())
+            self._running_tasks.add(self._timebase_task)
 
         # Start deadlock detector
         self._deadlock_check_task = create_task(self._deadlock_check_loop())

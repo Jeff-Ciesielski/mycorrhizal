@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Hypha Comprehensive Demo 
+Hypha Comprehensive Demo
 
 This example demonstrates:
 - Proper interface composition with reusable interfaces
@@ -26,6 +26,7 @@ from mycorrhizal.hypha import (
     IOOutputPlace,
     PlaceName,
 )
+from mycorrhizal.common.timebase import CycleClock
 from enum import Enum, auto
 from typing import Dict, List, Optional, Any
 from mycorrhizal.hypha.util import Forward, Route, Fork, NewPlace
@@ -33,7 +34,7 @@ from mycorrhizal.hypha.util import Forward, Route, Fork, NewPlace
 # === TOKEN DEFINITIONS ===
 
 
-class TaskToken():
+class TaskToken:
     """Represents a task to be processed"""
 
     def __init__(self, task_id: str, task_type: str):
@@ -44,7 +45,7 @@ class TaskToken():
         return f"TaskToken({self.task_id}, {self.task_type})"
 
 
-class ProcessedTaskToken():
+class ProcessedTaskToken:
     """Represents a completed task"""
 
     def __init__(self, task_id: str, result: str, processing_time: float):
@@ -56,7 +57,7 @@ class ProcessedTaskToken():
         return f"ProcessedTaskToken({self.task_id}, {self.result})"
 
 
-class NotificationToken():
+class NotificationToken:
     """Represents a notification to be sent"""
 
     def __init__(self, recipient: str, message: str, urgent: bool = False):
@@ -68,7 +69,7 @@ class NotificationToken():
         return f"NotificationToken({self.recipient}, urgent={self.urgent})"
 
 
-class ErrorToken():
+class ErrorToken:
     """Represents an error condition"""
 
     def __init__(self, error_type: str, message: str, original_token: Any = None):
@@ -104,7 +105,7 @@ class TaskGeneratorInterface(Interface):
                 return None
 
             # Wait for interval
-            await self.net.sleep_cycles(self.interval)
+            await self.net.timebase.sleep(self.interval)
 
             # Generate task
             self.tasks_generated += 1
@@ -124,6 +125,7 @@ class TaskGeneratorInterface(Interface):
         MAX_CAPACITY = 20  # Prevent unbounded growth
 
     Forward(TaskSourcePlace, TaskQueuePlace, name="TaskGenForward")
+
 
 class TaskProcessorInterface(Interface):
     """Reusable interface for processing tasks (simplified - no priority routing)"""
@@ -185,7 +187,7 @@ class TaskProcessorInterface(Interface):
 
                 # Simulate processing time
                 start_time = time.time()
-                await self.net.sleep_cycles(0.3)  # Processing delay
+                await self.net.timebase.sleep(0.3)  # Processing delay
                 processing_time = time.time() - start_time
 
                 # Simulate occasional failures (task IDs ending in 6 or 9)
@@ -209,6 +211,7 @@ class TaskProcessorInterface(Interface):
 
 class NotificationInterface(Interface):
     """Reusable interface for sending notifications via different channels"""
+
     NotificationInputPlace = NewPlace()
 
     class EmailOutputPlace(IOOutputPlace):
@@ -221,7 +224,7 @@ class NotificationInterface(Interface):
         async def on_token_added(self, token: Any) -> Optional[Any]:
             if isinstance(token, NotificationToken):
                 # Simulate email sending
-                await self.net.sleep_cycles(0.1)
+                await self.net.timebase.sleep(0.1)
 
                 # Simulate occasional email failures
                 if "error" in token.message.lower():
@@ -247,7 +250,7 @@ class NotificationInterface(Interface):
         async def on_token_added(self, token: Any) -> Optional[Any]:
             if isinstance(token, NotificationToken) and token.urgent:
                 # Simulate SMS sending
-                await self.net.sleep_cycles(0.05)
+                await self.net.timebase.sleep(0.05)
 
                 self.sent_sms.append(token)
                 print(f"📱 SMS: {token.recipient} - {token.message}")
@@ -268,8 +271,13 @@ class NotificationInterface(Interface):
                 return None
 
             return None
-        
-    Fork(NotificationInputPlace, [EmailOutputPlace, SMSOutputPlace, LogOutputPlace], name="NotificationFork")
+
+    Fork(
+        NotificationInputPlace,
+        [EmailOutputPlace, SMSOutputPlace, LogOutputPlace],
+        name="NotificationFork",
+    )
+
 
 class ErrorHandlingInterface(Interface):
     """Reusable interface for handling errors and retries"""
@@ -287,7 +295,6 @@ class ErrorHandlingInterface(Interface):
                 timestamp = time.strftime("%H:%M:%S")
                 print(f"❌ ERROR [{timestamp}]: {token.error_type} - {token.message}")
             return None
-
 
     Forward(ErrorInputPlace, ErrorLogPlace, name="ErrorForward")
 
@@ -339,7 +346,7 @@ class TaskProcessingSystem(PetriNet):
             return None
 
     # Top-level transitions that connect interfaces
-    
+
     Forward(TaskGen.TaskQueuePlace, TaskProc.TaskInputPlace)
 
     class ConnectProcessorToNotificationTransition(Transition):
@@ -386,7 +393,11 @@ class TaskProcessingSystem(PetriNet):
                 self.ArcNames.TO_TRACKER: completed_tasks,
             }
 
-    Fork(TaskProc.FailedPlace, [ErrorHandle.ErrorInputPlace, CompletionTracker], name="FailedToErrorAndLog")
+    Fork(
+        TaskProc.FailedPlace,
+        [ErrorHandle.ErrorInputPlace, CompletionTracker],
+        name="FailedToErrorAndLog",
+    )
 
 
 async def demonstrate_comprehensive_system():
@@ -456,7 +467,7 @@ async def demonstrate_comprehensive_system():
 
     # Start the system
     start_time = time.time()
-    await system.start()
+    await system.start(timebase=CycleClock(stepsize=0.01))
 
     try:
         print("Running system until all tasks are processed...")
@@ -468,7 +479,7 @@ async def demonstrate_comprehensive_system():
 
     finally:
         print(f"\nStopping system...")
-        # Give some time for final processing        
+        # Give some time for final processing
         await system.stop(timeout=1)
 
     elapsed = time.time() - start_time
