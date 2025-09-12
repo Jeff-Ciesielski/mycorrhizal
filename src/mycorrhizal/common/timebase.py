@@ -48,13 +48,17 @@ class MonotonicClock(Timebase):
 
 
 class CycleClock(Timebase):
-    def __init__(self, stepsize: float = 1):
+    def __init__(self):
         super().__init__()
         self.cycles: float = 0
-        self._stepsize = stepsize
+        self._stepsize = 1
         self._advance_evt = asyncio.Event()
 
     async def sleep(self, duration: float):
+        # If the duration is less than our stepsize, we want to create a new more granular stepsize that
+        # will still operate quickly, but enable more precise timing
+        if duration < self._stepsize:
+            self._stepsize = duration / 4
         target = self.cycles + duration
         while self.cycles < target:
             await self._advance_evt.wait()

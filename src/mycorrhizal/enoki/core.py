@@ -11,6 +11,8 @@ Key Features:
 - Push/Pop context resolution for accurate analysis
 """
 
+from mycorrhizal.common.timebase import Timebase, MonotonicClock, CycleClock
+
 import importlib
 import importlib.util
 import sys
@@ -33,6 +35,7 @@ from typing import (
     Hashable,
     Set,
     Awaitable,
+    Sequence,
 )
 import importlib
 import importlib.util, sys, os, types, inspect
@@ -66,6 +69,7 @@ class SharedContext:
     send_message: Callable
     log: Callable
     common: Any
+    timebase: Timebase
     msg: Optional[Any] = None
 
 
@@ -250,7 +254,7 @@ class StateRef(StateTransition):
 @dataclass
 class LabeledTransition:
     label: Enum
-    transition: TransitionType
+    transition: Type[TransitionType] | "Push"
 
 
 class StateMeta(ABCMeta):
@@ -309,12 +313,16 @@ class State(StateTransition, ABC, metaclass=StateMeta):
     @abstractmethod
     def transitions(
         cls,
-    ) -> List[Union[LabeledTransition, TransitionType]]:
+    ) -> Sequence[Union[LabeledTransition, TransitionType, Type[TransitionType]]]:
         """Returns mapping of transition enums to their targets"""
-        return dict()
+        return list()
 
     @abstractmethod
-    async def on_state(cls, ctx: SharedContext):
+    async def on_state(
+        cls, ctx: SharedContext
+    ) -> Union[
+        "State", None, TransitionType, Type[TransitionType], LabeledTransition, Enum
+    ]:
         """Main state logic"""
         pass
 
@@ -326,12 +334,20 @@ class State(StateTransition, ABC, metaclass=StateMeta):
         """Called when leaving the state"""
         pass
 
-    async def on_fail(cls, ctx: SharedContext):
+    async def on_fail(
+        cls, ctx: SharedContext
+    ) -> Union[
+        "State", None, TransitionType, Type[TransitionType], LabeledTransition, Enum
+    ]:
         """Called when retry limit is exceeded"""
         pass
 
     @abstractmethod
-    async def on_timeout(cls, ctx: SharedContext):
+    async def on_timeout(
+        cls, ctx: SharedContext
+    ) -> Union[
+        "State", None, TransitionType, Type[TransitionType], LabeledTransition, Enum
+    ]:
         """Called when state times out"""
         pass
 
@@ -711,9 +727,14 @@ class StateMachine:
         trap_fn: Optional[callable] = None,
         on_error_fn=None,
         common_data: Optional[Any] = None,
+        timebase: Timebase | None = None,
     ):
 
         self.registry = StateRegistry()
+
+        # If no timebase is provided, we default to monotonic time
+        self.timebase = timebase or MonotonicClock()
+        self._timebase_task = None
 
         # The filter and trap functions are used to filter messages
         # (for example, common messages that apply to the process
@@ -766,6 +787,7 @@ class StateMachine:
             send_message=self.send_message,
             log=self.log,
             common=common_data or dict(),
+            timebase=self.timebase,
         )
 
         self.retry_counters = {}
@@ -1057,6 +1079,7 @@ class StateMachine:
     def send_message(self, message: Any):
         """Send a message to the state machine"""
         try:
+            # Make sure that the message isn't supposed to be filtered out
             if message and self._filter_fn(self.context, message):
                 return
             self._send_message_internal(message)
@@ -1093,6 +1116,17 @@ class StateMachine:
                     # Handle queue full scenario
                     pass
 
+    async def _timebase_loop(self):
+        """Timebase advance loop."""
+        try:
+            while True:
+                # Sleep briefly to yield control to other tasks
+                await sleep(0)
+                # Tick the timebase
+                self.timebase.advance()
+        except asyncio.CancelledError:
+            raise
+
     def _send_timeout_message(self, state_name: str, timeout_id: int, duration: float):
         """Internal method to send timeout messages"""
         timeout_msg = TimeoutMessage(state_name, timeout_id, duration)
@@ -1122,7 +1156,7 @@ class StateMachine:
     async def _timeout_handler(self, state_name: str, timeout_id: int, duration: float):
         """Asyncio task that handles timeout"""
         try:
-            await sleep(duration)
+            await self.timebase.sleep(duration)
             self._send_timeout_message(state_name, timeout_id, duration)
         except asyncio.CancelledError:
             pass  # Task was cancelled (timeout cancelled)
@@ -1138,6 +1172,10 @@ class StateMachine:
         """Handle a timeout message"""
         timeout_msg = self.context.msg
         self.context.msg = None
+
+        if not isinstance(timeout_msg, TimeoutMessage):
+            self.log(f"Ignoring non-timeout message: {timeout_msg}")
+            return False
 
         if timeout_msg.timeout_id != self._current_timeout_id:
             self.log(f"Ignoring stale timeout {timeout_msg.timeout_id}")
@@ -1184,22 +1222,16 @@ class StateMachine:
         if not self.current_state:
             raise NoStateToTick()
 
-        match timeout:
-            case x if x and not isinstance(x, (int, float)):
-                raise ValueError(
-                    f"Tick timeout must be None, or an integer/float >= 0, got {type(x)}"
-                )
-            case 0:
-                block = False
-            case None:
-                block = True
-            case x if x > 0:
-                block = True
-            case _:
-                raise ValueError("Tick timeout must be None, or >=0")
+        if timeout and not isinstance(timeout, (int, float)):
+            raise ValueError(
+                f"Tick timeout must be None, or an integer/float >= 0, got {type(x)}"
+            )
 
-        while True:
-            try:
+        try:
+            # Start our timebase service loop if necessary
+            if isinstance(self.timebase, CycleClock) and not self._timebase_task:
+                self._timebase_task = create_task(self._timebase_loop())
+            while True:
                 if isinstance(self.context.msg, Exception):
                     raise self.context.msg
 
@@ -1219,39 +1251,64 @@ class StateMachine:
 
                 self.context.msg = None
 
-                should_check_queue = await self._process_transition(transition)
+                if not (await self._process_transition(transition)):
+                    continue
 
-                if should_check_queue:
-                    if block:
-                        message = await asyncio.wait_for(
-                            self._message_queue.get(), timeout=timeout
+                match timeout:
+                    case 0:
+                        self.context.msg = self._message_queue.get_nowait().item
+                    case None:
+                        message = await self._message_queue.get()
+                        self.context.msg = message.item
+                    case x if x > 0:
+
+                        async def _timeout():
+                            await self.timebase.sleep(x)
+
+                        get_task = asyncio.create_task(self._message_queue.get())
+                        timeout_task = asyncio.create_task(_timeout())
+
+                        done, pending = await asyncio.wait(
+                            [timeout_task, get_task],
+                            return_when=asyncio.FIRST_COMPLETED,
                         )
-                        message = message.item
-                    else:
-                        message = self._message_queue.get_nowait().item
-                    self.context.msg = message
-            except asyncio.QueueEmpty:
-                break
-            except asyncio.TimeoutError:
-                break
-            except Exception as e:
-                # While it's true that 'Pokemon errors' are typically
-                # in poor taste, this allows the user to selectively
-                # handle error cases, and throw any error that isn't
-                # explicitely handled
 
-                # If we're terminal anyway, bail
-                if (
-                    isinstance(e, StateMachineComplete)
-                    or self.current_state.CONFIG.terminal
-                ):
-                    raise
+                        for task in pending:
+                            task.cancel()
 
-                next_transition = self._on_err_fn(self.context, e)
-                if next_transition:
-                    await self._process_transition(next_transition)
-                else:
-                    raise
+                        if get_task in done:
+                            message = await get_task
+                            self.context.msg = message.item
+                        else:
+                            raise asyncio.QueueEmpty()
+
+        except asyncio.QueueEmpty:
+            pass
+        except asyncio.TimeoutError:
+            pass
+        except Exception as e:
+            # While it's true that 'Pokemon errors' are typically
+            # in poor taste, this allows the user to selectively
+            # handle error cases, and throw any error that isn't
+            # explicitely handled
+
+            # If we're terminal anyway, bail
+            if (
+                isinstance(e, StateMachineComplete)
+                or self.current_state.CONFIG.terminal
+            ):
+                raise
+
+            next_transition = self._on_err_fn(self.context, e)
+            if next_transition:
+                await self._process_transition(next_transition)
+            else:
+                raise
+        finally:
+            if self._timebase_task:
+                self._timebase_task.cancel()
+                self._timebase_task = None
+                print("[FSM] Timebase task cancelled")
 
     def tick_nowait(self):
         """Non-blocking tick that processes available messages without waiting"""
@@ -1263,16 +1320,6 @@ class StateMachine:
         """Process a state transition"""
         valid_transitions = self.registry.get_transitions(self.current_state)
 
-        target = valid_transitions.get(transition)
-
-        if transition is not None:
-            if target is None and transition in valid_transitions.values():
-                target = transition
-            else:
-                raise ValueError(
-                    f"ERROR: Unknown transition {transition}: {valid_transitions}"
-                )
-
         if transition in (None, Unhandled):
             if (
                 self.current_state.CONFIG.can_dwell
@@ -1281,15 +1328,24 @@ class StateMachine:
             raise BlockedInUntimedState(
                 f"{self.current_state.name} cannot dwell and does not have a timeout"
             )
-        elif isinstance(target, type) and issubclass(target, State):
+
+        if transition in valid_transitions:
+            target = valid_transitions.get(transition, None)
+        elif transition in valid_transitions.values():
+            target = transition  
+        else:
+            raise ValueError(
+                f"ERROR: Unknown transition {transition}: {valid_transitions}"
+            )
+
+        if isinstance(target, type) and issubclass(target, State):
             await self._transition_to_state(target)
         elif isinstance(target, Push):
             await self._handle_push(target)
         elif isinstance(target, Pop) or issubclass(target, Pop):
             await self._handle_pop()
         elif target == Again:
-            # Schedule another tick without blocking
-            asyncio.create_task(self.tick(timeout=0))
+            return True
         elif target == Repeat:
             await self._transition_to_state(type(self.current_state))
         elif target == Restart:

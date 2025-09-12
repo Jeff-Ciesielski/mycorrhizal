@@ -24,6 +24,7 @@ from mycorrhizal.enoki.core import (
     LabeledTransition,
     TransitionType
 )
+from mycorrhizal.common.timebase import CycleClock
 
 
 # Example 1: Basic Network Request State Machine
@@ -59,6 +60,8 @@ class NetworkRequestState(State):
         ctx.common.request_id = f"req_{randint(1000, 9999)}"
 
     async def on_state(cls, ctx: SharedContext):
+
+        print(f"Got message: {ctx.msg}")
         if ctx.msg and ctx.msg.get("type") == "network_response":
             if ctx.msg.get("success"):
                 return cls.T.SUCCESS
@@ -104,6 +107,7 @@ async def example_network_fsm():
         initial_state=NetworkRequestState,
         error_state=ErrorState,
         common_data=CommonData(),
+        timebase=CycleClock()
     )
 
     print(f"✓ FSM created with {len(fsm.discovered_states)} states")
@@ -115,7 +119,9 @@ async def example_network_fsm():
 
     # Simulate network response
     async def simulate_network_response():
-        await asyncio.sleep(2)  # Simulate network delay
+        print(f"Starting sleep at {fsm.context.timebase.now()}")
+        await fsm.context.timebase.sleep(2)  # Simulate network delay
+        print("Sending network message")
         fsm.send_message({"type": "network_response", "success": True})
 
     # Start simulation
@@ -164,14 +170,14 @@ class Imaging:
             )
 
         async def on_enter(cls, ctx: SharedContext):
-            print("Setting up lighting...")
+            print(f"Setting up lighting at {ctx.timebase.now()}...")
             # Simulate async lighting setup
             asyncio.create_task(cls._simulate_lighting_setup(ctx))
 
         async def _simulate_lighting_setup(cls, ctx: SharedContext):
             """Simulate async lighting setup"""
-            await asyncio.sleep(2)  # Simulate lighting adjustment time
-            print("Light ready")
+            await ctx.timebase.sleep(0.2)  # Simulate lighting adjustment time
+            print(f"Light ready at {ctx.timebase.now()}")
             ctx.send_message({"type": "lighting_ready"})
 
         async def on_state(cls, ctx: SharedContext):
@@ -196,12 +202,14 @@ class Imaging:
             )
 
         async def on_enter(cls, ctx: SharedContext):
-            print("Taking picture...")
+            print(f"Taking picture at {ctx.timebase.now()}...")
             asyncio.create_task(cls._simulate_picture_capture(ctx))
 
         async def _simulate_picture_capture(cls, ctx: SharedContext):
             """Simulate async picture capture"""
-            await asyncio.sleep(3)  # Simulate capture time
+            print(f"Simulating capture time starting at {ctx.timebase.now()}")
+            await ctx.timebase.sleep(1)  # Simulate capture time
+            print(f"Picture captured at {ctx.timebase.now()}")
             ctx.send_message({"type": "picture_complete", "success": True})
 
         async def on_state(cls, ctx: SharedContext):
@@ -231,6 +239,7 @@ async def example_imaging_fsm():
         initial_state=Imaging.SetImageLighting,
         error_state=Imaging.Error,
         common_data={"images_captured": 0},
+        timebase=CycleClock()
     )
 
     print(f"✓ FSM created with {len(fsm.discovered_states)} states")
@@ -285,6 +294,7 @@ class PushPop:
             if ctx.msg and ctx.msg.get("action") == "enter_submenu":
                 return PushPop.T.ENTER_SUBMENU
             elif ctx.msg and ctx.msg.get("action") == "exit":
+                print("Going to processing")
                 return ProcessingState
 
     class SubMenu(State):
@@ -326,6 +336,7 @@ async def example_menu_fsm():
         initial_state=PushPop.MainMenu,
         error_state=ErrorState,
         common_data={"navigation_history": []},
+        timebase=CycleClock()
     )
 
     print(f"✓ FSM created with {len(fsm.discovered_states)} states")
@@ -337,19 +348,19 @@ async def example_menu_fsm():
 
     # Simulate menu navigation
     async def simulate_menu_navigation():
-        await asyncio.sleep(0.5)
+        await fsm.context.timebase.sleep(0.5)
         print("  -> Entering submenu")
         fsm.send_message({"action": "enter_submenu"})
-        await asyncio.sleep(0.5)
+        await fsm.context.timebase.sleep(0.5)
         print("  -> Entering menu item")
         fsm.send_message({"action": "enter_item"})
-        await asyncio.sleep(0.5)
+        await fsm.context.timebase.sleep(0.5)
         print("  -> Going back from item")
         fsm.send_message({"action": "back"})
-        await asyncio.sleep(0.5)
+        await fsm.context.timebase.sleep(0.5)
         print("  -> Going back from submenu")
         fsm.send_message({"action": "back"})
-        await asyncio.sleep(0.5)
+        await fsm.context.timebase.sleep(0.5)
         print("  -> Exiting")
         fsm.send_message({"action": "exit"})
 
