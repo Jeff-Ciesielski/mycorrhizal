@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
+# pyright: reportSelfClsParameterName=false
 """
-Enoki Usage Examples (Asyncio Version)
+Enoki Usage Examples
 
 This file demonstrates how to use the Enoki state machine library
 with various patterns including timeouts, retries, and state grouping.
 """
 
+
 from dataclasses import dataclass
 import asyncio
 from enum import auto, Enum
 from random import randint
-from typing import List, Union
+from typing import List, Sequence, Type, Union
 from mycorrhizal.enoki.core import (
     State,
     StateMachine,
@@ -22,7 +24,7 @@ from mycorrhizal.enoki.core import (
     Retry,
     StateMachineComplete,
     LabeledTransition,
-    TransitionType
+    TransitionType,
 )
 from mycorrhizal.common.timebase import CycleClock
 
@@ -47,47 +49,58 @@ class NetworkRequestState(State):
     # that gets references to the class type that's calling them. (They do not
     # require that the user decorate them as this is handled by the state
     # metaclass).
-    def transitions(cls) -> Union[TransitionType, List[Union[TransitionType, LabeledTransition]]]:
+    @staticmethod
+    def transitions() -> (
+        Sequence[Union[LabeledTransition, TransitionType, Type[TransitionType]]]
+    ):
         return [
-            LabeledTransition(cls.T.SUCCESS, StateRef("enoki_example.ProcessingState")),
-            LabeledTransition(cls.T.FAILURE, StateRef("enoki_example.ErrorState")),
+            LabeledTransition(
+                NetworkRequestState.T.SUCCESS, StateRef("enoki_example.ProcessingState")
+            ),
+            LabeledTransition(
+                NetworkRequestState.T.FAILURE, StateRef("enoki_example.ErrorState")
+            ),
             Retry,
         ]
 
-    async def on_enter(cls, ctx: SharedContext):
+    @staticmethod
+    async def on_enter(ctx: SharedContext):
         print("Starting network request...")
-        # In real implementation, would initiate async network request here
         ctx.common.request_id = f"req_{randint(1000, 9999)}"
 
-    async def on_state(cls, ctx: SharedContext):
-
+    @staticmethod
+    async def on_state(ctx: SharedContext):
         print(f"Got message: {ctx.msg}")
         if ctx.msg and ctx.msg.get("type") == "network_response":
             if ctx.msg.get("success"):
-                return cls.T.SUCCESS
+                return NetworkRequestState.T.SUCCESS
             else:
-                return cls.T.FAILURE
+                return NetworkRequestState.T.FAILURE
 
-    async def on_timeout(cls, ctx: SharedContext):
+    @staticmethod
+    async def on_timeout(ctx: SharedContext):
         print("Network request timed out")
         return Retry
 
-    async def on_fail(cls, ctx: SharedContext):
+    @staticmethod
+    async def on_fail(ctx: SharedContext):
         print("Network request failed after all retries")
-        return cls.T.FAILURE
+        return NetworkRequestState.T.FAILURE
 
 
 class ProcessingState(State):
     CONFIG = StateConfiguration(terminal=True)
 
-    async def on_state(cls, ctx: SharedContext):
+    @staticmethod
+    async def on_state(ctx: SharedContext):
         print("Processing complete!")
 
 
 class ErrorState(State):
     CONFIG = StateConfiguration(terminal=True)
 
-    async def on_state(cls, ctx: SharedContext):
+    @staticmethod
+    async def on_state(ctx: SharedContext):
         print("Error state reached")
 
 
@@ -107,7 +120,7 @@ async def example_network_fsm():
         initial_state=NetworkRequestState,
         error_state=ErrorState,
         common_data=CommonData(),
-        timebase=CycleClock()
+        timebase=CycleClock(),
     )
 
     print(f"✓ FSM created with {len(fsm.discovered_states)} states")
@@ -156,74 +169,84 @@ class Imaging:
     class Error(State):
         CONFIG = StateConfiguration(terminal=True)
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             print("Error state reached")
 
     class SetImageLighting(ImagingState):
         CONFIG = StateConfiguration(timeout=10.0, retries=3)
 
-        def transitions(cls):
+        @staticmethod
+        def transitions():
             return (
                 LabeledTransition(Imaging.T.LIGHTING_SET, Imaging.TakePicture),
                 LabeledTransition(Imaging.T.FAILED, Imaging.Error),
                 Retry,
             )
 
-        async def on_enter(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_enter(ctx: SharedContext):
             print(f"Setting up lighting at {ctx.timebase.now()}...")
-            # Simulate async lighting setup
-            asyncio.create_task(cls._simulate_lighting_setup(ctx))
+            asyncio.create_task(Imaging.SetImageLighting._simulate_lighting_setup(ctx))
 
-        async def _simulate_lighting_setup(cls, ctx: SharedContext):
-            """Simulate async lighting setup"""
-            await ctx.timebase.sleep(0.2)  # Simulate lighting adjustment time
+        @staticmethod
+        async def _simulate_lighting_setup(ctx: SharedContext):
+            await ctx.timebase.sleep(0.2)
             print(f"Light ready at {ctx.timebase.now()}")
             ctx.send_message({"type": "lighting_ready"})
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             if ctx.msg and ctx.msg.get("type") == "lighting_ready":
                 return Imaging.T.LIGHTING_SET
 
-        async def on_timeout(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_timeout(ctx: SharedContext):
             print("Lighting setup timed out")
             return Retry
 
-        async def on_fail(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_fail(ctx: SharedContext):
             print("Lighting setup failed after all retries")
             return Imaging.T.FAILED
 
     class TakePicture(ImagingState):
         CONFIG = StateConfiguration(timeout=15.0, retries=2)
 
-        def transitions(cls):
+        @staticmethod
+        def transitions():
             return (
                 LabeledTransition(Imaging.T.PICTURE_TAKEN, ProcessingState),
                 LabeledTransition(Imaging.T.FAILED, Imaging.Error),
             )
 
-        async def on_enter(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_enter(ctx: SharedContext):
             print(f"Taking picture at {ctx.timebase.now()}...")
-            asyncio.create_task(cls._simulate_picture_capture(ctx))
+            asyncio.create_task(Imaging.TakePicture._simulate_picture_capture(ctx))
 
-        async def _simulate_picture_capture(cls, ctx: SharedContext):
-            """Simulate async picture capture"""
+        @staticmethod
+        async def _simulate_picture_capture(ctx: SharedContext):
             print(f"Simulating capture time starting at {ctx.timebase.now()}")
-            await ctx.timebase.sleep(1)  # Simulate capture time
+            await ctx.timebase.sleep(1)
             print(f"Picture captured at {ctx.timebase.now()}")
             ctx.send_message({"type": "picture_complete", "success": True})
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             if ctx.msg and ctx.msg.get("type") == "picture_complete":
                 if ctx.msg.get("success"):
                     return Imaging.T.PICTURE_TAKEN
                 else:
                     return Imaging.T.FAILED
 
-        async def on_timeout(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_timeout(ctx: SharedContext):
             print("Picture capture timed out")
             return Retry
 
-        async def on_fail(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_fail(ctx: SharedContext):
             print("Picture capture failed after all retries")
             return Imaging.T.FAILED
 
@@ -239,7 +262,7 @@ async def example_imaging_fsm():
         initial_state=Imaging.SetImageLighting,
         error_state=Imaging.Error,
         common_data={"images_captured": 0},
-        timebase=CycleClock()
+        timebase=CycleClock(),
     )
 
     print(f"✓ FSM created with {len(fsm.discovered_states)} states")
@@ -282,7 +305,8 @@ class PushPop:
     class MainMenu(State):
         CONFIG = StateConfiguration(can_dwell=True)
 
-        def transitions(cls):
+        @staticmethod
+        def transitions():
             return (
                 LabeledTransition(
                     PushPop.T.ENTER_SUBMENU, Push(PushPop.SubMenu, PushPop.MainMenu)
@@ -290,7 +314,8 @@ class PushPop:
                 LabeledTransition(PushPop.T.EXIT, ProcessingState),
             )
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             if ctx.msg and ctx.msg.get("action") == "enter_submenu":
                 return PushPop.T.ENTER_SUBMENU
             elif ctx.msg and ctx.msg.get("action") == "exit":
@@ -300,7 +325,8 @@ class PushPop:
     class SubMenu(State):
         CONFIG = StateConfiguration(can_dwell=True)
 
-        def transitions(cls):
+        @staticmethod
+        def transitions():
             return (
                 LabeledTransition(PushPop.T.BACK, Pop),
                 LabeledTransition(
@@ -308,7 +334,8 @@ class PushPop:
                 ),
             )
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             if ctx.msg and ctx.msg.get("action") == "back":
                 return PushPop.T.BACK
             elif ctx.msg and ctx.msg.get("action") == "enter_item":
@@ -317,10 +344,12 @@ class PushPop:
     class SubMenuItem(State):
         CONFIG = StateConfiguration(can_dwell=True)
 
-        def transitions(cls):
+        @staticmethod
+        def transitions():
             return [LabeledTransition(PushPop.T.BACK, Pop)]
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             if ctx.msg and ctx.msg.get("action") == "back":
                 return PushPop.T.BACK
 
@@ -336,7 +365,7 @@ async def example_menu_fsm():
         initial_state=PushPop.MainMenu,
         error_state=ErrorState,
         common_data={"navigation_history": []},
-        timebase=CycleClock()
+        timebase=CycleClock(),
     )
 
     print(f"✓ FSM created with {len(fsm.discovered_states)} states")
@@ -395,9 +424,9 @@ class Workflow:
     class MainWorkflow(State):
         CONFIG = StateConfiguration(can_dwell=True)
 
-        def transitions(cls):
+        @staticmethod
+        def transitions():
             return (
-                # Now includes itself for return after interrupt
                 LabeledTransition(
                     Workflow.T.INTERRUPT,
                     Push(Workflow.InterruptHandler, Workflow.MainWorkflow),
@@ -413,16 +442,17 @@ class Workflow:
                 LabeledTransition(Workflow.T.FINISH, Workflow.ProcessingState),
             )
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             pass
 
     class TaskExecution(State):
         CONFIG = StateConfiguration(timeout=10.0)
 
-        def transitions(cls):
+        @staticmethod
+        def transitions():
             return (
-                LabeledTransition(Workflow.T.COMPLETE_TASK, Pop),  # Pops to TaskCleanup
-                # Includes itself for return after interrupt
+                LabeledTransition(Workflow.T.COMPLETE_TASK, Pop),
                 LabeledTransition(
                     Workflow.T.INTERRUPT,
                     Push(
@@ -432,48 +462,55 @@ class Workflow:
                 ),
             )
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             pass
 
-        async def on_timeout(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_timeout(ctx: SharedContext):
             return Workflow.T.COMPLETE_TASK
 
     class TaskCleanup(State):
         CONFIG = StateConfiguration(timeout=5.0)
 
-        def transitions(cls):
+        @staticmethod
+        def transitions():
             return (
                 LabeledTransition(Workflow.T.COMPLETE_TASK, Pop),
                 LabeledTransition(Workflow.T.TIMEOUT, Pop),
             )
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             pass
 
-        async def on_timeout(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_timeout(ctx: SharedContext):
             return Workflow.T.TIMEOUT
 
     class InterruptHandler(State):
         CONFIG = StateConfiguration(timeout=3.0)
 
-        def transitions(cls):
+        @staticmethod
+        def transitions():
             return (
-                # This Pop can go to either MainWorkflow or TaskExecution
-                # depending on who pushed it
                 LabeledTransition(Workflow.T.RESUME, Pop),
                 LabeledTransition(Workflow.T.TIMEOUT, Pop),
             )
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             pass
 
-        async def on_timeout(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_timeout(ctx: SharedContext):
             return Workflow.T.TIMEOUT
 
     class ProcessingState(State):
         CONFIG = StateConfiguration(terminal=True)
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             pass
 
 
@@ -484,7 +521,7 @@ async def example_push_pop_detailed():
     print("=" * 60)
 
     # Create FSM
-    fsm = StateMachine(initial_state=Workflow.MainWorkflow, error_state=None)
+    fsm = StateMachine(initial_state=Workflow.MainWorkflow)
 
     print(f"\n✓ FSM created with {len(fsm.discovered_states)} states")
 
@@ -494,11 +531,11 @@ async def example_push_pop_detailed():
     # Analyze InterruptHandler - should have multiple pop targets
     print("\nInterruptHandler Analysis:")
     print("-" * 40)
-    
+
     fsm.print_push_pop_analysis(Workflow.InterruptHandler)
     fsm.print_push_pop_analysis(Workflow.TaskExecution)
     fsm.print_push_pop_analysis(Workflow.TaskCleanup)
-  
+
     # Generate and display flowchart
     print("\nMermaid Flowchart (showing all pop targets):")
     print("-" * 40)
@@ -514,20 +551,23 @@ class Deep:
     class Level1(State):
         CONFIG = StateConfiguration()
 
-        def transitions(cls):
+        @staticmethod
+        def transitions():
             return (
                 LabeledTransition(
                     Deep.T.DIVE, Push(Deep.Level2, Deep.Shared, Deep.Level1)
                 ),
             )
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             pass
 
     class Level2(State):
         CONFIG = StateConfiguration()
 
-        def transitions(cls):
+        @staticmethod
+        def transitions():
             return (
                 LabeledTransition(
                     Deep.T.DIVE, Push(Deep.Level3, Deep.Shared, Deep.Level2)
@@ -535,31 +575,34 @@ class Deep:
                 LabeledTransition(Deep.T.SURFACE, Pop),
             )
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             pass
 
     class Level3(State):
         CONFIG = StateConfiguration()
 
-        def transitions(cls):
+        @staticmethod
+        def transitions():
             return [
                 LabeledTransition(Deep.T.SURFACE, Pop),
             ]
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             pass
 
     class Shared(State):
         CONFIG = StateConfiguration()
 
-        def transitions(cls):
+        @staticmethod
+        def transitions():
             return [
-                LabeledTransition(
-                    Deep.T.SURFACE, Pop
-                ),  # Can pop to Level1, Level2, or others
+                LabeledTransition(Deep.T.SURFACE, Pop),
             ]
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             pass
 
 
@@ -574,7 +617,7 @@ async def deep_stack_analysis():
 
     # Check Shared state - should have multiple contexts
     relationships2 = fsm2.get_push_pop_relationships()
-    shared_info = relationships2.get('enoki_example.Deep.Shared', {})
+    shared_info = relationships2.get("enoki_example.Deep.Shared", {})
     fsm2.print_push_pop_analysis()
     print(fsm2.generate_mermaid_flowchart())
 
@@ -600,14 +643,16 @@ async def example_validation_errors():
     class BrokenState(State):
         CONFIG = StateConfiguration()
 
-        def transitions(cls):
+        @staticmethod
+        def transitions():
             return [
                 LabeledTransition(
                     BrokenTransition.NADA, StateRef("nonexistent.module.BadState")
                 )
             ]
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             pass
 
     try:
@@ -620,14 +665,12 @@ async def example_validation_errors():
     class TimeoutState(State):
         CONFIG = StateConfiguration(timeout=5.0)
 
-        def transitions(cls):
-            return (
-                # Missing TIMEOUT handler - will generate warning
-                # Also, note the single returned state
-                Retry
-            )
+        @staticmethod
+        def transitions():
+            return [Retry]
 
-        async def on_state(cls, ctx: SharedContext):
+        @staticmethod
+        async def on_state(ctx: SharedContext):
             pass
 
         # Note: Missing on_timeout implementation will generate warning

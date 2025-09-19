@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# pyright: reportSelfClsParameterName=false
+
 """
 Enoki - A finite state machine framework (Asyncio Version)
 
@@ -36,6 +38,7 @@ from typing import (
     Set,
     Awaitable,
     Sequence,
+    TypeVar
 )
 import importlib
 import importlib.util, sys, os, types, inspect
@@ -254,97 +257,55 @@ class StateRef(StateTransition):
 @dataclass
 class LabeledTransition:
     label: Enum
-    transition: Type[TransitionType] | "Push"
+    transition: Type[TransitionType] | "Push" | StateRef
 
 
-class StateMeta(ABCMeta):
-    def __new__(mcs, name, bases, namespace, **kwargs):
-        # Methods that should automatically become classmethods
-        auto_classmethod_names = {
-            "transitions",
-            "on_state",
-            "on_enter",
-            "on_leave",
-            "on_fail",
-            "on_timeout",
-        }
-
-        # Convert specified methods to classmethods if they aren't already
-        for method_name in auto_classmethod_names:
-            if method_name in namespace:
-                method = namespace[method_name]
-                # Only convert if it's not already a classmethod/staticmethod
-                if not isinstance(method, (classmethod, staticmethod)):
-                    # If it's an abstractmethod, we need to handle it specially
-                    if (
-                        hasattr(method, "__isabstractmethod__")
-                        and method.__isabstractmethod__
-                    ):
-                        # Create classmethod first, then make it abstract
-                        new_method = classmethod(
-                            abstractmethod(
-                                method.__func__
-                                if hasattr(method, "__func__")
-                                else method
-                            )
-                        )
-                    else:
-                        new_method = classmethod(method)
-                    namespace[method_name] = new_method
-
-        # Also auto-convert any private methods (starting with _)
-        for key, value in list(namespace.items()):
-            if (
-                key.startswith("_")
-                and callable(value)
-                and not isinstance(value, (classmethod, staticmethod))
-                and not key.startswith("__")
-            ):
-                namespace[key] = classmethod(value)
-
-        return super().__new__(mcs, name, bases, namespace)
-
-
-class State(StateTransition, ABC, metaclass=StateMeta):
+class State(StateTransition, ABC):
     """Base class for states"""
 
     CONFIG = StateConfiguration()
 
+    @staticmethod
     @abstractmethod
-    def transitions(
-        cls,
-    ) -> Sequence[Union[LabeledTransition, TransitionType, Type[TransitionType]]]:
+    def transitions() -> (
+        Sequence[Union[LabeledTransition, TransitionType, Type[TransitionType]]]
+    ):
         """Returns mapping of transition enums to their targets"""
         return list()
 
+    @staticmethod
     @abstractmethod
     async def on_state(
-        cls, ctx: SharedContext
+        ctx: SharedContext,
     ) -> Union[
         "State", None, TransitionType, Type[TransitionType], LabeledTransition, Enum
     ]:
         """Main state logic"""
         pass
 
-    async def on_enter(cls, ctx: SharedContext) -> None:
+    @staticmethod
+    async def on_enter(ctx: SharedContext) -> None:
         """Called when entering the state"""
         pass
 
-    async def on_leave(cls, ctx: SharedContext) -> None:
+    @staticmethod
+    async def on_leave(ctx: SharedContext) -> None:
         """Called when leaving the state"""
         pass
 
+    @staticmethod
     async def on_fail(
-        cls, ctx: SharedContext
+        ctx: SharedContext,
     ) -> Union[
         "State", None, TransitionType, Type[TransitionType], LabeledTransition, Enum
     ]:
         """Called when retry limit is exceeded"""
         pass
 
+    @staticmethod
     @abstractmethod
     async def on_timeout(
-        cls, ctx: SharedContext
+        ctx: SharedContext,
     ) -> Union[
         "State", None, TransitionType, Type[TransitionType], LabeledTransition, Enum
     ]:
@@ -383,14 +344,16 @@ class State(StateTransition, ABC, metaclass=StateMeta):
         """Returns just the class name without module path"""
         return cls.__qualname__.split(".")[-1]
 
+StateVar = TypeVar('StateVar', bound=State)
+
 
 @dataclass(init=False)
 class Push(StateTransition):
     """Represents pushing states onto the stack"""
 
-    push_states: list[type[State]]
+    push_states: Sequence[Type[State]]
 
-    def __init__(self, *push_states: list[type[State]]):
+    def __init__(self, *push_states: Type[State]):
         self.push_states = push_states
 
     def __hash__(self):
@@ -722,7 +685,7 @@ class StateMachine:
     def __init__(
         self,
         initial_state: Union[str, Type[State]],
-        error_state: Union[str, Type[State]] = None,
+        error_state: Union[str, Type[State]] = DefaultStates.Error,
         filter_fn: Optional[callable] = None,
         trap_fn: Optional[callable] = None,
         on_error_fn=None,
@@ -1332,7 +1295,7 @@ class StateMachine:
         if transition in valid_transitions:
             target = valid_transitions.get(transition, None)
         elif transition in valid_transitions.values():
-            target = transition  
+            target = transition
         else:
             raise ValueError(
                 f"ERROR: Unknown transition {transition}: {valid_transitions}"
