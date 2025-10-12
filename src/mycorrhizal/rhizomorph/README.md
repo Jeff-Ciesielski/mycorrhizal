@@ -12,37 +12,35 @@ Asyncio-friendly **Behavior Trees** for Python, designed for clarity, composabil
 ---
 
 ## Quick Example
-
 ```python
-from types import SimpleNamespace
-from rhizomorph.core import bt, Tree, Runner, Status  # adjust import path as needed
+from rhizomorph.core import bt, Runner, Status
 
-class Patrol(Tree):
-    @bt.condition
-    def has_waypoints(bb) -> bool:
-        return getattr(bb, "waypoints", 0) > 0
+class BB:
+    def __init__(self, waypoints):
+        self.waypoints = waypoints
 
+@bt.tree
+def Patrol():
     @bt.action
-    async def go_to_next(bb) -> Status:
-        # pretend this takes a few ticks
+    async def go_to_next(bb):
         if bb.waypoints <= 0:
             return Status.SUCCESS
         bb.waypoints -= 1
         return Status.RUNNING if bb.waypoints > 0 else Status.SUCCESS
 
+    @bt.condition
+    def has_waypoints(bb):
+        return getattr(bb, "waypoints", 0) > 0
+
+    @bt.root
     @bt.sequence(memory=True)
-    def Root(N):
+    def root(N):
         yield N.has_waypoints
-        # left→right: timeout(1.0) applied to go_to_next
         yield bt.timeout(1.0)(N.go_to_next)
 
-    ROOT = Root
-
-# runner.py
 async def main():
-    bb = SimpleNamespace(waypoints=3)
+    bb = BB(waypoints=3)
     runner = Runner(Patrol, bb=bb)
-
     while True:
         status = await runner.tick()
         print("Status:", status.name, "remaining:", bb.waypoints)
@@ -55,6 +53,10 @@ async def main():
 ## Fluent Decorator Chains
 
 Decorator wrappers are available via **fluent chains** that read left→right and apply to a child when called at the end:
+
+```python
+yield bt.failer().gate(N.battery_ok).timeout(0.25)(N.engage)
+```
 
 ```python
 yield bt.failer().gate(N.battery_ok).timeout(0.25)(N.engage)
@@ -106,12 +108,12 @@ Define composites as **generator factories** that yield children. The factory re
   - All `SUCCESS` → `SUCCESS`.  
   - With `memory=True`, on a subsequent tick it **resumes from the last RUNNING child**. With `memory=False`, it restarts from the first child each tick.
 
-- `@bt.selector(memory: bool = True, reactive: bool = False)`  
+- `@bt.selector(memory: bool = True)`  
   **OR**: ticks children until one returns `SUCCESS`.  
   - `RUNNING` bubbles (and may set/resume index depending on `memory`/`reactive`).  
   - If none succeed → `FAILURE`.  
   - With `memory=True`, the selector **remembers the last RUNNING child** and resumes there next tick.  
-  - With `reactive=True`, the selector **always restarts from the first child each tick** (ignoring the memory index). This is helpful when higher-priority options may become available and should preempt lower-priority ones.
+
 
 - `@bt.parallel(success_threshold: int, failure_threshold: Optional[int] = None)`  
   Ticks all children concurrently per tick.  
@@ -134,31 +136,40 @@ Inside diagramming and building, composites are expanded with the correct **owne
 **Example**
 
 ```python
-class Engage(Tree):
+# Engage subtree
+@bt.tree
+def Engage():
     @bt.condition
-    def threat_detected(bb) -> bool: ...
+    def threat_detected(bb): ...
+
     @bt.action
-    async def engage(bb) -> Status: ...
+    def engage(bb): ...
+
+    @bt.root
     @bt.sequence(memory=False)
-    def Root(N):
+    def engage_threat(N):
         yield N.threat_detected
         yield bt.failer().timeout(0.25)(N.engage)
-    ROOT = Root
 
-class Telemetry(Tree):
+# Telemetry subtree
+@bt.tree
+def Telemetry():
     @bt.action
-    async def push(bb) -> Status: ...
-    @bt.sequence()
-    def Root(N):
-        yield bt.ratelimit(hz=2.0)(N.push)
-    ROOT = Root
+    def push(bb): ...
 
-class Main(Tree):
+    @bt.root
+    @bt.sequence()
+    def telemetry_seq(N):
+        yield bt.ratelimit(hz=2.0)(N.push)
+
+# Main tree
+@bt.tree
+def Main():
+    @bt.root
     @bt.selector(reactive=True, memory=True)
-    def Root(N):
+    def root(N):
         yield bt.subtree(Engage)
-        yield bt.bind(Telemetry, Telemetry.Root)
-    ROOT = Root
+        yield bt.bind(Telemetry, Telemetry.telemetry_seq)
 ```
 
 ---
@@ -166,12 +177,16 @@ class Main(Tree):
 ## Mermaid Export
 
 ```python
-from rhizomorph.core import to_mermaid, bt
-from main import Main
+from rhizomorph.core import bt
 
-diagram = to_mermaid(bt._as_spec(Main.ROOT), owner_cls=Main)
+@bt.tree
+def MainTree():
+  ...
+
+diagram = MainTree.to_mermaid()
 print(diagram)
 ```
+
 Paste the output into the Mermaid Live Editor.
 
 ---
@@ -181,9 +196,9 @@ Paste the output into the Mermaid Live Editor.
 
 ## Runner & Tree
 
-- `class Tree` — container for `@bt.action`, `@bt.condition`, and composite factories. Set `ROOT` to a composite or spec.  
-  - `Tree.build()` builds the executable root node.  
-- `class Runner(tree_cls, bb=None, tb=None)` — ticks the tree.  
+
+- **Tree** — a plain namespace (e.g., from `bt.tree(lambda: None)`) holding your decorated functions and a `root` composite.  
+- **Runner(tree, bb=None, tb=None)** — ticks the tree.  
   - `await runner.tick()` — ticks once; advances the timebase if it supports `.advance()`.  
   - `await runner.tick_until_complete(timeout: Optional[float]=None)` — loops until terminal status or timeout.
 

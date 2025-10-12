@@ -7,13 +7,19 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
+import traceback
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union, Set
+from typing import Any, Callable, Dict, Generator, Generic, List, Optional, Tuple, TypeVar, Union, Set
 from typing import Sequence as SequenceT
 from types import SimpleNamespace
 
 from mycorrhizal.common.timebase import *
+
+logger = logging.getLogger(__name__)
+
+BB = TypeVar('BB')
 
 
 # ======================================================================================
@@ -27,6 +33,12 @@ class Status(Enum):
     RUNNING = 3
     CANCELLED = 4
     ERROR = 5
+
+
+class ExceptionPolicy(Enum):
+    """Policy for handling exceptions in action/condition nodes."""
+    LOG_AND_CONTINUE = 1
+    PROPAGATE = 2
 
 
 def _name_of(obj: Any) -> str:
@@ -52,36 +64,39 @@ class RecursionError(Exception):
 # ======================================================================================
 
 
-class Node:
+class Node(Generic[BB]):
     """Abstract BT node; override `tick` and (optionally) lifecycle hooks."""
 
-    def __init__(self, name: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        name: Optional[str] = None,
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE
+    ) -> None:
         self.name: str = name or _name_of(self)
-        self.parent: Optional[Node] = None
+        self.parent: Optional[Node[BB]] = None
+        self.exception_policy = exception_policy
         self._entered: bool = False
         self._last_status: Optional[Status] = None
 
-    async def tick(self, bb: Any, tb: Timebase) -> Status:
+    async def tick(self, bb: BB, tb: Timebase) -> Status:
         raise NotImplementedError
 
-    async def on_enter(self, bb: Any, tb: Timebase) -> None:
-        # print(f"Entering: {self.name}")
+    async def on_enter(self, bb: BB, tb: Timebase) -> None:
         return
 
-    async def on_exit(self, bb: Any, status: Status, tb: Timebase) -> None:
-        # print(f"Exiting: {self.name} | {status}")
+    async def on_exit(self, bb: BB, status: Status, tb: Timebase) -> None:
         return
 
     def reset(self) -> None:
         self._entered = False
         self._last_status = None
 
-    async def _ensure_entered(self, bb: Any, tb: Timebase) -> None:
+    async def _ensure_entered(self, bb: BB, tb: Timebase) -> None:
         if not self._entered:
             await self.on_enter(bb, tb)
             self._entered = True
 
-    async def _finish(self, bb: Any, status: Status, tb: Timebase) -> Status:
+    async def _finish(self, bb: BB, status: Status, tb: Timebase) -> Status:
         self._last_status = status
         if status is not Status.RUNNING:
             try:
@@ -96,14 +111,18 @@ class Node:
 # ======================================================================================
 
 
-class Action(Node):
+class Action(Node[BB]):
     """Leaf wrapping a sync/async function -> Status | bool | None."""
 
-    def __init__(self, func: Callable[..., Any]) -> None:
-        super().__init__(name=_name_of(func))
+    def __init__(
+        self,
+        func: Callable[[BB], Any],
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE
+    ) -> None:
+        super().__init__(name=_name_of(func), exception_policy=exception_policy)
         self._func = func
 
-    async def tick(self, bb: Any, tb: Timebase) -> Status:
+    async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
         try:
             result = (
@@ -113,7 +132,12 @@ class Action(Node):
             )
         except asyncio.CancelledError:
             return await self._finish(bb, Status.CANCELLED, tb)
-        except Exception:
+        except Exception as e:
+            logger.error(
+                f"Exception in Action '{self.name}':\n{traceback.format_exc()}"
+            )
+            if self.exception_policy == ExceptionPolicy.PROPAGATE:
+                raise
             return await self._finish(bb, Status.ERROR, tb)
 
         if isinstance(result, Status):
@@ -123,10 +147,10 @@ class Action(Node):
         return await self._finish(bb, Status.SUCCESS, tb)
 
 
-class Condition(Action):
+class Condition(Action[BB]):
     """Boolean leaf: True→SUCCESS, False→FAILURE (Status accepted but discouraged)."""
 
-    async def tick(self, bb: Any, tb: Timebase) -> Status:
+    async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
         try:
             result = (
@@ -136,7 +160,12 @@ class Condition(Action):
             )
         except asyncio.CancelledError:
             return await self._finish(bb, Status.CANCELLED, tb)
-        except Exception:
+        except Exception as e:
+            logger.error(
+                f"Exception in Condition '{self.name}':\n{traceback.format_exc()}"
+            )
+            if self.exception_policy == ExceptionPolicy.PROPAGATE:
+                raise
             return await self._finish(bb, Status.ERROR, tb)
 
         if isinstance(result, Status):
@@ -151,17 +180,18 @@ class Condition(Action):
 # ======================================================================================
 
 
-class Sequence(Node):
+class Sequence(Node[BB]):
     """Sequence (AND): fail/err fast; RUNNING bubbles; all SUCCESS → SUCCESS."""
 
     def __init__(
         self,
-        children: SequenceT[Node],
+        children: SequenceT[Node[BB]],
         *,
         memory: bool = True,
         name: Optional[str] = None,
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE
     ) -> None:
-        super().__init__(name or "Sequence")
+        super().__init__(name or "Sequence", exception_policy=exception_policy)
         self.children = list(children)
         for ch in self.children:
             ch.parent = self
@@ -174,7 +204,7 @@ class Sequence(Node):
         for ch in self.children:
             ch.reset()
 
-    async def tick(self, bb: Any, tb: Timebase) -> Status:
+    async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
         start = self._idx if self.memory else 0
         for i in range(start, len(self.children)):
@@ -190,23 +220,22 @@ class Sequence(Node):
         return await self._finish(bb, Status.SUCCESS, tb)
 
 
-class Selector(Node):
+class Selector(Node[BB]):
     """Selector (Fallback): first SUCCESS wins; RUNNING bubbles; else FAILURE."""
 
     def __init__(
         self,
-        children: SequenceT[Node],
+        children: SequenceT[Node[BB]],
         *,
         memory: bool = True,
-        reactive: bool = False,
         name: Optional[str] = None,
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE
     ) -> None:
-        super().__init__(name or "Selector")
+        super().__init__(name or "Selector", exception_policy=exception_policy)
         self.children = list(children)
         for ch in self.children:
             ch.parent = self
         self.memory = memory
-        self.reactive = reactive
         self._idx = 0
 
     def reset(self) -> None:
@@ -215,23 +244,23 @@ class Selector(Node):
         for ch in self.children:
             ch.reset()
 
-    async def tick(self, bb: Any, tb: Timebase) -> Status:
+    async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
-        start = 0 if self.reactive else (self._idx if self.memory else 0)
+        start = (self._idx if self.memory else 0)
         for i in range(start, len(self.children)):
             st = await self.children[i].tick(bb, tb)
             if st is Status.SUCCESS:
                 self._idx = 0
                 return await self._finish(bb, Status.SUCCESS, tb)
             if st is Status.RUNNING:
-                if self.memory and not self.reactive:
+                if self.memory:
                     self._idx = i
                 return Status.RUNNING
         self._idx = 0
         return await self._finish(bb, Status.FAILURE, tb)
 
 
-class Parallel(Node):
+class Parallel(Node[BB]):
     """
     Parallel: tick all children per tick concurrently.
     - success_threshold (k) SUCCESS to report SUCCESS
@@ -241,13 +270,14 @@ class Parallel(Node):
 
     def __init__(
         self,
-        children: SequenceT[Node],
+        children: SequenceT[Node[BB]],
         *,
         success_threshold: int,
         failure_threshold: Optional[int] = None,
         name: Optional[str] = None,
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE
     ) -> None:
-        super().__init__(name or "Parallel")
+        super().__init__(name or "Parallel", exception_policy=exception_policy)
         self.children = list(children)
         for ch in self.children:
             ch.parent = self
@@ -264,7 +294,7 @@ class Parallel(Node):
         for ch in self.children:
             ch.reset()
 
-    async def tick(self, bb: Any, tb: Timebase) -> Status:
+    async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
         tasks = [asyncio.create_task(ch.tick(bb, tb)) for ch in self.children]
         try:
@@ -287,9 +317,14 @@ class Parallel(Node):
 # ======================================================================================
 
 
-class Inverter(Node):
-    def __init__(self, child: Node, name: Optional[str] = None) -> None:
-        super().__init__(name or f"Inverter({_name_of(child)})")
+class Inverter(Node[BB]):
+    def __init__(
+        self,
+        child: Node[BB],
+        name: Optional[str] = None,
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE
+    ) -> None:
+        super().__init__(name or f"Inverter({_name_of(child)})", exception_policy=exception_policy)
         self.child = child
         self.child.parent = self
 
@@ -297,7 +332,7 @@ class Inverter(Node):
         super().reset()
         self.child.reset()
 
-    async def tick(self, bb: Any, tb: Timebase) -> Status:
+    async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
         st = await self.child.tick(bb, tb)
         if st is Status.SUCCESS:
@@ -307,16 +342,17 @@ class Inverter(Node):
         return st
 
 
-class Retry(Node):
+class Retry(Node[BB]):
     def __init__(
         self,
-        child: Node,
+        child: Node[BB],
         *,
         max_attempts: int,
         retry_on: Tuple[Status, ...] = (Status.FAILURE, Status.ERROR),
         name: Optional[str] = None,
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE
     ) -> None:
-        super().__init__(name or f"Retry({_name_of(child)},{max_attempts})")
+        super().__init__(name or f"Retry({_name_of(child)},{max_attempts})", exception_policy=exception_policy)
         self.child = child
         self.child.parent = self
         self.max_attempts = max(1, int(max_attempts))
@@ -328,7 +364,7 @@ class Retry(Node):
         self._attempt = 0
         self.child.reset()
 
-    async def tick(self, bb: Any, tb: Timebase) -> Status:
+    async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
         st = await self.child.tick(bb, tb)
         if st is Status.RUNNING:
@@ -336,7 +372,6 @@ class Retry(Node):
         if st is Status.SUCCESS:
             self._attempt = 0
             return await self._finish(bb, Status.SUCCESS, tb)
-        # failure-like
         self._attempt += 1
         if st in self.retry_on and self._attempt < self.max_attempts:
             self.child.reset()
@@ -345,11 +380,16 @@ class Retry(Node):
         return await self._finish(bb, Status.FAILURE, tb)
 
 
-class Timeout(Node):
+class Timeout(Node[BB]):
     def __init__(
-        self, child: Node, *, seconds: float, name: Optional[str] = None
+        self,
+        child: Node[BB],
+        *,
+        seconds: float,
+        name: Optional[str] = None,
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE
     ) -> None:
-        super().__init__(name or f"Timeout({_name_of(child)},{seconds}s)")
+        super().__init__(name or f"Timeout({_name_of(child)},{seconds}s)", exception_policy=exception_policy)
         self.child = child
         self.child.parent = self
         self.seconds = max(0.0, float(seconds))
@@ -360,10 +400,10 @@ class Timeout(Node):
         self._deadline = None
         self.child.reset()
 
-    async def on_enter(self, bb: Any, tb: Timebase) -> None:
+    async def on_enter(self, bb: BB, tb: Timebase) -> None:
         self._deadline = tb.now() + self.seconds
 
-    async def tick(self, bb: Any, tb: Timebase) -> Status:
+    async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
         if self._deadline is None:
             self._deadline = tb.now() + self.seconds
@@ -376,9 +416,14 @@ class Timeout(Node):
         return await self._finish(bb, st, tb)
 
 
-class Succeeder(Node):
-    def __init__(self, child: Node, name: Optional[str] = None) -> None:
-        super().__init__(name or f"Succeeder({_name_of(child)})")
+class Succeeder(Node[BB]):
+    def __init__(
+        self,
+        child: Node[BB],
+        name: Optional[str] = None,
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE
+    ) -> None:
+        super().__init__(name or f"Succeeder({_name_of(child)})", exception_policy=exception_policy)
         self.child = child
         self.child.parent = self
 
@@ -386,7 +431,7 @@ class Succeeder(Node):
         super().reset()
         self.child.reset()
 
-    async def tick(self, bb: Any, tb: Timebase) -> Status:
+    async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
         st = await self.child.tick(bb, tb)
         if st is Status.RUNNING:
@@ -394,9 +439,14 @@ class Succeeder(Node):
         return await self._finish(bb, Status.SUCCESS, tb)
 
 
-class Failer(Node):
-    def __init__(self, child: Node, name: Optional[str] = None) -> None:
-        super().__init__(name or f"Failer({_name_of(child)})")
+class Failer(Node[BB]):
+    def __init__(
+        self,
+        child: Node[BB],
+        name: Optional[str] = None,
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE
+    ) -> None:
+        super().__init__(name or f"Failer({_name_of(child)})", exception_policy=exception_policy)
         self.child = child
         self.child.parent = self
 
@@ -404,7 +454,7 @@ class Failer(Node):
         super().reset()
         self.child.reset()
 
-    async def tick(self, bb: Any, tb: Timebase) -> Status:
+    async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
         st = await self.child.tick(bb, tb)
         if st is Status.RUNNING:
@@ -412,7 +462,7 @@ class Failer(Node):
         return await self._finish(bb, Status.FAILURE, tb)
 
 
-class RateLimit(Node):
+class RateLimit(Node[BB]):
     """
     Throttle *starting* the child to at most 1 per period (or hz).
     If child is RUNNING, do not throttle (avoid starvation).
@@ -420,11 +470,12 @@ class RateLimit(Node):
 
     def __init__(
         self,
-        child: Node,
+        child: Node[BB],
         *,
         hz: Optional[float] = None,
         period: Optional[float] = None,
         name: Optional[str] = None,
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE
     ) -> None:
         if (hz is not None) and (period is not None):
             raise ValueError("RateLimit requires exactly one of (hz, period)")
@@ -436,7 +487,7 @@ class RateLimit(Node):
         else:
             raise ValueError("RateLimit requires exactly one of (hz, period)")
 
-        super().__init__(name or f"RateLimit({_name_of(child)},{per:.6f}s)")
+        super().__init__(name or f"RateLimit({_name_of(child)},{per:.6f}s)", exception_policy=exception_policy)
         self.child = child
         self.child.parent = self
         self._period = max(0.0, per)
@@ -449,7 +500,7 @@ class RateLimit(Node):
         self._last = None
         self.child.reset()
 
-    async def tick(self, bb: Any, tb: Timebase) -> Status:
+    async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
         if self._last is Status.RUNNING:
             st = await self.child.tick(bb, tb)
@@ -461,7 +512,7 @@ class RateLimit(Node):
 
         now = tb.now()
         if self._next_allowed is not None and now < self._next_allowed:
-            return Status.RUNNING  # throttled
+            return Status.RUNNING
         st = await self.child.tick(bb, tb)
         self._last = st
         if st is Status.RUNNING:
@@ -470,7 +521,7 @@ class RateLimit(Node):
         return await self._finish(bb, st, tb)
 
 
-class Gate(Node):
+class Gate(Node[BB]):
     """
     Guard a child with a condition:
       SUCCESS → tick child
@@ -479,10 +530,15 @@ class Gate(Node):
     """
 
     def __init__(
-        self, condition: Node, child: Node, name: Optional[str] = None
+        self,
+        condition: Node[BB],
+        child: Node[BB],
+        name: Optional[str] = None,
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE
     ) -> None:
         super().__init__(
-            name or f"Gate(cond={_name_of(condition)}, child={_name_of(child)})"
+            name or f"Gate(cond={_name_of(condition)}, child={_name_of(child)})",
+            exception_policy=exception_policy
         )
         self.condition = condition
         self.child = child
@@ -494,7 +550,7 @@ class Gate(Node):
         self.condition.reset()
         self.child.reset()
 
-    async def tick(self, bb: Any, tb: Timebase) -> Status:
+    async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
         c = await self.condition.tick(bb, tb)
         if c is Status.RUNNING:
@@ -520,46 +576,48 @@ class NodeSpecKind(Enum):
     PARALLEL = "parallel"
     DECORATOR = "decorator"
     SUBTREE = "subtree"
-    BIND = "bind"
 
 
 @dataclass
 class NodeSpec:
     kind: NodeSpecKind
     name: str
-    payload: Any = (
-        None  # leaf func / composite config (incl. factory) / decorator builder
-    )
+    payload: Any = None
     children: List["NodeSpec"] = field(default_factory=list)
 
     def __hash__(self):
         return hash((self.kind, self.name, id(self.payload), tuple(self.children)))
 
-    def to_node(self, owner_cls: Optional[type] = None) -> Node:
+    def to_node(
+        self,
+        owner: Optional[Any] = None,
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE
+    ) -> Node[Any]:
         match self.kind:
             case NodeSpecKind.ACTION:
-                return Action(self.payload)
+                return Action(self.payload, exception_policy=exception_policy)
             case NodeSpecKind.CONDITION:
-                return Condition(self.payload)
+                return Condition(self.payload, exception_policy=exception_policy)
             case NodeSpecKind.SEQUENCE | NodeSpecKind.SELECTOR | NodeSpecKind.PARALLEL:
-                owner_effective = getattr(self, "_owner_cls", None) or owner_cls
+                owner_effective = getattr(self, "owner", None) or owner
                 factory = self.payload["factory"]
-                expanded = _bt_expand_children_with_owner(factory, owner_effective)
-                self.children = expanded  # cache for exporter
-                built = [ch.to_node(owner_effective) for ch in expanded]
+                expanded = _bt_expand_children(factory, owner_effective)
+                self.children = expanded
+                built = [ch.to_node(owner_effective, exception_policy) for ch in expanded]
                 match self.kind:
                     case NodeSpecKind.SEQUENCE:
                         return Sequence(
                             built,
                             memory=self.payload.get("memory", True),
                             name=self.name,
+                            exception_policy=exception_policy,
                         )
                     case NodeSpecKind.SELECTOR:
                         return Selector(
                             built,
                             memory=self.payload.get("memory", True),
-                            reactive=self.payload.get("reactive", False),
                             name=self.name,
+                            exception_policy=exception_policy,
                         )
                     case NodeSpecKind.PARALLEL:
                         return Parallel(
@@ -567,54 +625,40 @@ class NodeSpec:
                             success_threshold=self.payload["success_threshold"],
                             failure_threshold=self.payload.get("failure_threshold"),
                             name=self.name,
+                            exception_policy=exception_policy,
                         )
 
             case NodeSpecKind.DECORATOR:
                 assert len(self.children) == 1, "Decorator must wrap exactly one child"
-                child_node = self.children[0].to_node(owner_cls)
+                child_node = self.children[0].to_node(owner, exception_policy)
                 builder = self.payload
-                try:
-                    if len(inspect.signature(builder).parameters) == 2:
-                        return builder(child_node, owner_cls)
-                except (TypeError, ValueError):
-                    pass
                 return builder(child_node)
 
             case NodeSpecKind.SUBTREE:
-                tree_cls = self.payload["tree_cls"]
-                return tree_cls.build()
-
-            case NodeSpecKind.BIND:
-                base = self.payload["spec"]
-                owner = self.payload["owner"]
-                return base.to_node(owner_cls=owner)
+                subtree_root = self.payload["root"]
+                return subtree_root.to_node(exception_policy=exception_policy)
             case _:
                 raise ValueError(f"Unknown spec kind: {self.kind}")
 
 
-def _bt_expand_children_with_owner(
+def _bt_expand_children(
     factory: Callable[..., Generator[Any, None, None]],
-    owner_cls: Optional[type],
+    owner: Optional[Any],
     expansion_stack: Optional[Set[str]] = None,
 ) -> List[NodeSpec]:
     """
-    Execute a composite factory *after* class construction.
-    Convention: factory accepts one positional arg 'N' = owner class.
-    Users should write: def Root(N): yield N.Child, yield N.leaf, ...
-
+    Execute a composite factory to get child specs.
+    
     Args:
         factory: The generator function that yields child specs
-        owner_cls: The owner class for resolving N references
+        owner: The namespace object for resolving N references
         expansion_stack: Stack of factory names to detect recursion
     """
-    # Initialize recursion detection stack
     if expansion_stack is None:
         expansion_stack = set()
 
-    # Check for recursion
     factory_name = _name_of(factory)
     if factory_name in expansion_stack:
-        # Build recursion chain for error message
         chain = " -> ".join(expansion_stack) + f" -> {factory_name}"
         raise RecursionError(
             f"Recursive behavior tree structure detected: {chain}\n"
@@ -625,14 +669,13 @@ def _bt_expand_children_with_owner(
             f"  - State in the blackboard to track progress"
         )
 
-    # Add current factory to stack
     expansion_stack = expansion_stack.copy()
     expansion_stack.add(factory_name)
 
     try:
-        gen = factory(owner_cls)
+        gen = factory(owner)
     except TypeError:
-        gen = factory()  # allow zero-arg factories too
+        gen = factory()
 
     if not inspect.isgenerator(gen):
         raise TypeError(
@@ -643,41 +686,33 @@ def _bt_expand_children_with_owner(
     for yielded in gen:
         if isinstance(yielded, (list, tuple)):
             for y in yielded:
-                spec = bt._as_spec(y)
-                # Pass the expansion stack down for recursive checking
+                spec = bt.as_spec(y)
                 if (
                     hasattr(spec, "payload")
                     and isinstance(spec.payload, dict)
                     and "factory" in spec.payload
                 ):
-                    # Mark the spec with the current expansion stack for later expansion
                     spec._expansion_stack = expansion_stack
                 out.append(spec)
             continue
-        spec = bt._as_spec(yielded)
-        # Pass the expansion stack down for recursive checking
+        spec = bt.as_spec(yielded)
         if (
             hasattr(spec, "payload")
             and isinstance(spec.payload, dict)
             and "factory" in spec.payload
         ):
-            # Mark the spec with the current expansion stack for later expansion
             spec._expansion_stack = expansion_stack
         out.append(spec)
 
-    # For any child specs that are composites, we need to check them now
     for spec in out:
         if spec.kind in (
             NodeSpecKind.SEQUENCE,
             NodeSpecKind.SELECTOR,
             NodeSpecKind.PARALLEL,
         ) and hasattr(spec, "_expansion_stack"):
-            # Eagerly expand to detect recursion early
             child_factory = spec.payload["factory"]
-            child_owner = getattr(spec, "_owner_cls", None) or owner_cls
-            _bt_expand_children_with_owner(
-                child_factory, child_owner, spec._expansion_stack
-            )
+            child_owner = getattr(spec, "owner", None) or owner
+            _bt_expand_children(child_factory, child_owner, spec._expansion_stack)
 
     return out
 
@@ -691,8 +726,8 @@ class _WrapperChain:
     """
     Fluent factory for decorator stacks that read left→right.
 
-        chain = bt.pipe().failer().gate(N.battery_ok).timeout(0.12)
-        yield chain(N.engage)
+        chain = bt.failer().gate(battery_ok).timeout(0.12)
+        yield chain(engage)
     """
 
     def __init__(
@@ -708,19 +743,18 @@ class _WrapperChain:
         self._labels.append(label)
         return self
 
-    # chainable steps (builders accept (child[, owner]))
     def failer(self) -> "_WrapperChain":
-        return self._append("Failer", lambda ch, owner=None: Failer(ch))
+        return self._append("Failer", lambda ch: Failer(ch))
 
     def succeeder(self) -> "_WrapperChain":
-        return self._append("Succeeder", lambda ch, owner=None: Succeeder(ch))
+        return self._append("Succeeder", lambda ch: Succeeder(ch))
 
     def inverter(self) -> "_WrapperChain":
-        return self._append("Inverter", lambda ch, owner=None: Inverter(ch))
+        return self._append("Inverter", lambda ch: Inverter(ch))
 
     def timeout(self, seconds: float) -> "_WrapperChain":
         return self._append(
-            f"Timeout({seconds}s)", lambda ch, owner=None: Timeout(ch, seconds=seconds)
+            f"Timeout({seconds}s)", lambda ch: Timeout(ch, seconds=seconds)
         )
 
     def retry(
@@ -730,9 +764,7 @@ class _WrapperChain:
     ) -> "_WrapperChain":
         return self._append(
             f"Retry({max_attempts})",
-            lambda ch, owner=None: Retry(
-                ch, max_attempts=max_attempts, retry_on=retry_on
-            ),
+            lambda ch: Retry(ch, max_attempts=max_attempts, retry_on=retry_on),
         )
 
     def ratelimit(
@@ -744,35 +776,35 @@ class _WrapperChain:
         elif period is not None:
             label = f"RateLimit({float(period):.6f}s)"
         return self._append(
-            label, lambda ch, owner=None: RateLimit(ch, hz=hz, period=period)
+            label, lambda ch: RateLimit(ch, hz=hz, period=period)
         )
 
     def gate(
-        self, condition_spec_or_fn: Union["NodeSpec", Callable[..., Any]]
+        self, condition_spec_or_fn: Union["NodeSpec", Callable[[Any], Any]]
     ) -> "_WrapperChain":
-        cond_spec = bt._as_spec(condition_spec_or_fn)
+        cond_spec = bt.as_spec(condition_spec_or_fn)
         return self._append(
             f"Gate(cond={_name_of(cond_spec)})",
-            lambda ch, owner=None: Gate(cond_spec.to_node(owner_cls=owner), ch),
+            lambda ch: Gate(cond_spec.to_node(), ch),
         )
 
-    def __call__(self, inner: Union["NodeSpec", Callable[..., Any]]) -> "NodeSpec":
+    def __call__(self, inner: Union["NodeSpec", Callable[[Any], Any]]) -> "NodeSpec":
         """
         Apply the chain to a child spec → nested decorator NodeSpecs.
         Left→right call order becomes outermost→…→innermost when built.
         """
-        spec = bt._as_spec(inner)
+        spec = bt.as_spec(inner)
         result = spec
         for label, builder in reversed(list(zip(self._labels, self._builders))):
             result = NodeSpec(
                 kind=NodeSpecKind.DECORATOR,
                 name=f"{label}({_name_of(result)})",
-                payload=builder,  # builder(child[, owner])
+                payload=builder,
                 children=[result],
             )
         return result
 
-    def __rshift__(self, inner: Union["NodeSpec", Callable[..., Any]]) -> "NodeSpec":
+    def __rshift__(self, inner: Union["NodeSpec", Callable[[Any], Any]]) -> "NodeSpec":
         return self(inner)
 
 
@@ -784,54 +816,60 @@ class _WrapperChain:
 class _BT:
     """User-facing decorator/constructor namespace."""
     
-    # Utility helpers
+    def __init__(self):
+        self._tracking_stack: List[List[Tuple[str, Any]]] = []
     
-    # Sets the ROOT of the current tree to the decorated function
-    def root(self, spec_or_fn: Union["NodeSpec", Callable[..., Any]]) -> "NodeSpec":
-        spec = self._as_spec(spec_or_fn)
-        setattr(spec, "_is_root_spec", True)
-        return spec
-
-    # Leaves
-    def action(self, fn: Callable[..., Any]) -> NodeSpec:
+    def action(self, fn: Callable[[BB], Any]) -> Callable[[BB], Any]:
+        """Decorator to mark a function as an action node."""
         spec = NodeSpec(kind=NodeSpecKind.ACTION, name=_name_of(fn), payload=fn)
-        setattr(fn, "_node_spec", spec)
-        return spec
+        fn.node_spec = spec
+        if self._tracking_stack:
+            self._tracking_stack[-1].append((fn.__name__, fn))
+        return fn
 
-    def condition(self, fn: Callable[..., Any]) -> NodeSpec:
+    def condition(self, fn: Callable[[BB], Any]) -> Callable[[BB], Any]:
+        """Decorator to mark a function as a condition node."""
         spec = NodeSpec(kind=NodeSpecKind.CONDITION, name=_name_of(fn), payload=fn)
-        setattr(fn, "_node_spec", spec)
-        return spec
+        fn.node_spec = spec
+        if self._tracking_stack:
+            self._tracking_stack[-1].append((fn.__name__, fn))
+        return fn
 
-    # Composites (store factory; expand later with owner)
     def sequence(self, *, memory: bool = True):
-        def deco(factory: Callable[..., Generator[Any, None, None]]) -> NodeSpec:
+        """Decorator to mark a generator function as a sequence composite."""
+        def deco(factory: Callable[..., Generator[Any, None, None]]) -> Callable[..., Generator[Any, None, None]]:
             spec = NodeSpec(
                 kind=NodeSpecKind.SEQUENCE,
                 name=_name_of(factory),
                 payload={"factory": factory, "memory": memory},
             )
-            setattr(factory, "_node_spec", spec)
-            return spec
+            factory.node_spec = spec
+            if self._tracking_stack:
+                self._tracking_stack[-1].append((factory.__name__, factory))
+            return factory
 
         return deco
 
     def selector(self, *, memory: bool = True, reactive: bool = False):
-        def deco(factory: Callable[..., Generator[Any, None, None]]) -> NodeSpec:
+        """Decorator to mark a generator function as a selector composite."""
+        def deco(factory: Callable[..., Generator[Any, None, None]]) -> Callable[..., Generator[Any, None, None]]:
             spec = NodeSpec(
                 kind=NodeSpecKind.SELECTOR,
                 name=_name_of(factory),
                 payload={"factory": factory, "memory": memory, "reactive": reactive},
             )
-            setattr(factory, "_node_spec", spec)
-            return spec
+            factory.node_spec = spec
+            if self._tracking_stack:
+                self._tracking_stack[-1].append((factory.__name__, factory))
+            return factory
 
         return deco
 
     def parallel(
         self, *, success_threshold: int, failure_threshold: Optional[int] = None
     ):
-        def deco(factory: Callable[..., Generator[Any, None, None]]) -> NodeSpec:
+        """Decorator to mark a generator function as a parallel composite."""
+        def deco(factory: Callable[..., Generator[Any, None, None]]) -> Callable[..., Generator[Any, None, None]]:
             spec = NodeSpec(
                 kind=NodeSpecKind.PARALLEL,
                 name=_name_of(factory),
@@ -841,8 +879,10 @@ class _BT:
                     "failure_threshold": failure_threshold,
                 },
             )
-            setattr(factory, "_node_spec", spec)
-            return spec
+            factory.node_spec = spec
+            if self._tracking_stack:
+                self._tracking_stack[-1].append((factory.__name__, factory))
+            return factory
 
         return deco
 
@@ -870,53 +910,79 @@ class _BT:
     ) -> _WrapperChain:
         return _WrapperChain().ratelimit(hz=hz, period=period)
 
-    def gate(self, condition: Union[NodeSpec, Callable[..., Any]]) -> _WrapperChain:
-        cond_spec = self._as_spec(condition)
+    def gate(self, condition: Union[NodeSpec, Callable[[Any], Any]]) -> _WrapperChain:
+        cond_spec = self.as_spec(condition)
         return _WrapperChain().gate(cond_spec)
 
-    # ---- cross-file composition helpers ----
-    def subtree(self, tree_cls: type["Tree"]) -> NodeSpec:
+    def subtree(self, tree: SimpleNamespace) -> NodeSpec:
         """
-        Mount another Tree's root as a child in the current tree.
-        For Mermaid, attach the other tree's ROOT spec so it can expand visually.
+        Mount another tree's root spec as a subtree.
+        
+        Args:
+            tree: A tree namespace created with @bt.tree
         """
-        root_spec = self._as_spec(tree_cls._ROOT)
-        spec = NodeSpec(
+        if not hasattr(tree, 'root'):
+            raise ValueError(f"Tree namespace must have a 'root' attribute. Did you forget @bt.root on a composite?")
+        
+        root_spec = tree.root
+        return NodeSpec(
             kind=NodeSpecKind.SUBTREE,
-            name=f"Subtree({tree_cls.__name__})",
-            payload={"tree_cls": tree_cls},
+            name=f"Subtree({root_spec.name})",
+            payload={"root": root_spec},
             children=[root_spec],
         )
-        # Ensure the child knows its owner for expansion
-        setattr(
-            root_spec, "_owner_cls", getattr(root_spec, "_owner_cls", None) or tree_cls
-        )
-        return spec
 
-    def bind(
-        self, owner: type, spec_or_fn: Union[NodeSpec, Callable[..., Any]]
-    ) -> NodeSpec:
+    def tree(self, fn: Callable[[], Any]) -> SimpleNamespace:
         """
-        Borrow a composite/spec defined on 'owner' and use it here safely.
-        For Mermaid, attach the borrowed spec as a child.
+        Decorator to create a behavior tree namespace.
+        
+        Usage:
+            @bt.tree
+            def MyTree():
+                @bt.action
+                def my_action(bb: BB) -> Status:
+                    ...
+                
+                @bt.sequence()
+                def root(N):
+                    yield N.my_action
         """
-        base = self._as_spec(spec_or_fn)
-        # Ensure the borrowed spec carries its original owner for expansion
-        setattr(base, "_owner_cls", getattr(base, "_owner_cls", None) or owner)
-        return NodeSpec(
-            kind=NodeSpecKind.BIND,
-            name=f"Bind({owner.__name__}:{_name_of(base)})",
-            payload={"owner": owner, "spec": base},
-            children=[base],
-        )
+        created_nodes = []
+        self._tracking_stack.append(created_nodes)
+        
+        try:
+            fn()
+        finally:
+            self._tracking_stack.pop()
+        
+        nodes = {name: node for name, node in created_nodes if hasattr(node, 'node_spec')}
+        namespace = SimpleNamespace(**nodes)
+        
+        for name, node in nodes.items():
+            if hasattr(node, 'node_spec'):
+                node.node_spec.owner = namespace
+        
+        root_nodes = [v for v in nodes.values() if hasattr(v.node_spec, 'is_root')]
+        if root_nodes:
+            namespace.root = root_nodes[0].node_spec
+        
+        namespace.to_mermaid = lambda: _generate_mermaid(namespace)
+        
+        return namespace
 
-    # Internals
-    def _as_spec(self, maybe: Union[NodeSpec, Callable[..., Any]]) -> NodeSpec:
+    def root(self, fn: Callable[..., Generator[Any, None, None]]) -> Callable[..., Generator[Any, None, None]]:
+        """Mark a composite as the root of the tree."""
+        fn.node_spec.is_root = True
+        return fn
+
+    def as_spec(self, maybe: Union[NodeSpec, Callable[[Any], Any]]) -> NodeSpec:
+        """Convert a function or NodeSpec to a NodeSpec."""
         if isinstance(maybe, NodeSpec):
             return maybe
-        spec = getattr(maybe, "_node_spec", None)
+        
+        spec = getattr(maybe, "node_spec", None)
         if spec is None:
-            raise TypeError(f"{maybe!r} is not a BT node (missing @_node_spec).")
+            raise TypeError(f"{maybe!r} is not a BT node (missing node_spec attribute).")
         return spec
 
 
@@ -924,112 +990,90 @@ bt = _BT()
 
 
 # ======================================================================================
-# Tree container & Runner
+# Mermaid Generation
 # ======================================================================================
 
 
-class Tree:
-    _ROOT: Any = None
+def _generate_mermaid(tree: SimpleNamespace) -> str:
+    """
+    Render a static structure graph for a tree namespace.
+    """
+    if not hasattr(tree, 'root'):
+        raise ValueError("Tree namespace must have a 'root' attribute")
+    
+    lines: List[str] = ["flowchart TD"]
+    node_ids: Dict[NodeSpec, str] = {}
+    counter = 0
 
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-        root_specs = []
-        for _, val in vars(cls).items():
-            if isinstance(val, NodeSpec):
-                # keep your existing owner tagging
-                setattr(val, "_owner_cls", getattr(val, "_owner_cls", None) or cls)
-                if getattr(val, "_is_root_spec", False):
-                    root_specs.append(val)
-
-        if root_specs:
-            if len(root_specs) > 1:
-                names = ", ".join(s.name for s in root_specs)
-                raise ValueError(f"Multiple @bt.root specs found: {names}")
-            cls._ROOT = root_specs[0]
-
-    @classmethod
-    def build(cls) -> Node:
-        root_spec = bt._as_spec(cls._ROOT)
-        return root_spec.to_node(owner_cls=cls)
-
-    @classmethod
-    def to_mermaid(cls) -> str:
-        """
-        Render a static structure graph. Composites are expanded using the owner class.
-        Decorator nesting shows as sequential nodes.
-        Supports: bind/subtree expansion for cross-file composition.
-        """
-        lines: List[str] = ["flowchart TD"]
-        node_ids: Dict[NodeSpec, str] = {}
-        counter = 0
-
-        def nid(spec: NodeSpec) -> str:
-            nonlocal counter
-            if spec in node_ids:
-                return node_ids[spec]
-            counter += 1
-            node_ids[spec] = f"N{counter}"
+    def nid(spec: NodeSpec) -> str:
+        nonlocal counter
+        if spec in node_ids:
             return node_ids[spec]
+        counter += 1
+        node_ids[spec] = f"N{counter}"
+        return node_ids[spec]
 
-        def label(spec: NodeSpec) -> str:
-            match spec.kind:
-                case NodeSpecKind.ACTION | NodeSpecKind.CONDITION:
-                    return f"{spec.kind.value.upper()}<br/>{spec.name}"
-                case NodeSpecKind.SEQUENCE | NodeSpecKind.SELECTOR | NodeSpecKind.PARALLEL:
-                    return f"{spec.kind.value.capitalize()}<br/>{spec.name}"
-                case NodeSpecKind.DECORATOR:
-                    return f"Decor<br/>{spec.name}"
-                case NodeSpecKind.SUBTREE:
-                    return f"Subtree<br/>{spec.name}"
-                case NodeSpecKind.BIND:
-                    return f"Bind<br/>{spec.name}"
-                case _:
-                    return spec.name
+    def label(spec: NodeSpec) -> str:
+        match spec.kind:
+            case NodeSpecKind.ACTION | NodeSpecKind.CONDITION:
+                return f"{spec.kind.value.upper()}<br/>{spec.name}"
+            case NodeSpecKind.SEQUENCE | NodeSpecKind.SELECTOR | NodeSpecKind.PARALLEL:
+                return f"{spec.kind.value.capitalize()}<br/>{spec.name}"
+            case NodeSpecKind.DECORATOR:
+                return f"Decor<br/>{spec.name}"
+            case NodeSpecKind.SUBTREE:
+                return f"Subtree<br/>{spec.name}"
+            case _:
+                return spec.name
 
-        def ensure_children(spec: NodeSpec) -> List[NodeSpec]:
-            match spec.kind:
-                case NodeSpecKind.SEQUENCE | NodeSpecKind.SELECTOR | NodeSpecKind.PARALLEL:
-                    # Prefer tagged owner on the spec; fall back to the diagram owner
-                    owner_for_spec = getattr(spec, "_owner_cls", None) or cls
-                    factory = spec.payload["factory"]
-                    spec.children = _bt_expand_children_with_owner(factory, owner_for_spec)
-                case NodeSpecKind.BIND:
-                    # Child already attached; make sure it carries the bound owner for expansion
-                    base = spec.payload["spec"]
-                    owner = spec.payload["owner"]
-                    setattr(base, "_owner_cls", getattr(base, "_owner_cls", None) or owner)
-                    spec.children = [base]
-                case NodeSpecKind.SUBTREE:
-                    # Child is the other tree's ROOT; tag it so its composites expand
-                    tree_cls = spec.payload["tree_cls"]
-                    child = bt._as_spec(tree_cls._ROOT)
-                    setattr(
-                        child, "_owner_cls", getattr(child, "_owner_cls", None) or tree_cls
-                    )
-                    spec.children = [child]
-            return spec.children
+    def ensure_children(spec: NodeSpec) -> List[NodeSpec]:
+        match spec.kind:
+            case NodeSpecKind.SEQUENCE | NodeSpecKind.SELECTOR | NodeSpecKind.PARALLEL:
+                owner = getattr(spec, "owner", None) or tree
+                factory = spec.payload["factory"]
+                spec.children = _bt_expand_children(factory, owner)
+            case NodeSpecKind.SUBTREE:
+                subtree_root = spec.payload["root"]
+                spec.children = [subtree_root]
+        return spec.children
 
-        def walk(spec: NodeSpec) -> None:
-            this_id = nid(spec)
-            shape = (
-                "((%s))" if spec.kind in ("action", "condition") else '["%s"]'
-            ) % label(spec)
-            lines.append(f"  {this_id}{shape}")
-            for child in ensure_children(spec):
-                child_id = nid(child)
-                lines.append(f"  {this_id} --> {child_id}")
-                walk(child)
+    def walk(spec: NodeSpec) -> None:
+        this_id = nid(spec)
+        shape = (
+            "((%s))" if spec.kind in (NodeSpecKind.ACTION, NodeSpecKind.CONDITION) else '["%s"]'
+        ) % label(spec)
+        lines.append(f"  {this_id}{shape}")
+        for child in ensure_children(spec):
+            child_id = nid(child)
+            lines.append(f"  {this_id} --> {child_id}")
+            walk(child)
 
-        walk(bt._as_spec(cls._ROOT))
-        return "\n".join(lines)
+    walk(tree.root)
+    return "\n".join(lines)
 
 
-class Runner:
-    def __init__(self, tree_cls: type[Tree], bb: Optional[Any] = None, tb: Optional[Timebase] = None) -> None:
-        self.tree_cls = tree_cls
-        self.bb = bb or SimpleNamespace()
+# ======================================================================================
+# Runner
+# ======================================================================================
+
+
+class Runner(Generic[BB]):
+    def __init__(
+        self,
+        tree: SimpleNamespace,
+        bb: BB,
+        tb: Optional[Timebase] = None,
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE
+    ) -> None:
+        self.tree = tree
+        self.bb: BB = bb
         self.tb = tb or MonotonicClock()
-        self.root: Node = tree_cls.build()
+        self.exception_policy = exception_policy
+        
+        if not hasattr(tree, 'root'):
+            raise ValueError("Tree namespace must have a 'root' attribute")
+        
+        self.root: Node[BB] = tree.root.to_node(owner=tree, exception_policy=exception_policy)
 
     async def tick(self) -> Status:
         result = await self.root.tick(self.bb, self.tb)
@@ -1052,74 +1096,79 @@ class Runner:
 # ======================================================================================
 
 if __name__ == "__main__":
-    # Demo showcasing fluent composition + owner-aware composites
-    class Engage(Tree):
+    class DemoBlackboard:
+        """Typed blackboard for demo trees."""
+        def __init__(self):
+            self.battery: int = 50
+            self.counter: int = 0
+            self.goto_progress: int = 0
+            self.scan_attempts: int = 0
+            self.telemetry_count: int = 0
+            self.engage_steps: int = 0
+
+    @bt.tree
+    def Engage():
         @bt.action
-        async def engage(bb: Any) -> Status:
+        async def engage(bb: DemoBlackboard) -> Status:
             bb.engage_steps += 1
             return Status.SUCCESS if bb.engage_steps >= 10 else Status.RUNNING
 
         @bt.condition
-        def threat_detected(bb: Any) -> bool:
+        def threat_detected(bb: DemoBlackboard) -> bool:
             return bb.counter % 3 == 0
 
         @bt.condition
-        def battery_ok(bb: Any) -> bool:
+        def battery_ok(bb: DemoBlackboard) -> bool:
             return bb.battery > 20
 
         @bt.root
         @bt.sequence(memory=False)
-        def EngageThreat(N):
+        def engage_threat(N):
             yield N.threat_detected
             yield bt.failer().gate(N.battery_ok).timeout(0.12)(N.engage)
 
-    class Demo(Tree):
-        # Conditions
+    @bt.tree
+    def Demo():
         @bt.condition
-        def has_waypoints(bb: Any) -> bool:
-            counter = bb.counter
-            return (counter % 2) == 1
+        def has_waypoints(bb: DemoBlackboard) -> bool:
+            return (bb.counter % 2) == 1
 
-        # Actions
         @bt.action
-        async def go_to_next(bb: Any) -> Status:
+        async def go_to_next(bb: DemoBlackboard) -> Status:
             bb.goto_progress += 1
             return Status.SUCCESS if bb.goto_progress >= 3 else Status.RUNNING
 
         @bt.action
-        async def scan_area(bb: Any) -> Status:
+        async def scan_area(bb: DemoBlackboard) -> Status:
             bb.scan_attempts += 1
             return Status.SUCCESS if bb.scan_attempts >= 2 else Status.FAILURE
 
         @bt.action
-        async def telemetry_push(bb: Any) -> Status:
+        async def telemetry_push(bb: DemoBlackboard) -> Status:
             bb.telemetry_count += 1
             return Status.SUCCESS
 
-        # Composites (factories take N = owner class)
         @bt.sequence(memory=True)
-        def Patrol(N):
+        def patrol(N):
             yield N.has_waypoints
             yield N.go_to_next
-            # Fluent: succeeder → retry(3) → timeout(1.0) applied to scan_area
             yield bt.succeeder().retry(3).timeout(1.0)(N.scan_area)
 
         @bt.root
         @bt.selector(memory=True, reactive=True)
-        def Root(N):
+        def root(N):
             yield bt.subtree(Engage)
-            yield N.Patrol
+            yield N.patrol
             yield bt.failer().ratelimit(hz=5.0)(N.telemetry_push)
 
 
     async def _demo():
-        bb = SimpleNamespace()
-        bb.battery = 50
-        bb.goto_progress = 0
-        bb.scan_attempts = 0
-        bb.telemetry_count = 0
-        bb.engage_steps = 0
-        runner = Runner(Demo, bb=bb)
+        bb = DemoBlackboard()
+        runner = Runner(
+            Demo,
+            bb=bb,
+            exception_policy=ExceptionPolicy.LOG_AND_CONTINUE
+        )
 
         for i in range(1, 10):
             bb.counter = i
