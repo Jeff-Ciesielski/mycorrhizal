@@ -1,0 +1,366 @@
+#!/usr/bin/env python3
+"""
+Hypha DSL - Builder Layer
+
+NetBuilder provides the API for declaratively constructing Petri net specifications.
+Used within @pn.net decorated functions.
+"""
+
+from typing import Optional, Callable, List, Dict, Type, Any
+from .specs import (
+    NetSpec,
+    PlaceSpec,
+    TransitionSpec,
+    GuardSpec,
+    ArcSpec,
+    PlaceType,
+    PlaceRef,
+    TransitionRef,
+    SubnetRef,
+)
+
+
+class ArcChain:
+    """Fluent interface for chaining arc definitions"""
+
+    def __init__(self, builder: "NetBuilder", last_ref: Any):
+        self.builder = builder
+        self.last_ref = last_ref
+        self.last_type = type(last_ref)
+
+    def arc(
+        self, target: Any, name: Optional[str] = None, weight: int = 1
+    ) -> "ArcChain":
+        """Chain another arc from the last element to target"""
+        target_type = type(target)
+
+        if self.last_type == target_type:
+            raise ValueError(
+                f"Cannot connect {self.last_type.__name__} to {target_type.__name__} directly. "
+                f"Arcs must alternate between places and transitions."
+            )
+
+        arc_spec = ArcSpec(self.last_ref, target, weight, name)
+        self.builder.spec.arcs.append(arc_spec)
+
+        return ArcChain(self.builder, target)
+
+
+class NetBuilder:
+    """Builder for constructing Petri net specifications"""
+
+    def __init__(self, name: str, parent: Optional[NetSpec] = None):
+        self.spec = NetSpec(name, parent=parent)
+
+    def place(
+        self,
+        name: str,
+        type: PlaceType = PlaceType.BAG,
+        state_factory: Optional[Callable] = None,
+    ) -> PlaceRef:
+        """Declare a regular place"""
+        place_spec = PlaceSpec(name, type, state_factory=state_factory)
+        self.spec.places[name] = place_spec
+        return PlaceRef(name, self.spec)
+
+    def io_input_place(self):
+        """Decorator for IOInputPlace with async generator"""
+
+        def decorator(func: Callable) -> PlaceRef:
+            name = func.__name__
+            place_spec = PlaceSpec(
+                name, PlaceType.QUEUE, handler=func, is_io_input=True
+            )
+            self.spec.places[name] = place_spec
+            return PlaceRef(name, self.spec)
+
+        return decorator
+
+    def io_output_place(self):
+        """Decorator for IOOutputPlace with async handler"""
+
+        def decorator(func: Callable) -> PlaceRef:
+            name = func.__name__
+            place_spec = PlaceSpec(
+                name, PlaceType.QUEUE, handler=func, is_io_output=True
+            )
+            self.spec.places[name] = place_spec
+            return PlaceRef(name, self.spec)
+
+        return decorator
+
+    def guard(self, func: Callable) -> GuardSpec:
+        """Create a guard specification from a function"""
+        return GuardSpec(func)
+
+    def transition(
+        self,
+        guard: Optional[GuardSpec] = None,
+        state_factory: Optional[Callable] = None,
+    ):
+        """Decorator for transition function"""
+
+        def decorator(func: Callable) -> TransitionRef:
+            name = func.__name__
+            trans_spec = TransitionSpec(name, func, guard, state_factory)
+            self.spec.transitions[name] = trans_spec
+            return TransitionRef(name, self.spec)
+
+        return decorator
+
+    def arc(
+        self, source: Any, target: Any, name: Optional[str] = None, weight: int = 1
+    ) -> ArcChain:
+        """Create an arc and return chainable ArcChain"""
+        source_type = type(source)
+        target_type = type(target)
+
+        if source_type == target_type:
+            raise ValueError(
+                f"Cannot connect {source_type.__name__} to {target_type.__name__} directly. "
+                f"Arcs must alternate between places and transitions."
+            )
+
+        arc_spec = ArcSpec(source, target, weight, name)
+        self.spec.arcs.append(arc_spec)
+
+        return ArcChain(self, target)
+
+    def subnet(self, net_func: Callable, instance_name: str) -> SubnetRef:
+        """Instantiate a subnet with given instance name"""
+        if not hasattr(net_func, "_spec"):
+            raise ValueError(
+                f"{net_func.__name__} is not a valid net. "
+                f"Did you forget to decorate it with @pn.net?"
+            )
+
+        original_spec = net_func._spec
+
+        subnet_spec = NetSpec(instance_name, parent=self.spec)
+
+        # Copy places and transitions (PlaceSpec/TransitionSpec are plain
+        # dataclasses holding callables/state factories; keeping the same
+        # instances is acceptable since they are stateless descriptors).
+        subnet_spec.places = dict(original_spec.places)
+        subnet_spec.transitions = dict(original_spec.transitions)
+
+        # Copy arcs but remap PlaceRef/TransitionRef parents to point into
+        # the new subnet_spec so get_fqn() yields the instance-qualified names.
+        new_arcs = []
+        for arc in original_spec.arcs:
+            src = arc.source
+            tgt = arc.target
+
+            def remap_ref(ref):
+                from .specs import PlaceRef, TransitionRef, SubnetRef
+
+                if isinstance(ref, PlaceRef):
+                    return PlaceRef(ref.local_name, subnet_spec)
+                if isinstance(ref, TransitionRef):
+                    return TransitionRef(ref.local_name, subnet_spec)
+                if isinstance(ref, SubnetRef):
+                    # If the arc referenced a nested subnet, copy the nested
+                    # subnet spec into our new subnet and return a SubnetRef
+                    # bound to that copied spec.
+                    nested_name = ref.spec.name
+                    if nested_name not in original_spec.subnets:
+                        # fallback: return a SubnetRef bound to the same spec
+                        return SubnetRef(ref.spec)
+                    # copy the nested spec into this subnet (recursive)
+                    copied_nested = self._copy_spec_with_parent(
+                        original_spec.subnets[nested_name], subnet_spec
+                    )
+                    subnet_spec.subnets[nested_name] = copied_nested
+                    return SubnetRef(copied_nested)
+                # Unknown ref type: return as-is
+                return ref
+
+            new_src = remap_ref(src)
+            new_tgt = remap_ref(tgt)
+
+            new_arcs.append(ArcSpec(new_src, new_tgt, arc.weight, arc.name))
+
+        subnet_spec.arcs = new_arcs
+
+        for sub_name, sub_spec in original_spec.subnets.items():
+            # Ensure nested subnets are copied and have their parent set to
+            # the subnet_spec (if they weren't already handled above).
+            if sub_name not in subnet_spec.subnets:
+                subnet_spec.subnets[sub_name] = self._copy_spec_with_parent(
+                    sub_spec, subnet_spec
+                )
+
+        self.spec.subnets[instance_name] = subnet_spec
+
+        return SubnetRef(subnet_spec)
+
+    def _copy_spec_with_parent(self, original: NetSpec, new_parent: NetSpec) -> NetSpec:
+        """Deep copy a spec and set new parent"""
+        new_spec = NetSpec(original.name, parent=new_parent)
+        new_spec.places = dict(original.places)
+        new_spec.transitions = dict(original.transitions)
+        new_spec.arcs = list(original.arcs)
+
+        for sub_name, sub_spec in original.subnets.items():
+            new_spec.subnets[sub_name] = self._copy_spec_with_parent(sub_spec, new_spec)
+
+        return new_spec
+
+    def forward(self, input_place: Any, output_place: Any, name: Optional[str] = None):
+        """Create a simple pass-through transition"""
+        trans_name = (
+            name or f"forward_{input_place.local_name}_to_{output_place.local_name}"
+        )
+
+        def make_handler(out_place):
+            async def forward_handler(consumed, bb, timebase):
+                for token in consumed:
+                    yield {out_place: token}
+
+            return forward_handler
+
+        trans_spec = TransitionSpec(trans_name, make_handler(output_place))
+        self.spec.transitions[trans_name] = trans_spec
+        trans_ref = TransitionRef(trans_name, self.spec)
+
+        self.spec.arcs.append(ArcSpec(input_place, trans_ref))
+        self.spec.arcs.append(ArcSpec(trans_ref, output_place))
+
+    def fork(
+        self, input_place: Any, output_places: List[Any], name: Optional[str] = None
+    ):
+        """Create a transition that broadcasts tokens to multiple outputs"""
+        trans_name = name or f"fork_{input_place.local_name}"
+
+        def make_handler(out_places):
+            async def fork_handler(consumed, bb, timebase):
+                for token in consumed:
+                    for output_place in out_places:
+                        yield {output_place: token}
+
+            return fork_handler
+
+        trans_spec = TransitionSpec(trans_name, make_handler(output_places))
+        self.spec.transitions[trans_name] = trans_spec
+        trans_ref = TransitionRef(trans_name, self.spec)
+
+        self.spec.arcs.append(ArcSpec(input_place, trans_ref))
+        for output_place in output_places:
+            self.spec.arcs.append(ArcSpec(trans_ref, output_place))
+
+    def join(
+        self, input_places: List[Any], output_place: Any, name: Optional[str] = None
+    ):
+        """Create a transition that waits for tokens from all inputs"""
+        trans_name = name or f"join_to_{output_place.local_name}"
+
+        def make_handler(out_place):
+            async def join_handler(consumed, bb, timebase):
+                for token in consumed:
+                    yield {out_place: token}
+
+            return join_handler
+
+        trans_spec = TransitionSpec(trans_name, make_handler(output_place))
+        self.spec.transitions[trans_name] = trans_spec
+        trans_ref = TransitionRef(trans_name, self.spec)
+
+        for input_place in input_places:
+            self.spec.arcs.append(ArcSpec(input_place, trans_ref))
+        self.spec.arcs.append(ArcSpec(trans_ref, output_place))
+
+    def merge(
+        self, input_places: List[Any], output_place: Any, name: Optional[str] = None
+    ):
+        """Create transitions from each input to output"""
+        for i, input_place in enumerate(input_places):
+            trans_name = (
+                name or f"{input_place.local_name}_to_{output_place.local_name}"
+            )
+            if len(input_places) > 1 and not name:
+                trans_name = (
+                    f"{input_place.local_name}_{i}_to_{output_place.local_name}"
+                )
+
+            def make_handler(out_place):
+                async def merge_handler(consumed, bb, timebase):
+                    for token in consumed:
+                        yield {out_place: token}
+
+                return merge_handler
+
+            trans_spec = TransitionSpec(trans_name, make_handler(output_place))
+            self.spec.transitions[trans_name] = trans_spec
+            trans_ref = TransitionRef(trans_name, self.spec)
+
+            self.spec.arcs.append(ArcSpec(input_place, trans_ref))
+            self.spec.arcs.append(ArcSpec(trans_ref, output_place))
+
+    def round_robin(
+        self, input_place: Any, output_places: List[Any], name: Optional[str] = None
+    ):
+        """Create a transition that distributes tokens round-robin"""
+        trans_name = name or f"round_robin_{input_place.local_name}"
+
+        def make_handler(out_places):
+            async def round_robin_handler(consumed, bb, timebase, state):
+                for token in consumed:
+                    output_place = out_places[state["index"]]
+                    state["index"] = (state["index"] + 1) % len(out_places)
+                    yield {output_place: token}
+
+            return round_robin_handler
+
+        trans_spec = TransitionSpec(
+            trans_name, make_handler(output_places), state_factory=lambda: {"index": 0}
+        )
+        self.spec.transitions[trans_name] = trans_spec
+        trans_ref = TransitionRef(trans_name, self.spec)
+
+        self.spec.arcs.append(ArcSpec(input_place, trans_ref))
+        for output_place in output_places:
+            self.spec.arcs.append(ArcSpec(trans_ref, output_place))
+
+    def route(
+        self, input_place: Any, type_map: Dict[Type, Any], name: Optional[str] = None
+    ):
+        """Create a transition that routes by token type"""
+        trans_name = name or f"route_{input_place.local_name}"
+
+        def make_handler(t_map):
+            async def route_handler(consumed, bb, timebase):
+                for token in consumed:
+                    token_type = type(token)
+                    if token_type in t_map:
+                        yield {t_map[token_type]: token}
+
+            return route_handler
+
+        trans_spec = TransitionSpec(trans_name, make_handler(type_map))
+        self.spec.transitions[trans_name] = trans_spec
+        trans_ref = TransitionRef(trans_name, self.spec)
+
+        self.spec.arcs.append(ArcSpec(input_place, trans_ref))
+        for output_place in type_map.values():
+            self.spec.arcs.append(ArcSpec(trans_ref, output_place))
+
+
+class PetriNetDSL:
+    """Module-level API for Petri net definition"""
+
+    @staticmethod
+    def net(func: Callable) -> Callable:
+        """
+        Decorator for defining a Petri net.
+        The decorated function receives a NetBuilder as its parameter.
+        """
+        builder = NetBuilder(func.__name__, parent=None)
+        func(builder)
+
+        func._spec = builder.spec
+        func.to_mermaid = lambda: builder.spec.to_mermaid()
+
+        return func
+
+
+pn = PetriNetDSL()

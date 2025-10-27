@@ -815,7 +815,7 @@ class _WrapperChain:
 
 class _BT:
     """User-facing decorator/constructor namespace."""
-    
+    # TODO: Fix decorators to not throw a fit when passing timebase arguments to actions/conditions
     def __init__(self):
         self._tracking_stack: List[List[Tuple[str, Any]]] = []
     
@@ -1132,6 +1132,7 @@ if __name__ == "__main__":
         @bt.condition
         def has_waypoints(bb: DemoBlackboard) -> bool:
             return (bb.counter % 2) == 1
+
 
         @bt.action
         async def go_to_next(bb: DemoBlackboard) -> Status:

@@ -58,10 +58,6 @@ Decorator wrappers are available via **fluent chains** that read left→right an
 yield bt.failer().gate(N.battery_ok).timeout(0.25)(N.engage)
 ```
 
-```python
-yield bt.failer().gate(N.battery_ok).timeout(0.25)(N.engage)
-```
-
 **Reads left→right:**
 
 1. `failer()` → forces **FAILURE** once the child completes (whether the child succeeds or fails). While the child is RUNNING, RUNNING bubbles.
@@ -207,25 +203,6 @@ Paste the output into the Mermaid Live Editor.
 ## Status Values
 
 - `SUCCESS`, `FAILURE`, `RUNNING`, `CANCELLED`, `ERROR`
-
----
-
-## FAQ: **Sequence.memory vs Selector.memory vs Selector.reactive**
-
-**Q: Isn’t `selector(reactive=True)` contradictory with `selector(memory=True)`? What about `sequence(memory=True)`?**
-
-**A:** They are orthogonal and apply in different moments of control flow:
-
-- `sequence(memory=True)` — remembers **which child was RUNNING** and resumes from that index on the **next tick**. If a child returns a terminal status (SUCCESS/FAILURE/ERROR/CANCELLED), the sequence resets its index (start from 0 next time).
-
-- `selector(memory=True)` — similarly remembers the last **RUNNING** child and resumes there on the next tick. If a child returns `SUCCESS`, the selector resets its index (start from 0 next time).
-
-- `selector(reactive=True)` — **overrides the starting index at the beginning of every tick** to 0, regardless of memory. This makes the selector *reactive*: higher‑priority children are re‑considered each tick (useful when world state can change). While the tick is in progress, `memory=True` still matters: if a child returns `RUNNING` during the current tick, that child becomes the one to resume if the tick is re‑entered before the outer nodes finish. But on the very next outer tick, `reactive=True` causes the selector to start again from child 0.
-
-**Rule of thumb:**  
-- Use `sequence(memory=True)` for long‑running steps that you want to resume mid‑pipeline.  
-- Use `selector(memory=True)` when you want to continue trying the same alternative until it finishes.  
-- Add `reactive=True` when you want the selector to **re‑check higher‑priority options every tick**, even if a lower‑priority option was previously RUNNING.
 
 ---
 
