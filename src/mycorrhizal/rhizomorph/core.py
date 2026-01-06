@@ -1082,8 +1082,9 @@ class _CaseBuilder:
 class _MatchBuilder:
     """Builder for match expressions."""
     
-    def __init__(self, key_fn: Callable[[Any], Any]) -> None:
+    def __init__(self, key_fn: Callable[[Any], Any], name: Optional[str] = None) -> None:
         self._key_fn = key_fn
+        self._name = name
     
     def __call__(self, *cases: CaseSpec) -> NodeSpec:
         if not cases:
@@ -1098,9 +1099,11 @@ class _MatchBuilder:
         
         children = [case.child for case in cases]
         
+        display_name = self._name or _name_of(self._key_fn)
+        
         return NodeSpec(
             kind=NodeSpecKind.MATCH,
-            name=f"Match({_name_of(self._key_fn)})",
+            name=f"Match({display_name})",
             payload={
                 "key_fn": self._key_fn,
                 "cases": list(cases),
@@ -1243,12 +1246,14 @@ class _BT:
         cond_spec = self.as_spec(condition)
         return _WrapperChain().gate(cond_spec)
 
-    def match(self, key_fn: Callable[[Any], Any]) -> "_MatchBuilder":
+    def match(
+        self, key_fn: Callable[[Any], Any], name: Optional[str] = None
+    ) -> "_MatchBuilder":
         """
         Create a pattern-matching dispatch node.
         
         Usage:
-            bt.match(lambda bb: bb.current_action)(
+            bt.match(lambda bb: bb.current_action, name="action_type")(
                 bt.case(ImageAction)(bt.subtree(handle_image)),
                 bt.case(MoveAction)(bt.subtree(handle_move)),
                 bt.case(lambda a: a.priority > 5)(bt.subtree(handle_urgent)),
@@ -1257,11 +1262,12 @@ class _BT:
         
         Args:
             key_fn: Function that extracts the value to match against from the blackboard
+            name: Optional display name for the match node (useful when key_fn is a lambda)
         
         Returns:
             A builder that accepts case specs and returns a NodeSpec
         """
-        return _MatchBuilder(key_fn)
+        return _MatchBuilder(key_fn, name=name)
 
     def case(self, matcher: Any) -> "_CaseBuilder":
         """
@@ -1334,9 +1340,10 @@ class _BT:
             )
 
         root_spec = tree.root
+        tree_name = getattr(tree, "_tree_name", root_spec.name)
         return NodeSpec(
             kind=NodeSpecKind.SUBTREE,
-            name=f"Subtree({root_spec.name})",
+            name=tree_name,
             payload={"root": root_spec},
             children=[root_spec],
         )
@@ -1368,6 +1375,9 @@ class _BT:
             name: node for name, node in created_nodes if hasattr(node, "node_spec")
         }
         namespace = SimpleNamespace(**nodes)
+        
+        # Store the tree's name for use in subtree references
+        namespace._tree_name = fn.__name__
 
         for name, node in nodes.items():
             if hasattr(node, "node_spec"):

@@ -43,7 +43,6 @@ class MockTimebase(Timebase):
     async def sleep(self, duration: float) -> None:
         self._time += duration
 
-
 @dataclass
 class SimpleBlackboard:
     """Simple blackboard for basic tests."""
@@ -1838,6 +1837,59 @@ class TestMermaidGeneration:
         assert "process" in mermaid
         assert '-->|"condition"|' in mermaid
         assert '-->|"body"|' in mermaid
+
+    def test_mermaid_match_with_custom_name(self):
+        @bt.tree
+        def Tree():
+            @bt.action
+            def handle_a(bb):
+                return Status.SUCCESS
+
+            @bt.action
+            def handle_b(bb):
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root(N):
+                yield bt.match(lambda bb: bb.value, name="action_type")(
+                    bt.case("a")(handle_a),
+                    bt.case("b")(handle_b),
+                )
+
+        mermaid = Tree.to_mermaid()
+
+        assert "Match(action_type)" in mermaid
+        assert "<lambda>" not in mermaid
+
+    def test_mermaid_subtree_uses_tree_name(self):
+        @bt.tree
+        def ImagePodHandler():
+            @bt.action
+            def take_image(bb):
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root(N):
+                yield take_image
+
+        @bt.tree
+        def MainTree():
+            @bt.action
+            def setup(bb):
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root(N):
+                yield setup
+                yield bt.subtree(ImagePodHandler)
+
+        mermaid = MainTree.to_mermaid()
+
+        assert "ImagePodHandler" in mermaid
+        assert "Subtree(root)" not in mermaid
 
 
 # =============================================================================
