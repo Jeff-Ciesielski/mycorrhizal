@@ -40,7 +40,7 @@ class MockTimebase(Timebase):
     def set_time(self, t: float) -> None:
         self._time = t
         
-    async def sleep(self, duration: float):
+    async def sleep(self, duration: float) -> None:
         self._time += duration
 
 
@@ -1314,6 +1314,271 @@ class TestMatch:
 
 
 # =============================================================================
+# Test: DoWhile Loop
+# =============================================================================
+
+
+class TestDoWhile:
+    """Tests for the do_while loop decorator."""
+
+    @pytest.mark.asyncio
+    async def test_do_while_loops_until_condition_false(self, simple_bb, mock_tb):
+        """Loop runs while condition is true, succeeds when condition becomes false."""
+
+        @bt.tree
+        def Tree():
+            @bt.condition
+            def has_items(bb: SimpleBlackboard):
+                return bb.value > 0
+
+            @bt.action
+            def process_item(bb: SimpleBlackboard):
+                bb.value -= 1
+                bb.log.append(f"processed, remaining={bb.value}")
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root(N):
+                yield bt.do_while(has_items)(process_item)
+
+        simple_bb.value = 3
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+
+        # First tick: condition true, child succeeds, returns RUNNING
+        status = await runner.tick()
+        assert status == Status.RUNNING
+        assert simple_bb.value == 2
+
+        # Second tick: condition true, child succeeds, returns RUNNING
+        status = await runner.tick()
+        assert status == Status.RUNNING
+        assert simple_bb.value == 1
+
+        # Third tick: condition true, child succeeds, returns RUNNING
+        status = await runner.tick()
+        assert status == Status.RUNNING
+        assert simple_bb.value == 0
+
+        # Fourth tick: condition false, returns SUCCESS
+        status = await runner.tick()
+        assert status == Status.SUCCESS
+        assert simple_bb.log == [
+            "processed, remaining=2",
+            "processed, remaining=1",
+            "processed, remaining=0",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_do_while_condition_false_immediately(self, simple_bb, mock_tb):
+        """If condition is false from the start, loop succeeds immediately."""
+
+        @bt.tree
+        def Tree():
+            @bt.condition
+            def has_items(bb: SimpleBlackboard):
+                return bb.value > 0
+
+            @bt.action
+            def process_item(bb: SimpleBlackboard):
+                bb.log.append("should not run")
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root(N):
+                yield bt.do_while(has_items)(process_item)
+
+        simple_bb.value = 0
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+
+        status = await runner.tick()
+        assert status == Status.SUCCESS
+        assert simple_bb.log == []
+
+    @pytest.mark.asyncio
+    async def test_do_while_child_failure_aborts(self, simple_bb, mock_tb):
+        """If child fails, loop aborts with FAILURE."""
+
+        @bt.tree
+        def Tree():
+            @bt.condition
+            def always_true(bb: SimpleBlackboard):
+                return True
+
+            @bt.action
+            def fail_on_second(bb: SimpleBlackboard):
+                bb.tick_count += 1
+                bb.log.append(f"tick {bb.tick_count}")
+                if bb.tick_count >= 2:
+                    return Status.FAILURE
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root(N):
+                yield bt.do_while(always_true)(fail_on_second)
+
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+
+        # First tick: child succeeds, loop continues
+        status = await runner.tick()
+        assert status == Status.RUNNING
+
+        # Second tick: child fails, loop aborts
+        status = await runner.tick()
+        assert status == Status.FAILURE
+        assert simple_bb.log == ["tick 1", "tick 2"]
+
+    @pytest.mark.asyncio
+    async def test_do_while_child_running(self, simple_bb, mock_tb):
+        """If child returns RUNNING, loop waits for it to complete."""
+
+        @bt.tree
+        def Tree():
+            @bt.condition
+            def has_items(bb: SimpleBlackboard):
+                return bb.value > 0
+
+            @bt.action
+            def slow_process(bb: SimpleBlackboard):
+                bb.tick_count += 1
+                bb.log.append(f"tick {bb.tick_count}")
+                # Takes 2 ticks to process each item
+                if bb.tick_count % 2 == 1:
+                    return Status.RUNNING
+                bb.value -= 1
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root(N):
+                yield bt.do_while(has_items)(slow_process)
+
+        simple_bb.value = 2
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+
+        # Tick 1: condition true, child RUNNING
+        status = await runner.tick()
+        assert status == Status.RUNNING
+        assert simple_bb.value == 2
+
+        # Tick 2: child completes (SUCCESS), value decremented, loop continues
+        status = await runner.tick()
+        assert status == Status.RUNNING
+        assert simple_bb.value == 1
+
+        # Tick 3: condition true, child RUNNING
+        status = await runner.tick()
+        assert status == Status.RUNNING
+        assert simple_bb.value == 1
+
+        # Tick 4: child completes (SUCCESS), value decremented, loop continues
+        status = await runner.tick()
+        assert status == Status.RUNNING
+        assert simple_bb.value == 0
+
+        # Tick 5: condition false, loop complete
+        status = await runner.tick()
+        assert status == Status.SUCCESS
+
+    @pytest.mark.asyncio
+    async def test_do_while_with_sequence_body(self, simple_bb, mock_tb):
+        """do_while can wrap a sequence as its body."""
+
+        @bt.tree
+        def Tree():
+            @bt.condition
+            def samples_remain(bb: SimpleBlackboard):
+                return bb.value < 3
+
+            @bt.action
+            def step_one(bb: SimpleBlackboard):
+                bb.log.append(f"step1-{bb.value}")
+                return Status.SUCCESS
+
+            @bt.action
+            def step_two(bb: SimpleBlackboard):
+                bb.log.append(f"step2-{bb.value}")
+                bb.value += 1
+                return Status.SUCCESS
+
+            @bt.sequence()
+            def process_sample(N):
+                yield step_one
+                yield step_two
+
+            @bt.root
+            @bt.sequence()
+            def root(N):
+                yield bt.do_while(samples_remain)(process_sample)
+
+        simple_bb.value = 0
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+
+        # Each iteration: RUNNING after child success
+        status = await runner.tick()
+        assert status == Status.RUNNING
+        assert simple_bb.value == 1
+
+        status = await runner.tick()
+        assert status == Status.RUNNING
+        assert simple_bb.value == 2
+
+        status = await runner.tick()
+        assert status == Status.RUNNING
+        assert simple_bb.value == 3
+
+        # Condition now false
+        status = await runner.tick()
+        assert status == Status.SUCCESS
+        assert simple_bb.log == [
+            "step1-0", "step2-0",
+            "step1-1", "step2-1",
+            "step1-2", "step2-2",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_do_while_with_inverter_for_until(self, simple_bb, mock_tb):
+        """Use inverter on condition to get 'until' behavior."""
+
+        @bt.tree
+        def Tree():
+            @bt.condition
+            def is_done(bb: SimpleBlackboard):
+                return bb.value >= 3
+
+            @bt.action
+            def increment(bb: SimpleBlackboard):
+                bb.value += 1
+                bb.log.append(f"value={bb.value}")
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root(N):
+                # Loop until is_done is true (i.e., while NOT is_done)
+                yield bt.do_while(bt.inverter()(is_done))(increment)
+
+        simple_bb.value = 0
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+
+        status = await runner.tick()
+        assert status == Status.RUNNING
+
+        status = await runner.tick()
+        assert status == Status.RUNNING
+
+        status = await runner.tick()
+        assert status == Status.RUNNING
+
+        # Now is_done returns True, inverter makes it False, loop exits
+        status = await runner.tick()
+        assert status == Status.SUCCESS
+        assert simple_bb.value == 3
+
+
+# =============================================================================
 # Test: Subtrees
 # =============================================================================
 
@@ -1549,6 +1814,30 @@ class TestMermaidGeneration:
 
         mermaid = MainTree.to_mermaid()
         assert "Subtree" in mermaid
+
+    def test_mermaid_do_while(self):
+        @bt.tree
+        def Tree():
+            @bt.condition
+            def has_items(bb):
+                return bb.value > 0
+
+            @bt.action
+            def process(bb):
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root(N):
+                yield bt.do_while(has_items)(process)
+
+        mermaid = Tree.to_mermaid()
+        
+        assert "DoWhile" in mermaid
+        assert "has_items" in mermaid
+        assert "process" in mermaid
+        assert '-->|"condition"|' in mermaid
+        assert '-->|"body"|' in mermaid
 
 
 # =============================================================================

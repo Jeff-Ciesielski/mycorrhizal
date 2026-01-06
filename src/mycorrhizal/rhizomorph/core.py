@@ -689,6 +689,84 @@ class Match(Node[BB]):
         return await self._finish(bb, Status.FAILURE, tb)
 
 
+class DoWhile(Node[BB]):
+    """
+    Loop decorator that repeats its child while a condition is true.
+    
+    Behavior:
+      1. Evaluate condition
+      2. If condition is FALSE → return SUCCESS (loop complete)
+      3. If condition is TRUE → tick child
+         - If child returns RUNNING → return RUNNING (resume child next tick)
+         - If child returns SUCCESS → reset child, return RUNNING (re-check condition next tick)
+         - If child returns FAILURE → return FAILURE (loop aborted)
+    
+    The "return RUNNING after child SUCCESS" prevents infinite loops within a single tick.
+    """
+
+    def __init__(
+        self,
+        condition: Node[BB],
+        child: Node[BB],
+        name: Optional[str] = None,
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE,
+    ) -> None:
+        super().__init__(
+            name or f"DoWhile(cond={_name_of(condition)}, child={_name_of(child)})",
+            exception_policy=exception_policy,
+        )
+        self.condition = condition
+        self.child = child
+        self.condition.parent = self
+        self.child.parent = self
+        self._child_running = False
+
+    def reset(self) -> None:
+        super().reset()
+        self.condition.reset()
+        self.child.reset()
+        self._child_running = False
+
+    async def tick(self, bb: BB, tb: Timebase) -> Status:
+        await self._ensure_entered(bb, tb)
+
+        # If child was RUNNING, continue it without re-checking condition
+        if self._child_running:
+            st = await self.child.tick(bb, tb)
+            if st is Status.RUNNING:
+                return Status.RUNNING
+            self._child_running = False
+            if st is Status.SUCCESS:
+                # Child completed successfully, reset and loop (next tick)
+                self.child.reset()
+                self.condition.reset()
+                return Status.RUNNING
+            # Child failed, abort loop
+            return await self._finish(bb, Status.FAILURE, tb)
+
+        # Check condition
+        cond_status = await self.condition.tick(bb, tb)
+        if cond_status is Status.RUNNING:
+            return Status.RUNNING
+        
+        if cond_status is not Status.SUCCESS:
+            # Condition is false, loop complete
+            return await self._finish(bb, Status.SUCCESS, tb)
+
+        # Condition is true, tick child
+        st = await self.child.tick(bb, tb)
+        if st is Status.RUNNING:
+            self._child_running = True
+            return Status.RUNNING
+        if st is Status.SUCCESS:
+            # Child completed successfully, reset and loop (next tick)
+            self.child.reset()
+            self.condition.reset()
+            return Status.RUNNING
+        # Child failed, abort loop
+        return await self._finish(bb, Status.FAILURE, tb)
+
+
 # ======================================================================================
 # Authoring DSL (NodeSpec + bt namespace)
 # ======================================================================================
@@ -703,6 +781,7 @@ class NodeSpecKind(Enum):
     DECORATOR = "decorator"
     SUBTREE = "subtree"
     MATCH = "match"
+    DO_WHILE = "do_while"
 
 
 class _DefaultCase:
@@ -801,6 +880,16 @@ class NodeSpec:
                 return Match(
                     key_fn,
                     cases,
+                    name=self.name,
+                    exception_policy=exception_policy,
+                )
+
+            case NodeSpecKind.DO_WHILE:
+                cond_spec = self.payload["condition"]
+                child_spec = self.children[0]
+                return DoWhile(
+                    cond_spec.to_node(owner, exception_policy),
+                    child_spec.to_node(owner, exception_policy),
                     name=self.name,
                     exception_policy=exception_policy,
                 )
@@ -1020,6 +1109,24 @@ class _MatchBuilder:
         )
 
 
+class _DoWhileBuilder:
+    """Builder for do_while loops."""
+    
+    def __init__(self, condition_spec: NodeSpec) -> None:
+        self._condition_spec = condition_spec
+    
+    def __call__(self, child: Union["NodeSpec", Callable[[Any], Any]]) -> NodeSpec:
+        child_spec = bt.as_spec(child)
+        return NodeSpec(
+            kind=NodeSpecKind.DO_WHILE,
+            name=f"DoWhile({_name_of(self._condition_spec)})",
+            payload={
+                "condition": self._condition_spec,
+            },
+            children=[child_spec],
+        )
+
+
 # --------------------------------------------------------------------------------------
 # User-facing decorator/constructor namespace
 # --------------------------------------------------------------------------------------
@@ -1184,6 +1291,36 @@ class _BT:
         child_spec = self.as_spec(child)
         return CaseSpec(matcher=_DefaultCase, child=child_spec, label="default")
 
+    def do_while(
+        self, condition: Union[NodeSpec, Callable[[Any], Any]]
+    ) -> "_DoWhileBuilder":
+        """
+        Create a loop that repeats its child while a condition is true.
+        
+        Usage:
+            @bt.condition
+            def samples_remain(bb):
+                return bb.sample_index < bb.total_samples
+            
+            yield bt.do_while(samples_remain)(process_sample)
+        
+        Behavior:
+            1. Evaluate condition
+            2. If condition is FALSE → return SUCCESS (loop complete)
+            3. If condition is TRUE → tick child
+               - If child returns RUNNING → return RUNNING (resume child next tick)
+               - If child returns SUCCESS → reset child, return RUNNING (re-check next tick)
+               - If child returns FAILURE → return FAILURE (loop aborted)
+        
+        Args:
+            condition: A condition node or function to evaluate each iteration
+        
+        Returns:
+            A builder that accepts a child node spec
+        """
+        cond_spec = self.as_spec(condition)
+        return _DoWhileBuilder(cond_spec)
+
     def subtree(self, tree: SimpleNamespace) -> NodeSpec:
         """
         Mount another tree's root spec as a subtree.
@@ -1303,6 +1440,8 @@ def _generate_mermaid(tree: SimpleNamespace) -> str:
                 return f"Subtree<br/>{spec.name}"
             case NodeSpecKind.MATCH:
                 return f"Match<br/>{spec.name}"
+            case NodeSpecKind.DO_WHILE:
+                return f"DoWhile<br/>{spec.name}"
             case _:
                 return spec.name
 
@@ -1318,6 +1457,10 @@ def _generate_mermaid(tree: SimpleNamespace) -> str:
             case NodeSpecKind.MATCH:
                 case_specs: List[CaseSpec] = spec.payload["cases"]
                 spec.children = [cs.child for cs in case_specs]
+            case NodeSpecKind.DO_WHILE:
+                # Children already set (just the body), but we also want to show condition
+                cond_spec = spec.payload["condition"]
+                spec.children = [cond_spec] + spec.children
         return spec.children
 
     def walk(spec: NodeSpec) -> None:
@@ -1338,6 +1481,15 @@ def _generate_mermaid(tree: SimpleNamespace) -> str:
                 edge_label = case_spec.label.replace('"', "'")
                 lines.append(f'  {this_id} -->|"{edge_label}"| {child_id}')
                 walk(child)
+        elif spec.kind == NodeSpecKind.DO_WHILE:
+            # First child is condition, second is body
+            cond_id = nid(children[0])
+            lines.append(f'  {this_id} -->|"condition"| {cond_id}')
+            walk(children[0])
+            if len(children) > 1:
+                body_id = nid(children[1])
+                lines.append(f'  {this_id} -->|"body"| {body_id}')
+                walk(children[1])
         else:
             for child in children:
                 child_id = nid(child)
