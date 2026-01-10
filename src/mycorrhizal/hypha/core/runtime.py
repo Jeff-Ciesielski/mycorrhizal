@@ -224,126 +224,147 @@ class TransitionRuntime:
             if result is not None:
                 await self._process_yield(result)
     
+    def _resolve_place_ref(self, place_ref) -> Optional[Tuple[str, ...]]:
+        """Resolve a PlaceRef to runtime place parts.
+
+        Attempts multiple resolution strategies in order:
+        1. Exact match using PlaceRef.get_parts()
+        2. Parent-relative mapping (for subnet instances)
+        3. Suffix fallback (match by local name)
+
+        Returns:
+            Tuple of place parts if found, None otherwise
+        """
+        # Try to get parts from the PlaceRef API
+        try:
+            parts = tuple(place_ref.get_parts())
+        except Exception:
+            parts = None
+
+        logger.debug("[resolve] place_ref=%r parts=%s", place_ref, parts)
+
+        if parts:
+            key = tuple(parts)
+            if key in self.net.places:
+                logger.debug("[resolve] exact match parts=%s", parts)
+                return key
+
+        # Map relative to this transition's parent parts
+        trans_parts = tuple(self.fqn.split('.'))
+        if len(trans_parts) > 1:
+            parent_prefix = trans_parts[:-1]
+            candidate = tuple(list(parent_prefix) + [place_ref.local_name])
+            if candidate in self.net.places:
+                logger.debug("[resolve] mapped %s -> %s using parent_prefix", parts, candidate)
+                return candidate
+
+        # Fallback: find any place whose last segment matches local_name
+        for p in self.net.places.keys():
+            if isinstance(p, tuple):
+                segs = list(p)
+            else:
+                segs = p.split('.')
+            if segs and segs[-1] == place_ref.local_name:
+                logger.debug("[resolve] suffix match %s -> %s", place_ref.local_name, p)
+                return tuple(segs)
+
+        return None
+
+    def _normalize_to_parts(self, key) -> Tuple[str, ...]:
+        """Normalize a place key to tuple of parts for runtime lookup.
+
+        Handles various input formats:
+        - tuple: returned as-is
+        - list: converted to tuple
+        - str: split on '.' and converted to tuple
+        - other: stringified and split on '.'
+        """
+        if isinstance(key, tuple):
+            return key
+        if isinstance(key, list):
+            return tuple(key)
+        if isinstance(key, str):
+            return tuple(key.split('.'))
+        # unknown type; try to stringify
+        return tuple(str(key).split('.'))
+
+    async def _add_token_to_place(self, place_key: Tuple[str, ...], token: Any):
+        """Add a token to the specified place, handling IO output places.
+
+        Args:
+            place_key: Tuple of parts identifying the place
+            token: Token to add
+        """
+        if place_key in self.net.places:
+            place = self.net.places[place_key]
+            if place.spec.is_io_output:
+                logger.debug("[process_yield] calling io_output on %s token=%r", place_key, token)
+                await place.handle_io_output(token)
+            else:
+                logger.debug("[process_yield] adding token to %s token=%r", place_key, token)
+                place.add_token(token)
+
     async def _process_yield(self, yielded):
         """Process yielded output from transition"""
-        def _resolve_place_parts_local(place_ref):
-            """Resolve a PlaceRef's FQN to the runtime's place FQNs.
-
-            If the PlaceRef points at the original spec (so get_fqn() is not
-            present in the running net), attempt to remap it to the instance
-            by using this transition's parent path + the place's local name.
-            """
-            # Try to get parts from the PlaceRef API
-            try:
-                parts = tuple(place_ref.get_parts())
-            except Exception:
-                parts = None
-
-            logger.debug("[resolve] place_ref=%r parts=%s", place_ref, parts)
-
-            if parts:
-                key = tuple(parts)
-                if key in self.net.places:
-                    logger.debug("[resolve] exact match parts=%s", parts)
-                    return key
-
-            # Map relative to this transition's parent parts
-                trans_parts = tuple(self.fqn.split('.'))
-                if len(trans_parts) > 1:
-                    parent_prefix = trans_parts[:-1]
-                    candidate = tuple(list(parent_prefix) + [place_ref.local_name])
-                    if candidate in self.net.places:
-                        logger.debug("[resolve] mapped %s -> %s using parent_prefix", parts, candidate)
-                        return candidate
-
-            # Fallback: find any place whose last segment matches local_name
-            for p in self.net.places.keys():
-                if isinstance(p, tuple):
-                    segs = list(p)
-                else:
-                    segs = p.split('.')
-                if segs and segs[-1] == place_ref.local_name:
-                    logger.debug("[resolve] suffix match %s -> %s", place_ref.local_name, p)
-                    return tuple(segs)
-
-            return parts
         if isinstance(yielded, dict):
-            wildcard_token = yielded.get('*')
-            explicit_targets = set()
-            
-            for key, token in yielded.items():
-                if key == '*':
-                    continue
-                
-                place_ref = key
-                place_parts = _resolve_place_parts_local(place_ref)
-                # normalize to runtime key (support tuple parts or dotted string)
-                # Normalize to tuple key for runtime lookup
-                if isinstance(place_parts, tuple):
-                    key = place_parts
-                elif isinstance(place_parts, list):
-                    key = tuple(place_parts)
-                elif isinstance(place_parts, str):
-                    key = tuple(place_parts.split('.'))
-                else:
-                    # unknown type; try to stringify
-                    key = tuple(str(place_parts).split('.'))
-
-                explicit_targets.add(key)
-
-                if key in self.net.places:
-                    place = self.net.places[key]
-                    if place.spec.is_io_output:
-                        logger.debug("[process_yield] calling io_output on %s token=%r", key, token)
-                        await place.handle_io_output(token)
-                    else:
-                        logger.debug("[process_yield] adding token to %s token=%r", key, token)
-                        place.add_token(token)
-            
-            if wildcard_token is not None:
-                for arc in self.output_arcs:
-                    # normalize target to parts
-                    try:
-                        target_parts = tuple(arc.target.get_parts())
-                        target_key = target_parts
-                    except Exception:
-                        # fallback if target is a string
-                        if isinstance(arc.target, str):
-                            target_key = tuple(str(arc.target).split('.'))
-                        else:
-                            target_key = tuple(str(arc.target).split('.'))
-
-                    if target_key not in explicit_targets:
-                        if target_key in self.net.places:
-                            place = self.net.places[target_key]
-                            if place.spec.is_io_output:
-                                logger.debug("[process_yield] calling io_output on %s token=%r", target_key, wildcard_token)
-                                await place.handle_io_output(wildcard_token)
-                            else:
-                                logger.debug("[process_yield] adding wildcard token to %s token=%r", target_key, wildcard_token)
-                                place.add_token(wildcard_token)
-        
+            await self._process_dict_yield(yielded)
         else:
-            place_ref, token = yielded
-            place_parts = _resolve_place_parts_local(place_ref)
-            # Normalize to tuple key for runtime lookup
-            if isinstance(place_parts, tuple):
-                key = place_parts
-            elif isinstance(place_parts, list):
-                key = tuple(place_parts)
-            elif isinstance(place_parts, str):
-                key = tuple(place_parts.split('.'))
-            else:
-                key = tuple(str(place_parts).split('.'))
+            await self._process_single_yield(yielded)
 
-            if key in self.net.places:
-                place = self.net.places[key]
-                if place.spec.is_io_output:
-                    logger.debug("[process_yield] calling io_output on %s token=%r", key, token)
-                    await place.handle_io_output(token)
-                else:
-                    logger.debug("[process_yield] adding token to %s token=%r", key, token)
-                    place.add_token(token)
+    async def _process_dict_yield(self, yielded: dict):
+        """Process dictionary with place keys and token values.
+
+        Supports:
+        - Explicit place -> token mappings
+        - Wildcard ('*') token that goes to all output places
+        """
+        wildcard_token = yielded.get('*')
+        explicit_targets = set()
+
+        for key, token in yielded.items():
+            if key == '*':
+                continue
+
+            place_parts = self._resolve_place_ref(key)
+            if place_parts is None:
+                continue
+
+            key_normalized = self._normalize_to_parts(place_parts)
+            explicit_targets.add(key_normalized)
+            await self._add_token_to_place(key_normalized, token)
+
+        if wildcard_token is not None:
+            await self._expand_wildcard_to_outputs(wildcard_token, explicit_targets)
+
+    async def _expand_wildcard_to_outputs(self, wildcard_token: Any, explicit_targets: set):
+        """Expand a wildcard token to all output places not explicitly targeted.
+
+        Args:
+            wildcard_token: Token to distribute to all output places
+            explicit_targets: Set of place keys already explicitly targeted
+        """
+        for arc in self.output_arcs:
+            # normalize target to parts
+            try:
+                target_parts = tuple(arc.target.get_parts())
+                target_key = target_parts
+            except Exception:
+                # fallback if target is a string
+                target_key = self._normalize_to_parts(arc.target)
+
+            if target_key not in explicit_targets:
+                await self._add_token_to_place(target_key, wildcard_token)
+
+    async def _process_single_yield(self, yielded):
+        """Process a single (place_ref, token) tuple yield."""
+        place_ref, token = yielded
+        place_parts = self._resolve_place_ref(place_ref)
+
+        if place_parts is None:
+            return
+
+        key = self._normalize_to_parts(place_parts)
+        await self._add_token_to_place(key, token)
     
     async def run(self):
         """Main transition execution loop"""

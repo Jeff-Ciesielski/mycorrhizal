@@ -128,6 +128,7 @@ class NetBuilder:
 
     def subnet(self, net_func: Callable, instance_name: str) -> SubnetRef:
         """Instantiate a subnet with given instance name"""
+        # 1. Validation
         if not hasattr(net_func, "_spec"):
             raise ValueError(
                 f"{net_func.__name__} is not a valid net. "
@@ -136,6 +137,7 @@ class NetBuilder:
 
         original_spec = net_func._spec
 
+        # 2. Create subnet spec and copy places/transitions
         subnet_spec = NetSpec(instance_name, parent=self.spec)
 
         # Copy places and transitions (PlaceSpec/TransitionSpec are plain
@@ -144,55 +146,91 @@ class NetBuilder:
         subnet_spec.places = dict(original_spec.places)
         subnet_spec.transitions = dict(original_spec.transitions)
 
-        # Copy arcs but remap PlaceRef/TransitionRef parents to point into
-        # the new subnet_spec so get_fqn() yields the instance-qualified names.
+        # 3. Remap arcs to point into the new subnet
+        subnet_spec.arcs = self._remap_arcs_to_subnet(original_spec.arcs, subnet_spec)
+
+        # 4. Ensure nested subnets are copied
+        self._ensure_nested_subnets_copied(original_spec, subnet_spec)
+
+        # 5. Register and return
+        self.spec.subnets[instance_name] = subnet_spec
+        return SubnetRef(subnet_spec)
+
+    def _remap_arcs_to_subnet(self, arcs: List[ArcSpec], subnet_spec: NetSpec) -> List[ArcSpec]:
+        """Remap arc references to point into target subnet.
+
+        For each PlaceRef/TransitionRef in the arcs, creates a new reference
+        bound to the target subnet. Handles nested SubnetRefs by recursively
+        copying their specs into the target subnet.
+
+        Args:
+            arcs: Original arcs from the template net
+            subnet_spec: Target subnet spec to bind references to
+
+        Returns:
+            New list of ArcSpec with remapped references
+        """
         new_arcs = []
-        for arc in original_spec.arcs:
-            src = arc.source
-            tgt = arc.target
-
-            def remap_ref(ref):
-                from .specs import PlaceRef, TransitionRef, SubnetRef
-
-                if isinstance(ref, PlaceRef):
-                    return PlaceRef(ref.local_name, subnet_spec)
-                if isinstance(ref, TransitionRef):
-                    return TransitionRef(ref.local_name, subnet_spec)
-                if isinstance(ref, SubnetRef):
-                    # If the arc referenced a nested subnet, copy the nested
-                    # subnet spec into our new subnet and return a SubnetRef
-                    # bound to that copied spec.
-                    nested_name = ref.spec.name
-                    if nested_name not in original_spec.subnets:
-                        # fallback: return a SubnetRef bound to the same spec
-                        return SubnetRef(ref.spec)
-                    # copy the nested spec into this subnet (recursive)
-                    copied_nested = self._copy_spec_with_parent(
-                        original_spec.subnets[nested_name], subnet_spec
-                    )
-                    subnet_spec.subnets[nested_name] = copied_nested
-                    return SubnetRef(copied_nested)
-                # Unknown ref type: return as-is
-                return ref
-
-            new_src = remap_ref(src)
-            new_tgt = remap_ref(tgt)
-
+        for arc in arcs:
+            new_src = self._remap_ref_to_subnet(arc.source, subnet_spec, original_spec=None)
+            new_tgt = self._remap_ref_to_subnet(arc.target, subnet_spec, original_spec=None)
             new_arcs.append(ArcSpec(new_src, new_tgt, arc.weight, arc.name))
+        return new_arcs
 
-        subnet_spec.arcs = new_arcs
+    def _remap_ref_to_subnet(self, ref: Any, target_subnet: NetSpec, original_spec: Optional[NetSpec] = None) -> Any:
+        """Remap a single reference to point into target subnet.
 
+        Handles:
+        - PlaceRef: Create new PlaceRef bound to target_subnet
+        - TransitionRef: Create new TransitionRef bound to target_subnet
+        - SubnetRef: Recursively copy nested subnet spec into target_subnet
+
+        Args:
+            ref: Reference to remap (PlaceRef, TransitionRef, SubnetRef, or other)
+            target_subnet: The subnet spec to bind the reference to
+            original_spec: The original template spec (for resolving nested subnets)
+
+        Returns:
+            The remapped reference, or original if unknown type
+        """
+        from .specs import PlaceRef, TransitionRef, SubnetRef
+
+        if isinstance(ref, PlaceRef):
+            return PlaceRef(ref.local_name, target_subnet)
+        if isinstance(ref, TransitionRef):
+            return TransitionRef(ref.local_name, target_subnet)
+        if isinstance(ref, SubnetRef):
+            # Handle nested subnets recursively
+            nested_name = ref.spec.name
+            if nested_name not in target_subnet.subnets:
+                # Copy the nested spec into this subnet (recursive)
+                copied_nested = self._copy_spec_with_parent(ref.spec, target_subnet)
+                target_subnet.subnets[nested_name] = copied_nested
+                return SubnetRef(copied_nested)
+            else:
+                # Already copied, return reference to existing copy
+                return SubnetRef(target_subnet.subnets[nested_name])
+
+        # Unknown ref type: return as-is
+        return ref
+
+    def _ensure_nested_subnets_copied(self, original_spec: NetSpec, subnet_spec: NetSpec):
+        """Ensure all nested subnets are copied into the target subnet.
+
+        This handles nested subnets that weren't already processed during
+        arc remapping. Each nested subnet is copied with its parent set
+        to the target subnet.
+
+        Args:
+            original_spec: The template spec containing nested subnets
+            subnet_spec: The target subnet spec to copy nested subnets into
+        """
         for sub_name, sub_spec in original_spec.subnets.items():
-            # Ensure nested subnets are copied and have their parent set to
-            # the subnet_spec (if they weren't already handled above).
+            # Only copy if not already handled (e.g., by arc remapping)
             if sub_name not in subnet_spec.subnets:
                 subnet_spec.subnets[sub_name] = self._copy_spec_with_parent(
                     sub_spec, subnet_spec
                 )
-
-        self.spec.subnets[instance_name] = subnet_spec
-
-        return SubnetRef(subnet_spec)
 
     def _copy_spec_with_parent(self, original: NetSpec, new_parent: NetSpec) -> NetSpec:
         """Deep copy a spec and set new parent"""
