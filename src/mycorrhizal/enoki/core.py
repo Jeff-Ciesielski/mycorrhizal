@@ -52,11 +52,64 @@ from typing import (
     Optional,
     Union,
     Awaitable,
+    TypeVar,
+    Generic,
 )
 from functools import cache
 
-# Import shared types (will refactor from core.py later)
-# For now, we'll define what we need here and import from core later
+
+T = TypeVar('T')
+
+
+# ============================================================================
+# Interface Integration Helper
+# ============================================================================
+
+
+def _create_interface_view_for_context(context: SharedContext, handler: Callable) -> SharedContext:
+    """
+    Create a constrained view of context.common if the handler has an interface type hint.
+
+    This enables type-safe, constrained access to blackboard state based on
+    interface definitions created with @blackboard_interface.
+
+    Args:
+        context: The SharedContext object
+        handler: The state handler function to check for interface type hints
+
+    Returns:
+        Either the original context or a new context with constrained common field
+    """
+    from typing import get_type_hints
+
+    try:
+        sig = inspect.signature(handler)
+        params = list(sig.parameters.values())
+
+        # Check first parameter (should be SharedContext)
+        if params and params[0].name == 'ctx':
+            ctx_type = get_type_hints(handler).get('ctx')
+
+            # If type hint exists and is a generic SharedContext with interface
+            if ctx_type and hasattr(ctx_type, '__args__'):
+                # Extract the type argument from SharedContext[InterfaceType]
+                interface_type = ctx_type.__args__[0]
+
+                # If it has interface metadata, create constrained view
+                if hasattr(interface_type, '_readonly_fields'):
+                    from mycorrhizal.common.wrappers import create_view_from_protocol
+                    from dataclasses import replace
+
+                    # Create constrained view of common
+                    constrained_common = create_view_from_protocol(context.common, interface_type)
+
+                    # Return new context with constrained common
+                    return replace(context, common=constrained_common)
+    except Exception:
+        # If anything goes wrong with type inspection, fall back to original context
+        pass
+
+    return context
 
 
 @dataclass
@@ -70,12 +123,15 @@ class StateConfiguration:
 
 
 @dataclass
-class SharedContext:
-    """Context passed to state methods"""
+class SharedContext(Generic[T]):
+    """Context passed to state methods.
+
+    Type parameter T represents the type of the 'common' field for type safety.
+    """
 
     send_message: Callable
     log: Callable
-    common: Any
+    common: T
     msg: Optional[Any] = None
 
 
@@ -901,31 +957,41 @@ class StateMachine:
         """Call the state's on_state handler"""
         if state.on_state is None:
             raise ValueError(f"State {state.name} has no on_state handler")
-        return await state.on_state(self.context)
+        # Create interface view if handler has interface type hint
+        ctx_to_pass = _create_interface_view_for_context(self.context, state.on_state)
+        return await state.on_state(ctx_to_pass)
 
     async def _call_on_enter(self, state: StateSpec):
         """Call the state's on_enter handler"""
         if state.on_enter is not None:
             self.log(f"  [DEBUG] Calling on_enter for {state.name}")
-            await state.on_enter(self.context)
+            # Create interface view if handler has interface type hint
+            ctx_to_pass = _create_interface_view_for_context(self.context, state.on_enter)
+            await state.on_enter(ctx_to_pass)
             self.log(f"  [DEBUG] on_enter completed for {state.name}")
 
     async def _call_on_leave(self, state: StateSpec):
         """Call the state's on_leave handler"""
         if state.on_leave is not None:
-            await state.on_leave(self.context)
+            # Create interface view if handler has interface type hint
+            ctx_to_pass = _create_interface_view_for_context(self.context, state.on_leave)
+            await state.on_leave(ctx_to_pass)
 
     async def _call_on_timeout(self, state: StateSpec):
         """Call the state's on_timeout handler"""
         if state.on_timeout is None:
             raise ValueError(f"State {state.name} has no on_timeout handler")
-        return await state.on_timeout(self.context)
+        # Create interface view if handler has interface type hint
+        ctx_to_pass = _create_interface_view_for_context(self.context, state.on_timeout)
+        return await state.on_timeout(ctx_to_pass)
 
     async def _call_on_fail(self, state: StateSpec):
         """Call the state's on_fail handler"""
         if state.on_fail is None:
             raise ValueError(f"State {state.name} has no on_fail handler")
-        return await state.on_fail(self.context)
+        # Create interface view if handler has interface type hint
+        ctx_to_pass = _create_interface_view_for_context(self.context, state.on_fail)
+        return await state.on_fail(ctx_to_pass)
 
     async def _process_transition(self, transition: Any, block: bool = False) -> bool:
         """Process a state transition"""

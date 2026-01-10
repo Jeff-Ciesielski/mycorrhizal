@@ -36,6 +36,47 @@ BB = TypeVar("BB")
 
 
 # ======================================================================================
+# Interface Integration Helper
+# ======================================================================================
+
+
+def _create_interface_view_if_needed(bb: Any, func: Callable) -> Any:
+    """
+    Create a constrained view if the function has an interface type hint on its
+    first parameter (typically named 'bb').
+
+    This enables type-safe, constrained access to blackboard state based on
+    interface definitions created with @blackboard_interface.
+
+    Args:
+        bb: The blackboard instance
+        func: The function to check for interface type hints
+
+    Returns:
+        Either the original blackboard or a constrained view based on interface metadata
+    """
+    from typing import get_type_hints
+
+    try:
+        sig = inspect.signature(func)
+        params = list(sig.parameters.values())
+
+        # Check first parameter (usually 'bb')
+        if params and params[0].name == 'bb':
+            bb_type = get_type_hints(func).get('bb')
+
+            # If type hint exists and has interface metadata
+            if bb_type and hasattr(bb_type, '_readonly_fields'):
+                from mycorrhizal.common.wrappers import create_view_from_protocol
+                return create_view_from_protocol(bb, bb_type)
+    except Exception:
+        # If anything goes wrong with type inspection, fall back to original bb
+        pass
+
+    return bb
+
+
+# ======================================================================================
 # Function signature protocols
 # ======================================================================================
 
@@ -50,17 +91,25 @@ def _supports_timebase(func: Callable) -> bool:
 
 
 async def _call_node_function(func: Callable, bb: Any, tb: Timebase) -> Any:
-    """Call a node function with appropriate parameters based on its signature."""
+    """
+    Call a node function with appropriate parameters based on its signature.
+
+    If the function has an interface type hint on its 'bb' parameter, a
+    constrained view will be created automatically to enforce access control.
+    """
+    # Create interface view if function has interface type hint
+    bb_to_pass = _create_interface_view_if_needed(bb, func)
+
     if _supports_timebase(func):
         if inspect.iscoroutinefunction(func):
-            return await func(bb=bb, tb=tb)
+            return await func(bb=bb_to_pass, tb=tb)
         else:
-            return func(bb=bb, tb=tb)
+            return func(bb=bb_to_pass, tb=tb)
     else:
         if inspect.iscoroutinefunction(func):
-            return await func(bb)
+            return await func(bb=bb_to_pass)
         else:
-            return func(bb)
+            return func(bb=bb_to_pass)
 
 
 # ======================================================================================

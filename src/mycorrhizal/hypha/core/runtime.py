@@ -17,6 +17,54 @@ import logging
 from .specs import NetSpec, PlaceSpec, TransitionSpec, ArcSpec, PlaceType, GuardSpec
 
 logger = logging.getLogger(__name__)
+
+
+# ======================================================================================
+# Interface Integration Helper
+# ======================================================================================
+
+
+def _create_interface_view_if_needed(bb: Any, handler: Callable) -> Any:
+    """
+    Create a constrained view if the handler has an interface type hint on its
+    blackboard parameter (second parameter, typically named 'bb').
+
+    This enables type-safe, constrained access to blackboard state based on
+    interface definitions created with @blackboard_interface.
+
+    Args:
+        bb: The blackboard instance
+        handler: The transition or IO handler function to check for interface type hints
+
+    Returns:
+        Either the original blackboard or a constrained view based on interface metadata
+    """
+    from typing import get_type_hints
+
+    try:
+        sig = inspect.signature(handler)
+        params = list(sig.parameters.values())
+
+        # Check second parameter (usually 'bb' at index 1)
+        # Transition handlers have signature: handler(consumed, bb, timebase, state?)
+        # IO input handlers have signature: handler(bb, timebase)
+        if len(params) >= 2:
+            # For transitions, bb is at index 1
+            # For IO input with 2 params, bb is at index 0
+            bb_param_index = 1 if len(params) >= 3 else 0
+
+            if params[bb_param_index].name == 'bb':
+                bb_type = get_type_hints(handler).get('bb')
+
+                # If type hint exists and has interface metadata
+                if bb_type and hasattr(bb_type, '_readonly_fields'):
+                    from mycorrhizal.common.wrappers import create_view_from_protocol
+                    return create_view_from_protocol(bb, bb_type)
+    except Exception:
+        # If anything goes wrong with type inspection, fall back to original bb
+        pass
+
+    return bb
 try:
     # Library should not configure root logging; be quiet by default
     logger.addHandler(logging.NullHandler())
@@ -83,30 +131,36 @@ class PlaceRuntime:
         """Start IOInputPlace generator task"""
         if not self.spec.is_io_input or not self.spec.handler:
             return
-        
+
+        # Create interface view if handler has interface type hint
+        bb_to_pass = _create_interface_view_if_needed(self.bb, self.spec.handler)
+
         async def io_input_loop():
             try:
                 sig = inspect.signature(self.spec.handler)
                 if len(sig.parameters) == 2:
-                    gen = self.spec.handler(self.bb, self.timebase)
+                    gen = self.spec.handler(bb_to_pass, self.timebase)
                 else:
                     gen = self.spec.handler()
-                
+
                 async for token in gen:
                     self.add_token(token)
             except asyncio.CancelledError:
                 pass
-        
+
         self.io_task = asyncio.create_task(io_input_loop())
     
     async def handle_io_output(self, token: Any):
         """Handle IOOutputPlace token"""
         if not self.spec.is_io_output or not self.spec.handler:
             return
-        
+
+        # Create interface view if handler has interface type hint
+        bb_to_pass = _create_interface_view_if_needed(self.bb, self.spec.handler)
+
         sig = inspect.signature(self.spec.handler)
         if len(sig.parameters) == 3:
-            await self.spec.handler(token, self.bb, self.timebase)
+            await self.spec.handler(token, bb_to_pass, self.timebase)
         else:
             await self.spec.handler(token)
     
@@ -203,16 +257,19 @@ class TransitionRuntime:
         
         for place_parts, tokens in tokens_to_remove.items():
             self.net.places[place_parts].remove_tokens(tokens)
-        
+
+        # Create interface view if handler has interface type hint
+        bb_to_pass = _create_interface_view_if_needed(self.net.bb, self.spec.handler)
+
         sig = inspect.signature(self.spec.handler)
         param_count = len(sig.parameters)
-        
+
         if self.state is not None:
             logger.debug("[fire] %s consumed=%s", self.fqn, consumed_flat)
-            results = self.spec.handler(consumed_flat, self.net.bb, self.net.timebase, self.state)
+            results = self.spec.handler(consumed_flat, bb_to_pass, self.net.timebase, self.state)
         else:
             logger.debug("[fire] %s consumed=%s", self.fqn, consumed_flat)
-            results = self.spec.handler(consumed_flat, self.net.bb, self.net.timebase)
+            results = self.spec.handler(consumed_flat, bb_to_pass, self.net.timebase)
         logger.debug("[fire] results_type=%s isasyncgen=%s iscoroutine=%s",
                      type(results), inspect.isasyncgen(results), inspect.iscoroutine(results))
 
