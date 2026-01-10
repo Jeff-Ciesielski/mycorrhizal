@@ -1,57 +1,67 @@
 #!/usr/bin/env python3
 """
-Enoki - A finite state machine framework (Asyncio Version)
+Enoki State System - Decorator-based State Definition
 
-Key Features:
-- States are collections of static/class methods (no instantiation)
-- Declarative transitions via enums for static analysis
-- String-based state resolution to break circular imports
-- Asyncio-based timeouts and message handling
-- Comprehensive validation at construction time
-- Push/Pop context resolution for accurate analysis
+This module provides a decorator-based API for defining FSM states without
+class-based inheritance or metaclass magic. States are defined using functions
+and decorators, and the framework constructs StateSpec objects that behave
+like State classes.
+
+Example:
+    @enoki.state(config=StateConfiguration(timeout=5.0))
+    def MyState():
+        class T(Enum):
+            DONE = auto()
+            NEXT = auto()
+
+        @enoki.on_state
+        async def on_state(bb: Blackboard):
+            # State logic here
+            return T.DONE
+
+        @enoki.transitions
+        def transitions():
+            return [
+                LabeledTransition(T.DONE, NextState),
+                LabeledTransition(T.NEXT, Again),
+            ]
+
+Key Design:
+- States are StateTransitions (can be used directly in transitions)
+- Decorators construct StateSpec dataclasses
+- No metaclass magic - just plain dataclasses and functions
+- Compatible with existing StateMachine runtime
 """
 
-import importlib
-import importlib.util
+from __future__ import annotations
+import inspect
 import sys
 import os
-import types
-import inspect
-
-from abc import ABC, abstractmethod, ABCMeta
+import time
+import traceback
+import asyncio
+from pathlib import Path
+from asyncio import PriorityQueue
 from dataclasses import dataclass, field
-from enum import Enum, IntEnum, auto
+from enum import Enum, auto, IntEnum
 from typing import (
     Any,
+    Callable,
     Dict,
+    List,
     Optional,
     Union,
-    Type,
-    Callable,
-    List,
-    Tuple,
-    Hashable,
-    Set,
     Awaitable,
 )
-import importlib
-import importlib.util, sys, os, types, inspect
-from itertools import accumulate
-from pathlib import Path
-
-import time
-import inspect
-import os
 from functools import cache
 
-import asyncio
-from asyncio import Queue, PriorityQueue, QueueEmpty, create_task, sleep, Task
-import traceback
+# Import shared types (will refactor from core.py later)
+# For now, we'll define what we need here and import from core later
 
 
 @dataclass
 class StateConfiguration:
-    """Configuration for a state - replaces class attributes"""
+    """Configuration for a state"""
 
     timeout: Optional[float] = None
     retries: Optional[int] = None
@@ -69,99 +79,33 @@ class SharedContext:
     msg: Optional[Any] = None
 
 
-@dataclass(order=True)
-class PrioritizedMessage:
-    priority: int
-    item: Any = field(compare=False)
-
-
-@dataclass
-class EnokiInternalMessage:
-    pass
-
-
-@dataclass
-class TimeoutMessage(EnokiInternalMessage):
-    """Internal message for timeout events"""
-
-    state_name: str
-    timeout_id: int
-    timeout_duration: float
-
-
-class ValidationError(Exception):
-    """Raised when state machine validation fails"""
-
-    pass
-
-
-class BlockedInUntimedState(Exception):
-    """Raised when a non-dwelling state blocks without a timeout"""
-
-    pass
-
-
-class StateMachineComplete(Exception):
-    """Raised when the state machine has reached a terminal state"""
-
-    pass
-
-
-class PopFromEmptyStack(Exception):
-    """Raised when we attempt to pop from an empty stack"""
-
-
-class InvalidTransition(Exception):
-    """Raised when an invalid transition is detected"""
-
-
-class NoStateToTick(Exception):
-    """Rasied when the FSM object doesn't have a state attached"""
-
-
-@dataclass
-class ValidationResult:
-    """Results of state machine validation"""
-
-    valid: bool
-    errors: list[str]
-    warnings: list[str]
-    discovered_states: set[str]
-
-
-class ClassPropertyDescriptor:
-    def __init__(self, fget):
-        self.fget = fget
-
-    def __get__(self, obj, klass=None):
-        if klass is None:
-            klass = type(obj)
-        return self.fget(klass)
-
-
-def classproperty(func):
-    return ClassPropertyDescriptor(func)
-
+# ============================================================================
+# Transition Type Hierarchy
+# ============================================================================
 
 @dataclass
 class TransitionType:
+    """Base type for all transitions"""
 
-    # A transition that awaits will require backing out to the FSM loop to await
-    # an event or message
     AWAITS: bool = False
 
-    @classproperty
-    def name(cls):
-        return cls.__name__
+    @property
+    def name(self) -> str:
+        return self.__class__.__name__
 
-    @classproperty
-    def base_name(cls):
-        if hasattr(cls, "__bases__"):
-            return cls.__bases__[0].name
-        return cls.name
+    @property
+    def base_name(self) -> str:
+        if hasattr(self.__class__, "__bases__") and self.__class__.__bases__:
+            return self.__class__.__bases__[0].__name__
+        return self.name
 
     def __hash__(self):
         return hash(f"{self.base_name()}.{self.name}")
+
+    def __eq__(self, other):
+        if isinstance(other, TransitionType):
+            return self.name == other.name
+        return False
 
 
 @dataclass
@@ -173,7 +117,7 @@ class StateTransition(TransitionType):
 
 @dataclass
 class StateContinuation(TransitionType):
-    """Represents staying in the same state."""
+    """Represents staying in the same state"""
 
     pass
 
@@ -183,312 +127,295 @@ class StateRenewal(TransitionType):
     """Represents a transition back into the current state"""
 
 
-# TODO: Rethink this name?
 @dataclass
 class Again(StateContinuation):
-    """Executes the current state immediately from on_state without affecting
-    the retry counter.
-
-    NOTE: This is synonymous with returning `self`
-    """
+    """Execute current state immediately without affecting retry counter"""
 
     pass
 
 
 @dataclass
 class Unhandled(StateContinuation):
-    """Executes the current state from on_state without affecting the retry
-    counter on the next event or message.
+    """Wait for next message/event without affecting retry counter"""
 
-    NOTE: This is synonymous with returning `None`
-    """
-
-    AWAITS = True
+    AWAITS: bool = True
 
 
 @dataclass
 class Retry(StateContinuation):
-    """Retries the current state, decrementing it's
-    retry counter and immediately beginning execution from on_enter."""
+    """Retry current state, decrementing retry counter, starting from on_enter"""
 
     pass
 
 
 @dataclass
 class Restart(StateRenewal):
-    """Restarts the current state, resetting
-    the retry counter, and awaiting a message or event to begin from
-    on_enter."""
+    """Restart current state, reset retry counter, await message"""
 
-    AWAITS = True
+    AWAITS: bool = True
 
 
 @dataclass
 class Repeat(StateRenewal):
-    """Repeats the current state. The retry
-    counter is reset, and the state immediately begins execution from  on_enter.
-
-    NOTE: This is synonymous with returning `type(self)` OR the constructor for
-    the current state (i.e it acts like any other state transition aside from NOT firing on_exit)
-    """
+    """Repeat current state, reset retry counter, execute on_enter immediately"""
 
     pass
 
 
 @dataclass
 class StateRef(StateTransition):
+    """String-based state reference for breaking circular imports"""
+
     state: str = ""
 
-    def __init__(self, state):
+    def __init__(self, state: str):
         self.state = state
-        self.AWAITS = False
+        object.__setattr__(self, "AWAITS", False)
 
     def __hash__(self):
         return hash(self.state)
 
+    def __eq__(self, other):
+        if isinstance(other, StateRef):
+            return self.state == other.state
+        return False
+
 
 @dataclass
 class LabeledTransition:
+    """A transition with a label (typically an enum value)"""
+
     label: Enum
     transition: TransitionType
 
 
-class StateMeta(ABCMeta):
-    def __new__(mcs, name, bases, namespace, **kwargs):
-        # Methods that should automatically become classmethods
-        auto_classmethod_names = {
-            "transitions",
-            "on_state",
-            "on_enter",
-            "on_leave",
-            "on_fail",
-            "on_timeout",
-        }
+# ============================================================================
+# Push/Pop Transitions (defined later to depend on StateSpec)
+# ============================================================================
 
-        # Convert specified methods to classmethods if they aren't already
-        for method_name in auto_classmethod_names:
-            if method_name in namespace:
-                method = namespace[method_name]
-                # Only convert if it's not already a classmethod/staticmethod
-                if not isinstance(method, (classmethod, staticmethod)):
-                    # If it's an abstractmethod, we need to handle it specially
-                    if (
-                        hasattr(method, "__isabstractmethod__")
-                        and method.__isabstractmethod__
-                    ):
-                        # Create classmethod first, then make it abstract
-                        new_method = classmethod(
-                            abstractmethod(
-                                method.__func__
-                                if hasattr(method, "__func__")
-                                else method
-                            )
-                        )
-                    else:
-                        new_method = classmethod(method)
-                    namespace[method_name] = new_method
-
-        # Also auto-convert any private methods (starting with _)
-        for key, value in list(namespace.items()):
-            if (
-                key.startswith("_")
-                and callable(value)
-                and not isinstance(value, (classmethod, staticmethod))
-                and not key.startswith("__")
-            ):
-                namespace[key] = classmethod(value)
-
-        return super().__new__(mcs, name, bases, namespace)
-
-
-class State(StateTransition, ABC, metaclass=StateMeta):
-    """Base class for states"""
-
-    CONFIG = StateConfiguration()
-
-    @abstractmethod
-    def transitions(
-        cls,
-    ) -> List[Union[LabeledTransition, TransitionType]]:
-        """Returns mapping of transition enums to their targets"""
-        return dict()
-
-    @abstractmethod
-    async def on_state(cls, ctx: SharedContext):
-        """Main state logic"""
-        pass
-
-    async def on_enter(cls, ctx: SharedContext) -> None:
-        """Called when entering the state"""
-        pass
-
-    async def on_leave(cls, ctx: SharedContext) -> None:
-        """Called when leaving the state"""
-        pass
-
-    async def on_fail(cls, ctx: SharedContext):
-        """Called when retry limit is exceeded"""
-        pass
-
-    @abstractmethod
-    async def on_timeout(cls, ctx: SharedContext):
-        """Called when state times out"""
-        pass
-
-    @classproperty
-    def name(cls) -> str:
-        """Returns a fully qualified name for the state, using filename for scripts."""
-
-        @cache
-        def gen_name():
-            module = cls.__module__
-            if module == "__main__":
-                filename = inspect.getfile(cls)
-                module = os.path.splitext(os.path.basename(filename))[0]
-            return f"{module}.{cls.__qualname__}"
-
-        return gen_name()
-
-    @classproperty
-    def group_name(cls) -> str:
-        """Returns the group name for visualization purposes"""
-
-        @cache
-        def gen_name():
-            for base in cls.__mro__:
-                if base != State and issubclass(base, State) and base != cls:
-                    return base.__name__
-            return cls.__name__
-
-        return gen_name()
-
-    @classproperty
-    def base_name(cls) -> str:
-        """Returns just the class name without module path"""
-        return cls.__qualname__.split(".")[-1]
-
-
-@dataclass(init=False)
+@dataclass
 class Push(StateTransition):
-    """Represents pushing states onto the stack"""
+    """Push one or more states onto the stack"""
 
-    push_states: list[type[State]]
+    push_states: List[StateTransition] = field(default_factory=list)
 
-    def __init__(self, *push_states: list[type[State]]):
-        self.push_states = push_states
+    def __init__(self, *states: StateTransition):
+        object.__setattr__(self, "push_states", list(states))
 
     def __hash__(self):
-        return hash(".".join([x.name for x in self.push_states]))
+        return hash(".".join([s.name for s in self.push_states]))
 
 
 @dataclass
 class Pop(StateTransition):
-    """Represents popping from the stack"""
+    """Pop from the stack to return to previous state"""
 
     pass
 
 
+# ============================================================================
+# StateSpec - The heart of the decorator system
+# ============================================================================
+
+@dataclass
+class StateSpec(StateTransition):
+    """
+    A state defined via decorators.
+
+    This is a StateTransition, so it can be used directly in transition lists.
+    It has the same interface as the old State class but is constructed by
+    decorators rather than metaclass magic.
+    """
+
+    # Core identity
+    name: str = ""
+    qualname: str = ""
+    module: str = ""
+
+    # Configuration
+    config: StateConfiguration = field(default_factory=StateConfiguration)
+
+    # Lifecycle methods (all optional except on_state)
+    on_state: Optional[Callable[[SharedContext], Awaitable[TransitionType]]] = None
+    on_enter: Optional[Callable[[SharedContext], Awaitable[None]]] = None
+    on_leave: Optional[Callable[[SharedContext], Awaitable[None]]] = None
+    on_timeout: Optional[Callable[[SharedContext], Awaitable[TransitionType]]] = None
+    on_fail: Optional[Callable[[SharedContext], Awaitable[TransitionType]]] = None
+
+    # Transitions
+    transitions: Optional[Callable[[], List[Union[LabeledTransition, TransitionType]]]] = None
+
+    # Nested event enum (optional)
+    Events: Optional[type[Enum]] = None
+
+    # Group information (for state groups/namespaces)
+    group_name: str = field(default="")
+    parent_state: Optional[StateSpec] = None
+
+    # Metadata
+    _is_root: bool = field(default=False, repr=False)
+
+    @property
+    def base_name(self) -> str:
+        """Get just the state name without module path"""
+        return self.qualname.split(".")[-1]
+
+    @property
+    def CONFIG(self) -> StateConfiguration:
+        """Alias for config (for compatibility with State class API)"""
+        return self.config
+
+    def __hash__(self):
+        return hash(self.name)
+
+    def __eq__(self, other):
+        if isinstance(other, StateSpec):
+            return self.name == other.name
+        if isinstance(other, str):
+            return self.name == other
+        return False
+
+    def get_transitions(self) -> List[Union[LabeledTransition, TransitionType]]:
+        """Get the transition list for this state"""
+        if self.transitions is None:
+            return []
+        result = self.transitions()
+        # Handle single transition returned
+        if isinstance(result, (TransitionType, LabeledTransition)):
+            return [result]
+        return result
+
+
+# ============================================================================
+# Global Registry
+# ============================================================================
+
+_state_registry: Dict[str, StateSpec] = {}
+
+
+def register_state(state: StateSpec) -> None:
+    """Register a state in the global registry"""
+    _state_registry[state.name] = state
+
+
+def get_state(name: str) -> Optional[StateSpec]:
+    """Get a state from the global registry"""
+    return _state_registry.get(name)
+
+
+def get_all_states() -> Dict[str, StateSpec]:
+    """Get all registered states"""
+    return _state_registry.copy()
+
+
+# ============================================================================
+# StateRegistry - Validation and Resolution
+# ============================================================================
+
+class ValidationError(Exception):
+    """Raised when state machine validation fails"""
+    pass
+
+
+@dataclass
+class ValidationResult:
+    """Results of state machine validation"""
+    valid: bool
+    errors: list[str]
+    warnings: list[str]
+    discovered_states: set[str]
+
+
 class StateRegistry:
-    """Manages state resolution and validation"""
+    """
+    Manages state resolution and validation for StateSpec-based states.
+
+    This registry handles:
+    - Resolving StateRef strings to StateSpec objects
+    - Validating all states in a state machine
+    - Getting transition mappings for states
+    - Detecting circular references and invalid transitions
+    """
 
     def __init__(self):
-        self._state_cache: Dict[str, Type[State]] = {}
+        self._state_cache: Dict[str, StateSpec] = {}
         self._transition_cache: Dict[str, Dict] = {}
-        self._resolved_modules: Dict[str, Type] = {}
+        self._resolved_modules: Dict[str, Any] = {}
+        self._validation_errors: list[str] = []
+        self._validation_warnings: list[str] = []
 
     def resolve_state(
-        self, state_ref: Union[str, Type[State]], validate_only: bool = False
-    ) -> Optional[Type[State]]:
-        """Resolves a state reference to an actual state class, supporting nested classes/functions and dynamic import. Tracks all resolved file paths and modules for future resolution attempts."""
+        self, state_ref: Union[str, StateRef, StateSpec], validate_only: bool = False
+    ) -> Optional[StateSpec]:
+        """
+        Resolve a state reference to an actual StateSpec object.
 
-        # TODO: Maybe use functools.cache rather than manually maintaining caches?
-        if isinstance(state_ref, type) and issubclass(state_ref, State):
-            # Track resolved module and short name
-            module_name = getattr(state_ref, "__module__", None)
-            if module_name and (module_name not in self._resolved_modules):
-                mod = sys.modules.get(module_name)
-                self._resolved_modules[module_name] = mod
+        Args:
+            state_ref: Can be a StateSpec, a StateRef, or a fully qualified state name string
+            validate_only: If True, don't cache the result (used during validation)
 
-                # Store a short name so we can do local file lookup more easily without needin the whole enchilada
+        Returns:
+            The resolved StateSpec, or None if not found (when validate_only=True)
+        """
+        # If it's already a StateSpec, return it
+        if isinstance(state_ref, StateSpec):
+            # Track resolved module
+            if state_ref.module and state_ref.module not in self._resolved_modules:
+                mod = sys.modules.get(state_ref.module)
+                self._resolved_modules[state_ref.module] = mod
+
+                # Store short name for easier local file lookup
                 if mod and hasattr(mod, "__file__"):
                     fp = Path(getattr(mod, "__file__"))
-
-                    # Now, grab just the filename, without extension and save that as well
                     self._resolved_modules[fp.stem] = mod
 
             return state_ref
 
+        # If it's a StateRef, resolve the string
         if isinstance(state_ref, StateRef):
-            if state_ref in self._state_cache:
-                print(f"cached: {state_ref}->{self._state_cache[state_ref]}")
-                return self._state_cache[state_ref]
+            state_name = state_ref.state
+        elif isinstance(state_ref, str):
+            state_name = state_ref
+        else:
+            return None
 
-            try:
-                if "." not in state_ref.state:
-                    raise ValueError(
-                        f"State reference '{state_ref}' must be fully qualified"
-                    )
+        # Check cache first
+        if state_name in self._state_cache and not validate_only:
+            return self._state_cache[state_name]
 
-                module_paths = list(
-                    accumulate(state_ref.state.split("."), lambda acc, x: acc + "." + x)
-                )
+        # Try to get from global registry
+        state = get_state(state_name)
+        if state:
+            if not validate_only:
+                self._state_cache[state_name] = state
+            return state
 
-                # See if the module exists in sys.modules
-                mod_name = None
-                for path in module_paths:
-                    if path in self._resolved_modules:
-                        mod_name = path
-                        module = self._resolved_modules[mod_name]
-                        break
-
-                    if path in sys.modules:
-                        mod_name = path
-                        module = sys.modules[mod_name]
-                        break
-
-                if mod_name is None:
-                    raise ValidationError(f"{state_ref} is nowhere in sys.modules")
-                # Now, we have the module and its name, so the fq class name is
-                # state_ref with the modue name clipped out
-                fq_class_path = state_ref.state[len(mod_name) + 1 :].split(".")
-
-                # Now, we need to walk down the fq_class_path, starting at the
-                # module, getting attributes, and checking if either the
-                # attribute itself exists, or if it exists within locals
-                working_elt = module
-                for path_elt in fq_class_path:
-                    if hasattr(working_elt, path_elt):
-                        working_elt = getattr(working_elt, path_elt)
-
-                if not (
-                    isinstance(working_elt, type) and issubclass(working_elt, State)
-                ):
-                    raise ValueError(f"'{state_ref}' is not a State subclass")
-
-                if not validate_only:
-                    self._state_cache[state_ref] = working_elt
-
-                return working_elt
-
-            except (ImportError, AttributeError, ValueError) as e:
-                error_msg = f"Failed to resolve state '{state_ref}': {e}"
-                if validate_only:
-                    self._validation_errors.append(error_msg)
-                    return None
-                else:
-                    raise ValidationError(error_msg)
-
-    @staticmethod
-    def is_abstract_classmethod_implemented(cls, method_name):
-        """Check if abstract method is implemented by checking __abstractmethods__"""
-        return method_name not in cls.__abstractmethods__ and hasattr(cls, method_name)
+        # If not in global registry, we can't resolve it
+        # (In the old system, it would try dynamic imports, but with
+        # decorator-based states, everything should be pre-registered)
+        if validate_only:
+            self._validation_errors.append(
+                f"State '{state_name}' not found in registry"
+            )
+            return None
+        else:
+            raise ValidationError(f"State '{state_name}' not found in registry")
 
     def validate_all_states(
         self,
-        initial_state: Union[str, Type[State]],
-        error_state: Optional[Union[str, Type[State]]] = None,
+        initial_state: Union[str, StateRef, StateSpec],
+        error_state: Optional[Union[str, StateRef, StateSpec]] = None,
     ) -> ValidationResult:
-        """Validation of all states in the state machine"""
+        """
+        Validate all states reachable from the initial state.
+
+        Args:
+            initial_state: The starting state
+            error_state: Optional error state
+
+        Returns:
+            ValidationResult with errors, warnings, and discovered states
+        """
         self._validation_errors = []
         self._validation_warnings = []
 
@@ -498,11 +425,13 @@ class StateRegistry:
         resolved_references = set()
         states_to_visit = []
 
+        # Resolve initial state
         initial_resolved = self.resolve_state(initial_state, validate_only=True)
         if initial_resolved:
             states_to_visit.append(initial_resolved)
             discovered_states.add(initial_resolved.name)
 
+        # Resolve error state if provided
         if error_state:
             error_resolved = self.resolve_state(error_state, validate_only=True)
             if error_resolved:
@@ -520,7 +449,7 @@ class StateRegistry:
             visited.add(state_name)
 
             def handle_state(s):
-                discovered_states.add(s)
+                discovered_states.add(s.name if hasattr(s, 'name') else str(s))
                 states_to_visit.append(s)
 
             def handle_reference(r):
@@ -529,8 +458,8 @@ class StateRegistry:
             def handle_push(p):
                 for state in p.push_states:
                     match state:
-                        case type() if issubclass(state, State):
-                            handle_state(state)
+                        case s if isinstance(s, StateSpec):
+                            handle_state(s)
                         case r if isinstance(r, StateRef):
                             handle_reference(r)
                         case invalid:
@@ -539,47 +468,44 @@ class StateRegistry:
                             )
 
             try:
-                raw_transitions = current_state.transitions()
+                # Get transitions
+                raw_transitions = current_state.get_transitions()
 
-                #  Handle returning single states
+                # Handle different return types
                 match raw_transitions:
-                    case type() if issubclass(raw_transitions, TransitionType):
+                    case list() | tuple():
+                        pass  # Already a list
+                    case _ if isinstance(raw_transitions, (TransitionType, LabeledTransition)):
                         raw_transitions = [raw_transitions]
-                    case _ if isinstance(raw_transitions, TransitionType):
-                        raw_transitions = [raw_transitions]
+                    case _:
+                        raw_transitions = []
 
-                # Raw transitions returns a list or tuple, every entry in that tuple can be either:
-                # - A LabeledTransition Object (which may contain a Push, State, or StateRef)
-                # - A State Object
-                # - A TransitionType like Again, Pop, etc
-                # - A StateRef Object
+                # Validate each transition
                 for transition in raw_transitions:
                     match transition:
                         case _ if isinstance(transition, Push):
-                            # NOTE: Due to their error prone nature, Push objects require a label
+                            # Push transitions must have labels
                             self._validation_errors.append(
-                                f"State '{state_name}' has a push transition: {transition} without a label"
+                                f"State '{state_name}' has a push transition without a label"
                             )
-                        case LabeledTransition(_, s):
+                            handle_push(transition)
+                        case LabeledTransition(label, s):
                             match s:
-                                case type() if issubclass(s, State):
-                                    handle_state(s)
+                                case st if isinstance(st, StateSpec):
+                                    handle_state(st)
                                 case r if isinstance(r, StateRef):
                                     handle_reference(r)
                                 case p if isinstance(p, Push):
                                     handle_push(p)
-                        case type() if issubclass(transition, State):
-                            handle_state(transition)
+                        case s if isinstance(s, StateSpec):
+                            handle_state(s)
                         case r if isinstance(r, StateRef):
-                            # TODO: Should this be an error? I have mixed feelings
                             self._validation_warnings.append(
-                                f"State '{state_name}' has has a StateReference transition: {r} without a label"
+                                f"State '{state_name}' has a StateReference transition without a label"
                             )
                             handle_reference(r)
-                        case type() if issubclass(
-                            transition, (StateContinuation, StateRenewal)
-                        ):
-                            # Good to go, just need to capture that these are valid
+                        case _ if isinstance(transition, (StateContinuation, StateRenewal)):
+                            # Valid continuation/renewal
                             pass
                         case invalid:
                             self._validation_errors.append(
@@ -587,48 +513,41 @@ class StateRegistry:
                             )
 
                 # Validate that the state has an on_state handler
-                if not self.is_abstract_classmethod_implemented(
-                    current_state, "on_state"
-                ):
+                if current_state.on_state is None:
                     self._validation_errors.append(
                         f"State {state_name} does not have an on_state handler defined"
                     )
 
                 # Make sure non-terminal states define transitions
-                if not current_state.CONFIG.terminal:
-                    if not self.is_abstract_classmethod_implemented(
-                        current_state, "transitions"
-                    ):
+                if not current_state.config.terminal:
+                    if current_state.transitions is None:
                         self._validation_errors.append(
                             f"Non-terminal state {state_name} does not define any transitions"
                         )
 
                 # Validate timeout configuration
-                if current_state.CONFIG.timeout is not None:
+                if current_state.config.timeout is not None:
                     if (
-                        not isinstance(current_state.CONFIG.timeout, (int, float))
-                        or current_state.CONFIG.timeout <= 0
+                        not isinstance(current_state.config.timeout, (int, float))
+                        or current_state.config.timeout <= 0
                     ):
                         self._validation_errors.append(
-                            f"State '{state_name}' has invalid timeout: {current_state.CONFIG.timeout}"
+                            f"State '{state_name}' has invalid timeout: {current_state.config.timeout}"
                         )
 
-                    has_timeout_handler = self.is_abstract_classmethod_implemented(
-                        current_state, "on_timeout"
-                    )
+                    has_timeout_handler = current_state.on_timeout is not None
                     if not has_timeout_handler:
                         self._validation_warnings.append(
                             f"State '{state_name}' has timeout but no on_timeout handler defined"
                         )
 
                 # Pass 2: Validate all string references
-                for state_ref in state_references - resolved_references:
+                for state_ref in list(state_references - resolved_references):
                     resolved = self.resolve_state(state_ref, validate_only=True)
                     if resolved:
                         resolved_references.add(state_ref)
-                        resolved_name = resolved.name
-                        if resolved_name not in discovered_states:
-                            discovered_states.add(resolved_name)
+                        if resolved.name not in discovered_states:
+                            discovered_states.add(resolved.name)
                             states_to_visit.append(resolved)
 
             except Exception as e:
@@ -643,60 +562,125 @@ class StateRegistry:
             discovered_states=discovered_states,
         )
 
-    def get_transitions(self, state_class: Type[State]) -> Dict:
-        """Gets the transition mapping for a state, with caching"""
-        state_name = state_class.name
+    def get_transitions(self, state: StateSpec) -> Dict:
+        """
+        Get the transition mapping for a state, with caching.
+
+        Returns a dict mapping event labels/enum values to transition targets.
+        """
+        state_name = state.name
 
         if state_name in self._transition_cache:
             return self._transition_cache[state_name]
 
-        resolved_transitions = dict()
+        resolved_transitions = {}
 
-        raw_transitions = state_class.transitions()
+        raw_transitions = state.get_transitions()
         match raw_transitions:
-            case type() if issubclass(raw_transitions, TransitionType):
+            case list() | tuple():
+                pass  # Already a list
+            case _ if isinstance(raw_transitions, (TransitionType, LabeledTransition)):
                 raw_transitions = [raw_transitions]
-            case _ if isinstance(raw_transitions, TransitionType):
-                raw_transitions = [raw_transitions]
+            case _:
+                raw_transitions = []
 
         for transition in raw_transitions:
             match transition:
-                case LabeledTransition(l, s):
-                    match s:
-                        case type() if issubclass(s, State):
-                            resolved_transitions[l] = s
-                        case r if isinstance(r, StateRef):
-                            resolved_transitions[l] = self.resolve_state(r)
-                        case x:
-                            # TODO: I hate this, be more explicit
-                            resolved_transitions[l] = x
-                case type() if issubclass(transition, State):
-                    # Allow lookup by the state itself as well since we want to allow the old style of returning a state class
-                    resolved_transitions[transition.name] = transition
-                    resolved_transitions[transition] = transition
+                case LabeledTransition(label, target):
+                    # Use the label enum itself as the key
+                    resolved_transitions[label] = target
+                    # Also allow lookup by label name
+                    resolved_transitions[label.name] = target
+                    # Also allow lookup by label value
+                    if hasattr(label, 'value'):
+                        resolved_transitions[label.value] = target
+                case s if isinstance(s, StateSpec):
+                    # Direct state reference
+                    resolved_transitions[s.name] = s
+                    resolved_transitions[s] = s
                 case r if isinstance(r, StateRef):
-                    # TODO: Still not sure how I feel about this
-                    resolved_transitions[r.state] = self.resolve_state(r)
-                case type() if issubclass(
-                    transition, (StateContinuation, StateRenewal)
-                ):
-                    # Allow Continuations and Renewals to be looked up by type
+                    # String reference - resolve it
+                    resolved = self.resolve_state(r)
+                    if resolved:
+                        resolved_transitions[r.state] = resolved
+                case _ if isinstance(transition, (StateContinuation, StateRenewal)):
+                    # Special transitions - allow lookup by type
                     resolved_transitions[transition] = transition
 
         self._transition_cache[state_name] = resolved_transitions
         return resolved_transitions
 
 
-class DefaultStates:
-    class Error(State):
-        CONFIG = StateConfiguration(terminal=True)
+# ============================================================================
+# Message Types for StateMachine
+# ============================================================================
 
-        async def on_state(cls, ctx):
-            ctx.log("Error, terminating state machine")
+@dataclass
+class PrioritizedMessage:
+    priority: int
+    item: Any = field(compare=False)
 
+    def __lt__(self, other):
+        """Compare based on priority only"""
+        if not isinstance(other, PrioritizedMessage):
+            return NotImplemented
+        return self.priority < other.priority
+
+
+@dataclass
+class EnokiInternalMessage:
+    """Base class for internal FSM messages"""
+    pass
+
+
+@dataclass
+class TimeoutMessage(EnokiInternalMessage):
+    """Internal message for timeout events"""
+    state_name: str
+    timeout_id: int
+    timeout_duration: float
+
+
+# ============================================================================
+# Exceptions for StateMachine
+# ============================================================================
+
+class StateMachineComplete(Exception):
+    """Raised when the state machine has reached a terminal state"""
+    pass
+
+
+class BlockedInUntimedState(Exception):
+    """Raised when a non-dwelling state blocks without a timeout"""
+    pass
+
+
+class PopFromEmptyStack(Exception):
+    """Raised when we attempt to pop from an empty stack"""
+    pass
+
+
+class NoStateToTick(Exception):
+    """Raised when the FSM object doesn't have a state attached"""
+    pass
+
+
+# ============================================================================
+# StateMachine Runtime
+# ============================================================================
 
 class StateMachine:
-    """State Machine with asyncio-based async support"""
+    """
+    State Machine for executing StateSpec-based states.
+
+    This is an asyncio-native state machine that handles:
+    - State transitions (including Again, Retry, Push, Pop, etc.)
+    - Timeout handling
+    - Message passing via priority queues
+    - Lifecycle method execution (on_enter, on_state, on_leave, on_timeout, on_fail)
+    - Retry counters
+    - Push/pop stack for hierarchical states
+    """
 
     class MessagePriorities(IntEnum):
         ERROR = 0
@@ -705,25 +689,19 @@ class StateMachine:
 
     def __init__(
         self,
-        initial_state: Union[str, Type[State]],
-        error_state: Union[str, Type[State]] = None,
-        filter_fn: Optional[callable] = None,
-        trap_fn: Optional[callable] = None,
-        on_error_fn=None,
+        initial_state: Union[str, StateRef, StateSpec],
+        error_state: Optional[Union[str, StateRef, StateSpec]] = None,
+        filter_fn: Optional[Callable] = None,
+        trap_fn: Optional[Callable] = None,
+        on_error_fn: Optional[Callable] = None,
         common_data: Optional[Any] = None,
     ):
 
         self.registry = StateRegistry()
 
-        # The filter and trap functions are used to filter messages
-        # (for example, common messages that apply to the process
-        # rather than an individual state) and trap unhandled messages
-        # (so that one could, for example, raise an exception)
+        # The filter and trap functions
         self._filter_fn = filter_fn or (lambda x, y: None)
         self._trap_fn = trap_fn or (lambda x: None)
-
-        # The on_error function allows users to catch and handle specific kinds
-        # of errors as they see fit and avoid crashing if the FSM can recover
         self._on_err_fn = on_error_fn or (lambda x, y: None)
 
         # Validate the state machine structure
@@ -744,14 +722,11 @@ class StateMachine:
             for warning in validation_result.warnings:
                 self.log(f"WARNING: {warning}")
 
-        # Resolve initial states
+        # Resolve initial and error states
         self.initial_state = self.registry.resolve_state(initial_state)
         self.error_state = (
             self.registry.resolve_state(error_state) if error_state else None
         )
-
-        # Pre-compute analysis
-        self._state_analysis = self._analyze_all_states()
 
         # Asyncio-based infrastructure
         self._message_queue = PriorityQueue()
@@ -760,16 +735,16 @@ class StateMachine:
         self._current_timeout_id = None
 
         # Runtime state
-        self.current_state = None
-        self.state_stack = []
+        self.current_state: Optional[StateSpec] = None
+        self.state_stack: List[StateSpec] = []
         self.context = SharedContext(
             send_message=self.send_message,
             log=self.log,
-            common=common_data or dict(),
+            common=common_data if common_data is not None else dict(),
         )
 
-        self.retry_counters = {}
-        self.state_enter_times = {}
+        self.retry_counters: Dict[str, int] = {}
+        self.state_enter_times: Dict[str, float] = {}
 
         # Initialize asynchronously
         self._initialized = False
@@ -780,280 +755,6 @@ class StateMachine:
             await self.reset()
             self._initialized = True
 
-    def _analyze_all_states(self) -> Dict[str, Dict]:
-        """Pre-compute analysis of all states using graph traversal with stack simulation"""
-        analysis = {}
-
-        # Phase 1: Discover all states and their raw transitions
-        visited = set()
-        to_visit = [self.initial_state]
-
-        if self.error_state:
-            to_visit.append(self.error_state)
-
-        # First pass: collect all states and their raw transition data
-        while to_visit:
-            current = to_visit.pop()
-            state_name = current.name
-
-            if state_name in visited:
-                continue
-
-            visited.add(state_name)
-            transitions = self.registry.get_transitions(current)
-
-            # Store raw transition data for later processing
-            raw_transitions = {}
-            for transition_enum, target in transitions.items():
-                raw_transitions[transition_enum] = target
-
-            analysis[state_name] = {
-                "state_class": current,
-                "raw_transitions": raw_transitions,
-                "transitions": {},  # Will be filled in phase 3
-                "targets": [],  # Will be filled in phase 3
-                "possible_pop_targets": set(),  # All states this could pop to
-                "push_sources": [],  # All push operations that can reach this state
-                "config": {
-                    "timeout": current.CONFIG.timeout,
-                    "retries": current.CONFIG.retries,
-                    "terminal": current.CONFIG.terminal,
-                    "can_dwell": current.CONFIG.can_dwell,
-                },
-                "group_name": current.group_name,
-                "base_name": current.base_name,
-            }
-
-            # Add all referenced states to visit queue
-            for transition_enum, target in transitions.items():
-                if isinstance(target, type) and issubclass(target, State):
-                    if target not in to_visit and target.name not in visited:
-                        to_visit.append(target)
-                elif isinstance(target, Push):
-                    for state_ref in target.push_states:
-                        resolved = self.registry.resolve_state(state_ref)
-                        if (
-                            resolved
-                            and resolved not in to_visit
-                            and resolved.name not in visited
-                        ):
-                            to_visit.append(resolved)
-
-        # Phase 2: Graph traversal with stack simulation
-        # We'll do a BFS/DFS to find all possible paths and their stack states
-
-        class PathState:
-            """Represents a state in our graph traversal"""
-
-            def __init__(self, state_name: str, stack: list, path: list):
-                self.state_name = state_name
-                self.stack = stack.copy()  # Current stack contents
-                self.path = path.copy()  # Path taken to get here
-
-        # Track all the ways we can reach each state
-        state_contexts = {}  # state_name -> list of (stack, path) tuples
-
-        # Start traversal from initial state
-        queue = [PathState(self.initial_state.name, [], [])]
-        if self.error_state:
-            queue.append(PathState(self.error_state.name, [], []))
-
-        # Limit traversal to prevent infinite loops
-        max_path_length = 50
-        seen_states = set()  # (state_name, tuple(stack)) to detect cycles
-
-        while queue:
-            current = queue.pop(0)
-
-            # Skip if path is too long (cycle detection)
-            if len(current.path) > max_path_length:
-                continue
-
-            # Create a hashable representation of this state+stack combination
-            stack_tuple = tuple(current.stack)
-            state_key = (current.state_name, stack_tuple)
-
-            # Skip if we've seen this exact state+stack combination
-            if state_key in seen_states:
-                continue
-            seen_states.add(state_key)
-
-            # Record this context for the state
-            if current.state_name not in state_contexts:
-                state_contexts[current.state_name] = []
-            state_contexts[current.state_name].append(
-                {"stack": current.stack, "path": current.path}
-            )
-
-            # Get transitions for current state
-            state_info = analysis.get(current.state_name)
-            if not state_info:
-                continue
-
-            # Process each transition
-            for transition_enum, target in state_info["raw_transitions"].items():
-                transition_name = (
-                    transition_enum.name
-                    if hasattr(transition_enum, "name")
-                    else str(transition_enum)
-                )
-
-                if isinstance(target, type) and issubclass(target, State):
-                    # Simple transition - same stack
-                    next_path = current.path + [(current.state_name, transition_name)]
-                    queue.append(PathState(target.name, current.stack, next_path))
-
-                elif isinstance(target, Push):
-                    # Push transition - modify stack
-                    resolved_states = []
-                    for state_ref in target.push_states:
-                        resolved = self.registry.resolve_state(state_ref)
-                        if resolved:
-                            resolved_states.append(resolved.name)
-
-                    if resolved_states:
-                        # First state is where we transition to
-                        next_state = resolved_states[0]
-                        # Rest go on the stack
-                        new_stack = resolved_states[1:] + current.stack
-                        next_path = current.path + [
-                            (current.state_name, transition_name)
-                        ]
-                        queue.append(PathState(next_state, new_stack, next_path))
-
-                        # Record that this push can reach all states in the push
-                        for i, pushed_state in enumerate(resolved_states):
-                            if pushed_state not in analysis:
-                                continue
-                            analysis[pushed_state]["push_sources"].append(
-                                {
-                                    "from_state": current.state_name,
-                                    "transition": transition_name,
-                                    "push_states": resolved_states,
-                                    "position": i,
-                                }
-                            )
-
-                elif target is Pop:
-                    # Pop transition - use stack
-                    if current.stack:
-                        next_state = current.stack[0]
-                        new_stack = current.stack[1:]
-                        next_path = current.path + [
-                            (current.state_name, transition_name)
-                        ]
-                        queue.append(PathState(next_state, new_stack, next_path))
-
-                        # Record this as a possible pop target
-                        analysis[current.state_name]["possible_pop_targets"].add(
-                            next_state
-                        )
-                    # If stack is empty, this path ends here (but don't mark as error yet)
-
-        # Phase 3: Build final transition mappings with all pop targets
-        validation_issues = []
-
-        for state_name, state_info in analysis.items():
-            targets = []
-            transition_details = {}
-
-            # Get all contexts where this state appears
-            contexts = state_contexts.get(state_name, [])
-
-            for transition_enum, target in state_info["raw_transitions"].items():
-                transition_name = (
-                    transition_enum.name
-                    if hasattr(transition_enum, "name")
-                    else str(transition_enum)
-                )
-
-                if isinstance(target, type) and issubclass(target, State):
-                    target_name = target.name
-                    targets.append(target_name)
-                    transition_details[transition_name] = target_name
-
-                elif isinstance(target, Push):
-                    # Resolve all states in the push
-                    resolved_states = []
-                    for state_ref in target.push_states:
-                        resolved = self.registry.resolve_state(state_ref)
-                        if resolved:
-                            resolved_states.append(resolved.name)
-
-                    if resolved_states:
-                        # First state is the immediate target
-                        targets.append(resolved_states[0])
-                        # All states are reachable
-                        targets.extend(resolved_states[1:])
-
-                        transition_details[transition_name] = (
-                            f"Push({', '.join(resolved_states)})"
-                        )
-
-                elif target is Pop:
-                    # Get all possible pop targets from our analysis
-                    pop_targets = state_info["possible_pop_targets"]
-
-                    if not pop_targets:
-                        # No valid pop targets found in any context
-                        if not contexts:
-                            transition_details[transition_name] = (
-                                "Pop -> <unreachable state>"
-                            )
-                            validation_issues.append(
-                                f"State '{state_name}' is unreachable but has Pop transition"
-                            )
-                        else:
-                            # State is reachable but all paths have empty stack
-                            transition_details[transition_name] = (
-                                "Pop -> <stack underflow>"
-                            )
-                            validation_issues.append(
-                                f"State '{state_name}' always has empty stack at Pop"
-                            )
-                    elif len(pop_targets) == 1:
-                        # Single pop target
-                        target_name = list(pop_targets)[0]
-                        targets.append(target_name)
-                        transition_details[transition_name] = f"Pop -> {target_name}"
-                    else:
-                        # Multiple pop targets - this is valid!
-                        # The actual target depends on runtime stack state
-                        targets.extend(pop_targets)
-                        target_list = sorted(pop_targets)
-                        transition_details[transition_name] = (
-                            f"Pop -> {{{', '.join(target_list)}}}"
-                        )
-
-                elif isinstance(target, TransitionType):
-                    transition_details[transition_name] = f"Global.{target.name}"
-
-                else:
-                    transition_details[transition_name] = str(target)
-
-            state_info["transitions"] = transition_details
-            state_info["targets"] = list(set(targets))  # Remove duplicates
-            state_info["contexts"] = contexts  # Store all contexts for analysis
-
-        # Phase 4: Validation - check for issues
-        # Check for infinite push cycles
-        for state_name, contexts in state_contexts.items():
-            max_stack_depth = (
-                max(len(ctx["stack"]) for ctx in contexts) if contexts else 0
-            )
-            if max_stack_depth > 20:
-                validation_issues.append(
-                    f"State '{state_name}' can have very deep stack (max: {max_stack_depth}) - possible infinite push cycle"
-                )
-
-        # Report validation issues
-        if validation_issues:
-            self.log("Push/Pop Analysis Issues:")
-            for issue in validation_issues:
-                self.log(f"  - {issue}")
-
-        return analysis
-
     def send_message(self, message: Any):
         """Send a message to the state machine"""
         try:
@@ -1063,7 +764,9 @@ class StateMachine:
         except Exception as e:
             self._send_message_internal(e)
 
-    def _send_message_internal(self, message):
+    def _send_message_internal(self, message: Any):
+        """Internal message sending"""
+
         match message:
             case _ if isinstance(message, EnokiInternalMessage):
                 try:
@@ -1072,35 +775,242 @@ class StateMachine:
                             self.MessagePriorities.INTERNAL_MESSAGE, message
                         )
                     )
-                except asyncio.QueueFull:
-                    # Handle queue full scenario
-                    pass
+                except Exception:
+                    pass  # Queue full
             case _ if isinstance(message, Exception):
                 try:
                     self._message_queue.put_nowait(
                         PrioritizedMessage(self.MessagePriorities.ERROR, message)
                     )
-                except asyncio.QueueFull:
-                    # Handle queue full scenario
+                except Exception:
                     pass
             case _:
-                # standard message
                 try:
                     self._message_queue.put_nowait(
                         PrioritizedMessage(self.MessagePriorities.MESSAGE, message)
                     )
-                except asyncio.QueueFull:
-                    # Handle queue full scenario
+                except Exception:
                     pass
 
-    def _send_timeout_message(self, state_name: str, timeout_id: int, duration: float):
-        """Internal method to send timeout messages"""
-        timeout_msg = TimeoutMessage(state_name, timeout_id, duration)
-        self._send_message_internal(timeout_msg)
+    async def reset(self):
+        """Reset the state machine to initial state"""
+        self._cancel_timeout()
+        self.state_stack = []
+        self.retry_counters = {}
+        self.state_enter_times = {}
 
-    def _start_timeout(self, state_class: Type[State]) -> Optional[int]:
+        # Clear message queue
+        while not self._message_queue.empty():
+            try:
+                self._message_queue.get_nowait()
+            except Exception:
+                break
+
+        # Transition into our initial state
+        await self._transition_to_state(self.initial_state)
+
+    def log(self, message: str):
+        """Log a message"""
+        print(f"[FSM] {message}")
+
+    async def tick(self, timeout: Optional[Union[float, int]] = 0):
+        """Process one state machine tick"""
+
+        if not self._initialized:
+            await self.initialize()
+
+        if not self.current_state:
+            raise NoStateToTick()
+
+        # Validate timeout parameter
+        match timeout:
+            case x if x and not isinstance(x, (int, float)):
+                raise ValueError(f"Tick timeout must be None, or an int/float >= 0")
+            case 0:
+                block = False
+            case None:
+                block = True
+            case x if x > 0:
+                block = True
+            case _:
+                raise ValueError("Tick timeout must be None or >= 0")
+
+        while True:
+            try:
+                if isinstance(self.context.msg, Exception):
+                    raise self.context.msg
+
+                # Handle timeout messages specially
+                if isinstance(self.context.msg, TimeoutMessage):
+                    if not self._handle_timeout_message():
+                        return
+                    transition = await self._call_on_timeout(self.current_state)
+                else:
+                    transition = await self._call_on_state(self.current_state)
+
+                if self.current_state.config.terminal:
+                    raise StateMachineComplete()
+
+                if transition in (None, Unhandled):
+                    self._trap_fn(self.context)
+
+                self.context.msg = None
+
+                should_check_queue = await self._process_transition(transition, block)
+
+                # In manual mode (block=False), stop after processing one transition if not checking queue
+                if not block and not should_check_queue:
+                    break
+
+                if should_check_queue:
+                    if block:
+                        message = await asyncio.wait_for(
+                            self._message_queue.get(), timeout=timeout
+                        )
+                        message = message.item
+                    else:
+                        message = self._message_queue.get_nowait().item
+                    self.context.msg = message
+            except asyncio.QueueEmpty:
+                break
+            except asyncio.TimeoutError:
+                break
+            except Exception as e:
+                if (
+                    isinstance(e, StateMachineComplete)
+                    or self.current_state.config.terminal
+                ):
+                    raise
+
+                next_transition = self._on_err_fn(self.context, e)
+                if next_transition:
+                    await self._process_transition(next_transition, block)
+                elif self.error_state and self.current_state != self.error_state:
+                    # Clear the exception message before transitioning
+                    self.context.msg = None
+                    await self._transition_to_state(self.error_state)
+                elif self.current_state == self.error_state:
+                    # Already in error state and got another exception - stop
+                    break
+                else:
+                    raise
+
+        return None
+
+    async def _call_on_state(self, state: StateSpec):
+        """Call the state's on_state handler"""
+        if state.on_state is None:
+            raise ValueError(f"State {state.name} has no on_state handler")
+        return await state.on_state(self.context)
+
+    async def _call_on_enter(self, state: StateSpec):
+        """Call the state's on_enter handler"""
+        if state.on_enter is not None:
+            self.log(f"  [DEBUG] Calling on_enter for {state.name}")
+            await state.on_enter(self.context)
+            self.log(f"  [DEBUG] on_enter completed for {state.name}")
+
+    async def _call_on_leave(self, state: StateSpec):
+        """Call the state's on_leave handler"""
+        if state.on_leave is not None:
+            await state.on_leave(self.context)
+
+    async def _call_on_timeout(self, state: StateSpec):
+        """Call the state's on_timeout handler"""
+        if state.on_timeout is None:
+            raise ValueError(f"State {state.name} has no on_timeout handler")
+        return await state.on_timeout(self.context)
+
+    async def _call_on_fail(self, state: StateSpec):
+        """Call the state's on_fail handler"""
+        if state.on_fail is None:
+            raise ValueError(f"State {state.name} has no on_fail handler")
+        return await state.on_fail(self.context)
+
+    async def _process_transition(self, transition: Any, block: bool = False) -> bool:
+        """Process a state transition"""
+
+        valid_transitions = self.registry.get_transitions(self.current_state)
+
+        # Try to get the transition target
+        target = valid_transitions.get(transition)
+
+        # If not found by the transition itself, try by value
+        if target is None and transition in valid_transitions.values():
+            target = transition
+        elif transition is not None and target is None:
+            raise ValueError(f"Unknown transition {transition}: {valid_transitions}")
+
+        # Process the transition
+
+        if transition in (None, Unhandled):
+            if (
+                self.current_state.config.can_dwell
+            ) or self.current_state.config.timeout:
+                return True
+            raise BlockedInUntimedState(
+                f"{self.current_state.name} cannot dwell and does not have a timeout"
+            )
+        elif isinstance(target, StateSpec):
+            await self._transition_to_state(target)
+        elif isinstance(target, Push):
+            await self._handle_push(target)
+        elif isinstance(target, Pop) or target is Pop:
+            await self._handle_pop()
+        elif target == Again:
+            # Re-execute current state immediately
+            # In manual tick mode (block=False), stop after one execution
+            # In automatic mode (block=True), continue the loop
+            if block:
+                # Automatic mode: continue the loop
+                return True
+            else:
+                # Manual mode: stop after this execution
+                return False
+        elif target == Repeat:
+            await self._transition_to_state(self.current_state)
+        elif target == Restart:
+            self._reset_state_context()
+            await self._transition_to_state(self.current_state)
+            return True
+        elif target == Retry:
+            await self._handle_retry()
+        elif isinstance(target, (StateContinuation, StateRenewal)):
+            # Other continuations/renewals - handle appropriately
+            if target == Again:
+                return True  # Continue the loop
+            elif target == Repeat:
+                await self._transition_to_state(self.current_state)
+            elif target == Restart:
+                self._reset_state_context()
+                await self._transition_to_state(self.current_state)
+                return True
+            elif target == Retry:
+                await self._handle_retry()
+
+        return False
+
+    async def _transition_to_state(self, next_state: StateSpec):
+        """Transition to a new state"""
+
+        if self.current_state:
+            await self._call_on_leave(self.current_state)
+            self._cancel_timeout()
+
+        self.current_state = next_state
+        self.state_enter_times[next_state.name] = time.time()
+        self.log(f"Transitioned to {next_state.name}")
+        self.log(f"  [DEBUG] common object id: {id(self.context.common)}")
+        self.log(f"  [DEBUG] on_enter is None? {next_state.on_enter is None}")
+
+        self._start_timeout(next_state)
+        await self._call_on_enter(next_state)
+        self.log(f"  [DEBUG] After on_enter, common: {self.context.common}")
+
+    def _start_timeout(self, state: StateSpec) -> Optional[int]:
         """Start a timeout for the given state"""
-        if state_class.CONFIG.timeout is None:
+
+        if state.config.timeout is None:
             return None
 
         self._cancel_timeout()
@@ -1109,23 +1019,15 @@ class StateMachine:
         timeout_id = self._timeout_counter
         self._current_timeout_id = timeout_id
 
-        self._timeout_task = create_task(
-            self._timeout_handler(
-                state_class.name,
-                timeout_id,
-                state_class.CONFIG.timeout,
-            )
-        )
+        async def timeout_handler():
+            try:
+                await asyncio.sleep(state.config.timeout)
+                self._send_timeout_message(state.name, timeout_id, state.config.timeout)
+            except asyncio.CancelledError:
+                pass
 
+        self._timeout_task = asyncio.create_task(timeout_handler())
         return timeout_id
-
-    async def _timeout_handler(self, state_name: str, timeout_id: int, duration: float):
-        """Asyncio task that handles timeout"""
-        try:
-            await sleep(duration)
-            self._send_timeout_message(state_name, timeout_id, duration)
-        except asyncio.CancelledError:
-            pass  # Task was cancelled (timeout cancelled)
 
     def _cancel_timeout(self):
         """Cancel any active timeout"""
@@ -1134,8 +1036,15 @@ class StateMachine:
             self._timeout_task = None
         self._current_timeout_id = None
 
+    def _send_timeout_message(self, state_name: str, timeout_id: int, duration: float):
+        """Internal method to send timeout messages"""
+
+        timeout_msg = TimeoutMessage(state_name, timeout_id, duration)
+        self._send_message_internal(timeout_msg)
+
     def _handle_timeout_message(self) -> bool:
         """Handle a timeout message"""
+
         timeout_msg = self.context.msg
         self.context.msg = None
 
@@ -1155,165 +1064,6 @@ class StateMachine:
         self._cancel_timeout()
         return True
 
-    async def reset(self):
-        """Reset the state machine to initial state"""
-        self._cancel_timeout()
-        self.state_stack = []
-        self.retry_counters = {}
-        self.state_enter_times = {}
-
-        # Clear message queue
-        while not self._message_queue.empty():
-            try:
-                self._message_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-
-        # Transition into our initial state
-        await self._transition_to_state(self.initial_state)
-
-    def log(self, message: str):
-        """Log a message"""
-        print(f"[FSM] {message}")
-
-    async def tick(self, timeout: Optional[Union[float, int]] = 0):
-        """Process one state machine tick"""
-        if not self._initialized:
-            await self.initialize()
-
-        if not self.current_state:
-            raise NoStateToTick()
-
-        match timeout:
-            case x if x and not isinstance(x, (int, float)):
-                raise ValueError(
-                    f"Tick timeout must be None, or an integer/float >= 0, got {type(x)}"
-                )
-            case 0:
-                block = False
-            case None:
-                block = True
-            case x if x > 0:
-                block = True
-            case _:
-                raise ValueError("Tick timeout must be None, or >=0")
-
-        while True:
-            try:
-                if isinstance(self.context.msg, Exception):
-                    raise self.context.msg
-
-                # Handle timeout messages specially
-                if isinstance(self.context.msg, TimeoutMessage):
-                    if not self._handle_timeout_message():
-                        return
-                    transition = await self.current_state.on_timeout(self.context)
-                else:
-                    transition = await self.current_state.on_state(self.context)
-
-                if self.current_state.CONFIG.terminal:
-                    raise StateMachineComplete
-
-                if transition in (None, Unhandled):
-                    self._trap_fn(self.context)
-
-                self.context.msg = None
-
-                should_check_queue = await self._process_transition(transition)
-
-                if should_check_queue:
-                    if block:
-                        message = await asyncio.wait_for(
-                            self._message_queue.get(), timeout=timeout
-                        )
-                        message = message.item
-                    else:
-                        message = self._message_queue.get_nowait().item
-                    self.context.msg = message
-            except asyncio.QueueEmpty:
-                break
-            except asyncio.TimeoutError:
-                break
-            except Exception as e:
-                # While it's true that 'Pokemon errors' are typically
-                # in poor taste, this allows the user to selectively
-                # handle error cases, and throw any error that isn't
-                # explicitely handled
-
-                # If we're terminal anyway, bail
-                if (
-                    isinstance(e, StateMachineComplete)
-                    or self.current_state.CONFIG.terminal
-                ):
-                    raise
-
-                next_transition = self._on_err_fn(self.context, e)
-                if next_transition:
-                    await self._process_transition(next_transition)
-                else:
-                    raise
-
-    def tick_nowait(self):
-        """Non-blocking tick that processes available messages without waiting"""
-        return asyncio.create_task(self.tick(timeout=0))
-
-    async def _process_transition(
-        self, transition: Union[TransitionType, Enum]
-    ) -> bool:
-        """Process a state transition"""
-        valid_transitions = self.registry.get_transitions(self.current_state)
-
-        target = valid_transitions.get(transition)
-
-        if transition is not None:
-            if target is None and transition in valid_transitions.values():
-                target = transition
-            else:
-                raise ValueError(
-                    f"ERROR: Unknown transition {transition}: {valid_transitions}"
-                )
-
-        if transition in (None, Unhandled):
-            if (
-                self.current_state.CONFIG.can_dwell
-            ) or self.current_state.CONFIG.timeout:
-                return True
-            raise BlockedInUntimedState(
-                f"{self.current_state.name} cannot dwell and does not have a timeout"
-            )
-        elif isinstance(target, type) and issubclass(target, State):
-            await self._transition_to_state(target)
-        elif isinstance(target, Push):
-            await self._handle_push(target)
-        elif isinstance(target, Pop) or issubclass(target, Pop):
-            await self._handle_pop()
-        elif target == Again:
-            # Schedule another tick without blocking
-            asyncio.create_task(self.tick(timeout=0))
-        elif target == Repeat:
-            await self._transition_to_state(type(self.current_state))
-        elif target == Restart:
-            self._reset_state_context()
-            await self._transition_to_state(type(self.current_state))
-            return True
-        elif target == Retry:
-            await self._handle_retry()
-
-        return False
-
-    async def _transition_to_state(self, next_state: Type[State]):
-        """Transition to a new state"""
-        if self.current_state:
-            await self.current_state.on_leave(self.context)
-            self._cancel_timeout()
-
-        self.current_state = next_state
-        self.state_enter_times[next_state.name] = time.time()
-        self.log(f"Transitioned to {next_state.name}")
-
-        self._start_timeout(next_state)
-        await next_state.on_enter(self.context)
-
     async def _handle_retry(self):
         """Handle retry logic with counter"""
         state_name = self.current_state.name
@@ -1324,11 +1074,11 @@ class StateMachine:
         self.retry_counters[state_name] += 1
 
         if (
-            self.current_state.CONFIG.retries is not None
-            and self.retry_counters[state_name] > self.current_state.CONFIG.retries
+            self.current_state.config.retries is not None
+            and self.retry_counters[state_name] > self.current_state.config.retries
         ):
             self.log(f"Retry limit exceeded for {state_name}")
-            transition = await self.current_state.on_fail(self.context)
+            transition = await self._call_on_fail(self.current_state)
             await self._process_transition(transition)
         else:
             await self._transition_to_state(self.current_state)
@@ -1351,7 +1101,7 @@ class StateMachine:
     async def _handle_pop(self):
         """Handle pop transition"""
         if not self.state_stack:
-            raise PopFromEmptyStack
+            raise PopFromEmptyStack()
 
         next_state = self.state_stack.pop()
         await self._transition_to_state(next_state)
@@ -1369,7 +1119,7 @@ class StateMachine:
             if max_iterations is not None and iteration >= max_iterations:
                 break
 
-            if self.current_state.CONFIG.terminal:
+            if self.current_state.config.terminal:
                 self.log(f"Reached terminal state: {self.current_state.name}")
                 break
 
@@ -1385,444 +1135,257 @@ class StateMachine:
                 else:
                     raise
 
-    @property
-    def discovered_states(self) -> set[str]:
-        """Get all states discovered during analysis"""
-        return set(self._state_analysis.keys())
 
-    @property
-    def state_groups(self) -> Dict[str, list[str]]:
-        """Get states organized by their group names"""
-        groups = {}
-        for state_name, info in self._state_analysis.items():
-            group_name = info["group_name"]
-            if group_name not in groups:
-                groups[group_name] = []
-            groups[group_name].append(state_name)
-        return groups
+# ============================================================================
+# Decorators
+# ============================================================================
 
-    def get_state_info(self, state_name: str) -> Dict:
-        """Get analysis information for a specific state"""
-        return self._state_analysis.get(state_name, {})
+class _EnokiDecoratorAPI:
+    """Decorator API for defining states"""
 
-    def get_push_pop_relationships(self) -> Dict[str, Dict]:
-        """Get detailed push/pop relationships from the analysis"""
-        relationships = {}
+    def __init__(self):
+        self._tracking_stack: List[List[Tuple[str, Any]]] = []
 
-        for state_name, info in self._state_analysis.items():
-            # Get all possible pop targets
-            pop_targets = []
-            for transition_name, target_str in info["transitions"].items():
-                if "Pop ->" in target_str:
-                    if "{" in target_str:
-                        # Multiple targets: "Pop -> {A, B, C}"
-                        targets_str = target_str[
-                            target_str.index("{") + 1 : target_str.rindex("}")
-                        ]
-                        targets = [t.strip() for t in targets_str.split(",")]
-                        pop_targets.append(
-                            {
-                                "transition": transition_name,
-                                "targets": targets,
-                                "is_multi": True,
-                            }
-                        )
-                    elif "<" not in target_str:
-                        # Single target: "Pop -> A"
-                        target = target_str.split(" -> ")[1].strip()
-                        pop_targets.append(
-                            {
-                                "transition": transition_name,
-                                "targets": [target],
-                                "is_multi": False,
-                            }
-                        )
-                    else:
-                        # Error case: "Pop -> <e>"
-                        pop_targets.append(
-                            {
-                                "transition": transition_name,
-                                "targets": [],
-                                "is_multi": False,
-                                "error": target_str.split(" -> ")[1].strip(),
-                            }
-                        )
-
-            # Get contexts
-            contexts = info.get("contexts", [])
-            unique_stacks = set()
-            for ctx in contexts:
-                unique_stacks.add(tuple(ctx["stack"]))
-
-            relationships[state_name] = {
-                "push_sources": info.get("push_sources", []),
-                "pop_targets": pop_targets,
-                "possible_pop_destinations": sorted(
-                    info.get("possible_pop_targets", set())
-                ),
-                "is_pushed_to": len(info.get("push_sources", [])) > 0,
-                "has_pop": len(pop_targets) > 0,
-                "has_multi_pop": any(pt.get("is_multi", False) for pt in pop_targets),
-                "reachable_contexts": len(contexts),
-                "unique_stack_states": len(unique_stacks),
-                "max_stack_depth": (
-                    max(len(ctx["stack"]) for ctx in contexts) if contexts else 0
-                ),
-            }
-
-        return relationships
-
-    def get_reachable_states(
-        self, from_state: Union[str, Type[State]], max_depth: Optional[int] = None
-    ) -> set[str]:
-        """Get all states reachable from a given starting state"""
-        if isinstance(from_state, type):
-            start_name = from_state.name
-        else:
-            start_name = from_state
-
-        if start_name not in self._state_analysis:
-            return set()
-
-        reachable = set()
-        to_visit = [(start_name, 0)]
-
-        while to_visit:
-            current_name, depth = to_visit.pop()
-
-            if current_name in reachable:
-                continue
-
-            if max_depth is not None and depth > max_depth:
-                continue
-
-            reachable.add(current_name)
-
-            current_info = self._state_analysis[current_name]
-            for target_name in current_info["targets"]:
-                if target_name not in reachable:
-                    to_visit.append((target_name, depth + 1))
-
-        return reachable
-
-    def print_push_pop_analysis(
-        self, state_filter: Optional[Union[str, Type[State]]] = None
-    ):
+    def state(
+        self,
+        config: StateConfiguration = StateConfiguration(),
+        name: Optional[str] = None,
+        group: Optional[str] = None,
+    ) -> Callable[[Callable], StateSpec]:
         """
-        Print a detailed push/pop analysis for all states or a specific state.
+        Decorator to define a state.
 
         Args:
-            state_filter: Optional state name or class to filter the analysis.
-                        If None, prints analysis for all states with push/pop relationships.
+            config: StateConfiguration for this state
+            name: Optional name (auto-generated if not provided)
+            group: Optional group name for organization
+
+        The decorated function should contain nested decorated functions
+        (@on_state, @on_enter, @transitions, etc.). No need to return a dict!
         """
-        relationships = self.get_push_pop_relationships()
 
-        # Resolve state filter if it's a class
-        if (
-            state_filter
-            and isinstance(state_filter, type)
-            and issubclass(state_filter, State)
-        ):
-            state_filter = state_filter.name
+        def decorator(func: Callable[..., Any]) -> StateSpec:
+            # Get function metadata
+            module = func.__module__
+            qualname = func.__qualname__
 
-        # Determine which states to analyze
-        states_to_analyze = []
-        if state_filter:
-            if state_filter in relationships:
-                states_to_analyze = [state_filter]
+            # Auto-generate name if not provided
+            if name is None:
+                # Handle __main__ module
+                if module == "__main__":
+                    filename = inspect.getfile(func)
+                    module = os.path.splitext(os.path.basename(filename))[0]
+                state_name = f"{module}.{qualname}"
             else:
-                print(f"State '{state_filter}' not found in analysis")
-                return
-        else:
-            # Include all states that have push/pop relationships
-            states_to_analyze = [
-                state_name
-                for state_name, rel_info in relationships.items()
-                if rel_info["is_pushed_to"] or rel_info["has_pop"]
-            ]
+                state_name = name
 
-        if not states_to_analyze:
-            print("No states with push/pop relationships found")
-            return
+            # Set up tracking for this state
+            tracked_items = []
+            self._tracking_stack.append(tracked_items)
 
-        print("\nPush/Pop Analysis:")
-        print("=" * 60)
+            try:
+                # Call the function to execute inner decorators
+                func()
+            finally:
+                # Always pop the tracking stack
+                self._tracking_stack.pop()
 
-        for state_name in sorted(states_to_analyze):
-            rel_info = relationships[state_name]
-            state_info = self._state_analysis.get(state_name, {})
+            # Extract decorated methods from tracked items
+            on_state = None
+            on_enter = None
+            on_leave = None
+            on_timeout = None
+            on_fail = None
+            transitions = None
+            Events = None
 
-            print(f"\n{state_name}:")
+            for item_name, item_fn in tracked_items:
+                if hasattr(item_fn, "_enoki_on_state"):
+                    on_state = item_fn
+                elif hasattr(item_fn, "_enoki_on_enter"):
+                    on_enter = item_fn
+                elif hasattr(item_fn, "_enoki_on_leave"):
+                    on_leave = item_fn
+                elif hasattr(item_fn, "_enoki_on_timeout"):
+                    on_timeout = item_fn
+                elif hasattr(item_fn, "_enoki_on_fail"):
+                    on_fail = item_fn
+                elif hasattr(item_fn, "_enoki_transitions"):
+                    transitions = item_fn
+                elif hasattr(item_fn, "_enoki_events"):
+                    Events = item_fn
 
-            # Show what pushes to this state
-            if rel_info["push_sources"]:
-                print("  Pushed by:")
-                # Group by source state for cleaner output
-                sources_by_state = {}
-                for source in rel_info["push_sources"]:
-                    key = source["from_state"]
-                    if key not in sources_by_state:
-                        sources_by_state[key] = []
-                    sources_by_state[key].append(source)
+            # Validate required methods
+            if on_state is None:
+                raise ValueError(f"State '{state_name}' must have an @on_state decorated method")
 
-                for source_state, pushes in sorted(sources_by_state.items()):
-                    for push in pushes:
-                        print(f"    - {source_state} via {push['transition']}")
-                        print(f"      Push group: {push['push_states']}")
-                        print(f"      Position in group: {push['position']}")
-
-            # Show pop targets
-            if rel_info["pop_targets"]:
-                print("  Pop transitions:")
-                for pop in rel_info["pop_targets"]:
-                    if pop.get("error"):
-                        print(f"    - {pop['transition']}: {pop['error']}")
-                    elif pop.get("is_multi"):
-                        print(
-                            f"    - {pop['transition']}: Can pop to any of {pop['targets']}"
-                        )
-                    else:
-                        print(f"    - {pop['transition']}: Pops to {pop['targets'][0]}")
-
-            # Show stack context information
-            if rel_info["reachable_contexts"] > 0:
-                print(f"  Context information:")
-                print(
-                    f"    - Reachable via {rel_info['reachable_contexts']} different paths"
-                )
-                print(
-                    f"    - {rel_info['unique_stack_states']} unique stack configurations"
-                )
-                print(f"    - Maximum stack depth: {rel_info['max_stack_depth']}")
-
-                # Show possible stacks (first few examples)
-                contexts = state_info.get("contexts", [])
-                if contexts and rel_info["unique_stack_states"] > 0:
-                    print(f"    - Example stack states:")
-                    shown = set()
-                    count = 0
-                    for ctx in contexts:
-                        stack_tuple = tuple(ctx["stack"])
-                        if stack_tuple not in shown and count < 3:
-                            shown.add(stack_tuple)
-                            if ctx["stack"]:
-                                print(f"      • {ctx['stack']}")
-                            else:
-                                print(f"      • [empty]")
-                            count += 1
-                    if rel_info["unique_stack_states"] > 3:
-                        print(
-                            f"      • ... and {rel_info['unique_stack_states'] - 3} more"
-                        )
-
-            # Show summary
-            if rel_info["is_pushed_to"] or rel_info["has_pop"]:
-                summary_parts = []
-                if rel_info["is_pushed_to"]:
-                    summary_parts.append(
-                        f"pushed to by {len(rel_info['push_sources'])} transition(s)"
-                    )
-                if rel_info["has_pop"]:
-                    if rel_info["has_multi_pop"]:
-                        summary_parts.append("has context-dependent pop")
-                    else:
-                        summary_parts.append("has pop")
-                print(f"  Summary: {', '.join(summary_parts)}")
-
-    def print_state_stack_trace(self, state_name: Union[str, Type[State]]):
-        """
-        Print example execution traces showing how to reach a state and what happens with Pop.
-
-        Args:
-            state_name: State to analyze
-        """
-        # Resolve state name if it's a class
-        if isinstance(state_name, type) and issubclass(state_name, State):
-            state_name = state_name.name
-
-        state_info = self._state_analysis.get(state_name)
-        if not state_info:
-            print(f"State '{state_name}' not found")
-            return
-
-        contexts = state_info.get("contexts", [])
-        if not contexts:
-            print(f"State '{state_name}' is not reachable from initial state")
-            return
-
-        print(f"\nExecution traces for {state_name}:")
-        print("=" * 60)
-
-        # Show up to 3 different paths
-        shown_paths = set()
-        examples_shown = 0
-
-        for ctx in contexts:
-            if examples_shown >= 3:
-                break
-
-            # Create a simplified path representation to avoid duplicates
-            path_key = tuple(
-                (step[0], step[1]) for step in ctx["path"][-5:]
-            )  # Last 5 steps
-            if path_key in shown_paths:
-                continue
-            shown_paths.add(path_key)
-            examples_shown += 1
-
-            print(f"\nExample {examples_shown}:")
-            print(f"  Path to reach {state_name}:")
-
-            # Show last few steps of the path
-            path_to_show = ctx["path"][-5:] if len(ctx["path"]) > 5 else ctx["path"]
-            if len(ctx["path"]) > 5:
-                print(f"    ... ({len(ctx['path']) - 5} earlier steps)")
-
-            for i, (from_state, transition) in enumerate(path_to_show):
-                print(f"    {i+1}. {from_state} --[{transition}]--> ", end="")
-                if i < len(path_to_show) - 1:
-                    print(path_to_show[i + 1][0])
-                else:
-                    print(state_name)
-
-            print(
-                f"  Stack when entering {state_name}: {ctx['stack'] if ctx['stack'] else '[empty]'}"
+            # Create the StateSpec
+            state_spec = StateSpec(
+                name=state_name,
+                qualname=qualname,
+                module=module,
+                config=config,
+                on_state=on_state,
+                on_enter=on_enter,
+                on_leave=on_leave,
+                on_timeout=on_timeout,
+                on_fail=on_fail,
+                transitions=transitions,
+                Events=Events,
+                group_name=group or "",
             )
 
-            # Show what happens with Pop transitions
-            rel_info = self.get_push_pop_relationships().get(state_name, {})
-            if rel_info["has_pop"] and ctx["stack"]:
-                print(f"  If Pop is triggered:")
-                print(f"    → Would transition to: {ctx['stack'][0]}")
-                print(
-                    f"    → New stack would be: {ctx['stack'][1:] if len(ctx['stack']) > 1 else '[empty]'}"
-                )
+            # Register the state
+            register_state(state_spec)
 
-        if len(contexts) > 3:
-            print(f"\n... and {len(contexts) - 3} more possible execution paths")
+            return state_spec
 
-    def generate_mermaid_flowchart(
-        self,
-        from_state: Optional[Union[str, Type[State]]] = None,
-        max_depth: Optional[int] = None,
-        include_groups: bool = True,
-        show_all_pop_targets: bool = True,
-    ) -> str:
-        """Generate a Mermaid flowchart showing all transitions including multiple pop targets"""
-        if from_state is not None:
-            states_to_include = self.get_reachable_states(from_state, max_depth)
-        else:
-            states_to_include = set(self._state_analysis.keys())
+        return decorator
 
-        filtered_analysis = {
-            name: info
-            for name, info in self._state_analysis.items()
-            if name in states_to_include
-        }
+    def on_state(self, func: Callable) -> Callable:
+        """Decorator for the main state logic method"""
+        func._enoki_on_state = func
+        if self._tracking_stack:
+            self._tracking_stack[-1].append((func.__name__, func))
+        return func
 
-        result = "flowchart TD\n"
+    def on_enter(self, func: Callable) -> Callable:
+        """Decorator for on_enter lifecycle method"""
+        func._enoki_on_enter = func
+        if self._tracking_stack:
+            self._tracking_stack[-1].append((func.__name__, func))
+        return func
 
-        # Generate nodes
-        if include_groups:
-            groups = {}
-            for state_name, info in filtered_analysis.items():
-                group_name = info["group_name"]
-                if group_name not in groups:
-                    groups[group_name] = []
-                groups[group_name].append((state_name, info))
+    def on_leave(self, func: Callable) -> Callable:
+        """Decorator for on_leave lifecycle method"""
+        func._enoki_on_leave = func
+        if self._tracking_stack:
+            self._tracking_stack[-1].append((func.__name__, func))
+        return func
 
-            for group_name, states in groups.items():
-                if len(states) > 1:
-                    result += f'\n    subgraph {group_name}Group["{group_name}"]\n'
+    def on_timeout(self, func: Callable) -> Callable:
+        """Decorator for on_timeout lifecycle method"""
+        func._enoki_on_timeout = func
+        if self._tracking_stack:
+            self._tracking_stack[-1].append((func.__name__, func))
+        return func
 
-                    for state_name, info in states:
-                        clean_name = state_name.replace(".", "_")
-                        base_name = info["base_name"]
+    def on_fail(self, func: Callable) -> Callable:
+        """Decorator for on_fail lifecycle method"""
+        func._enoki_on_fail = func
+        if self._tracking_stack:
+            self._tracking_stack[-1].append((func.__name__, func))
+        return func
 
-                        timeout_info = ""
-                        if info["config"]["timeout"]:
-                            timeout_info = f" ({info['config']['timeout']}s)"
+    def transitions(self, func: Callable) -> Callable:
+        """Decorator for declaring transitions"""
+        func._enoki_transitions = func
+        if self._tracking_stack:
+            self._tracking_stack[-1].append((func.__name__, func))
+        return func
 
-                        if info["config"]["terminal"]:
-                            result += f'        {clean_name}["{base_name}{timeout_info}"]:::terminal\n'
-                        else:
-                            result += (
-                                f'        {clean_name}["{base_name}{timeout_info}"]\n'
-                            )
+    def events(self, events_class: type) -> type:
+        """
+        Decorator for registering the Events enum.
 
-                    result += "    end\n"
-                else:
-                    state_name, info = states[0]
-                    clean_name = state_name.replace(".", "_")
-                    base_name = info["base_name"]
+        Optional decorator that makes the Events enum accessible via state.Events
+        for introspection and testing. The Events enum works via closure even
+        without this decorator, but state.Events will be None.
 
-                    timeout_info = ""
-                    if info["config"]["timeout"]:
-                        timeout_info = f" ({info['config']['timeout']}s)"
+        Use this decorator when:
+        - You need to access state.Events programmatically (e.g., in tests)
+        - You want to inspect what events a state defines
+        - Registry methods need to reference the Events enum
 
-                    if info["config"]["terminal"]:
-                        result += f'    {clean_name}["{base_name}{timeout_info}"]:::terminal\n'
-                    else:
-                        result += f'    {clean_name}["{base_name}{timeout_info}"]\n'
-        else:
-            for state_name, info in filtered_analysis.items():
-                clean_name = state_name.replace(".", "_")
-                base_name = info["base_name"]
+        Skip this decorator when:
+        - You only use Events within on_state/transitions (closure handles it)
+        - You don't need external access to the Events enum
 
-                timeout_info = ""
-                if info["config"]["timeout"]:
-                    timeout_info = f" ({info['config']['timeout']}s)"
+        Example:
+            @enoki.state()
+            def MyState():
+                @enoki.events  # Optional - makes MyState.Events accessible
+                class Events(Enum):
+                    GO = auto()
 
-                if info["config"]["terminal"]:
-                    result += (
-                        f'    {clean_name}["{base_name}{timeout_info}"]:::terminal\n'
-                    )
-                else:
-                    result += f'    {clean_name}["{base_name}{timeout_info}"]\n'
+                @enoki.on_state
+                async def on_state(ctx):
+                    return Events.GO  # Works via closure even without @enoki.events
+        """
+        events_class._enoki_events = events_class
+        if self._tracking_stack:
+            self._tracking_stack[-1].append(("Events", events_class))
+        return events_class
 
-        # Add transitions
-        result += "\n"
-        for state_name, info in filtered_analysis.items():
-            clean_name = state_name.replace(".", "_")
+    def root(self, func: Callable) -> Callable:
+        """Decorator to mark a state as the initial/root state"""
+        func._enoki_is_root = True
+        return func
 
-            for transition_name, target_str in info["transitions"].items():
-                if target_str.startswith("Global."):
-                    continue
 
-                if target_str.startswith("Push("):
-                    # Handle Push transitions
-                    states_in_push = target_str[5:-1].split(", ")
-                    if states_in_push and states_in_push[0] in states_to_include:
-                        clean_target = states_in_push[0].replace(".", "_")
-                        result += f'    {clean_name} -->|"{transition_name} (Push)"| {clean_target}\n'
+# Create the decorator API instance
+enoki = _EnokiDecoratorAPI()
 
-                elif target_str.startswith("Pop -> {") and show_all_pop_targets:
-                    # Multiple pop targets
-                    targets_str = target_str[
-                        target_str.index("{") + 1 : target_str.rindex("}")
-                    ]
-                    targets = [t.strip() for t in targets_str.split(",")]
+# Export decorators for convenience
+state = enoki.state
+on_state = enoki.on_state
+on_enter = enoki.on_enter
+on_leave = enoki.on_leave
+on_timeout = enoki.on_timeout
+on_fail = enoki.on_fail
+transitions = enoki.transitions
+events = enoki.events
+root = enoki.root
 
-                    for target in targets:
-                        if target in states_to_include:
-                            clean_target = target.replace(".", "_")
-                            result += f'    {clean_name} -->|"{transition_name} (Pop)"| {clean_target}\n'
 
-                elif target_str.startswith("Pop -> ") and not target_str[7:].startswith(
-                    "<"
-                ):
-                    # Single pop target
-                    pop_target = target_str[7:]
-                    if pop_target in states_to_include:
-                        clean_target = pop_target.replace(".", "_")
-                        result += f'    {clean_name} -->|"{transition_name} (Pop)"| {clean_target}\n'
+# ============================================================================
+# Export all public components
+# ============================================================================
 
-                elif target_str in states_to_include:
-                    # Regular transition
-                    clean_target = target_str.replace(".", "_")
-                    result += (
-                        f'    {clean_name} -->|"{transition_name}"| {clean_target}\n'
-                    )
-
-        result += "\n    classDef terminal fill:#ff6b6b\n"
-        return result
+__all__ = [
+    # Decorators
+    "enoki",
+    "state",
+    "on_state",
+    "on_enter",
+    "on_leave",
+    "on_timeout",
+    "on_fail",
+    "transitions",
+    "root",
+    # Core types
+    "StateSpec",
+    "StateConfiguration",
+    "SharedContext",
+    # Transitions
+    "TransitionType",
+    "StateTransition",
+    "StateContinuation",
+    "StateRenewal",
+    "Again",
+    "Unhandled",
+    "Retry",
+    "Restart",
+    "Repeat",
+    "StateRef",
+    "LabeledTransition",
+    "Push",
+    "Pop",
+    # Registry
+    "register_state",
+    "get_state",
+    "get_all_states",
+    "StateRegistry",
+    "ValidationError",
+    "ValidationResult",
+    # StateMachine
+    "StateMachine",
+    "StateMachineComplete",
+    "BlockedInUntimedState",
+    "PopFromEmptyStack",
+    "NoStateToTick",
+    # Messages
+    "PrioritizedMessage",
+    "EnokiInternalMessage",
+    "TimeoutMessage",
+]
