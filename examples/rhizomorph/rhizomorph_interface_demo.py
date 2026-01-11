@@ -145,7 +145,7 @@ def RobotController():
     # Tree Structure
     # ----------------------------------------
 
-    @bt.sequence()
+    @bt.sequence
     def operation_sequence():
         """Sequence for performing an operation"""
         yield has_battery
@@ -154,13 +154,13 @@ def RobotController():
         yield perform_operation
         yield operation_complete
 
-    @bt.sequence()
+    @bt.sequence
     def charge_sequence():
         """Sequence for charging (simplified)"""
         yield cannot_operate
 
     @bt.root
-    @bt.selector()
+    @bt.selector
     def root():
         """Main control logic"""
         # Try to perform operation if conditions met

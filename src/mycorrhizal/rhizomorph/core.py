@@ -1309,9 +1309,36 @@ class _BT:
             self._tracking_stack[-1].append((fn.__name__, fn))
         return fn
 
-    def sequence(self, *, memory: bool = True):
-        """Decorator to mark a generator function as a sequence composite."""
+    def sequence(self, func_or_none=None, *, memory: bool = True):
+        """Decorator to mark a generator function as a sequence composite.
 
+        Can be used with or without parentheses:
+            @bt.sequence
+            def root():
+                ...
+
+            @bt.sequence(memory=False)
+            def root():
+                ...
+        """
+        # Case 1: Used as @bt.sequence (no parens)
+        if callable(func_or_none):
+            # Apply decorator directly with defaults
+            spec = NodeSpec(
+                kind=NodeSpecKind.SEQUENCE,
+                name=_name_of(func_or_none),
+                payload={"factory": func_or_none, "memory": memory},
+            )
+            func_or_none.node_spec = spec  # type: ignore
+            if self._tracking_stack:
+                self._tracking_stack[-1].append((func_or_none.__name__, func_or_none))
+            return func_or_none
+
+        # Case 2: Used as @bt.sequence() or @bt.sequence(memory=False)
+        return self._sequence_impl(memory=memory)
+
+    def _sequence_impl(self, memory: bool):
+        """Implementation of sequence decorator."""
         def deco(
             factory: Callable[..., Generator[Any, None, None]],
         ) -> Callable[..., Generator[Any, None, None]]:
@@ -1327,9 +1354,40 @@ class _BT:
 
         return deco
 
-    def selector(self, *, memory: bool = True, reactive: bool = False):
-        """Decorator to mark a generator function as a selector composite."""
+    def selector(self, func_or_none=None, *, memory: bool = True, reactive: bool = False):
+        """Decorator to mark a generator function as a selector composite.
 
+        Can be used with or without parentheses:
+            @bt.selector
+            def root():
+                ...
+
+            @bt.selector(memory=False)
+            def root():
+                ...
+
+            @bt.selector(reactive=True)
+            def root():
+                ...
+        """
+        # Case 1: Used as @bt.selector (no parens)
+        if callable(func_or_none):
+            # Apply decorator directly with defaults
+            spec = NodeSpec(
+                kind=NodeSpecKind.SELECTOR,
+                name=_name_of(func_or_none),
+                payload={"factory": func_or_none, "memory": memory, "reactive": reactive},
+            )
+            func_or_none.node_spec = spec  # type: ignore
+            if self._tracking_stack:
+                self._tracking_stack[-1].append((func_or_none.__name__, func_or_none))
+            return func_or_none
+
+        # Case 2: Used as @bt.selector() or @bt.selector(memory=False)
+        return self._selector_impl(memory=memory, reactive=reactive)
+
+    def _selector_impl(self, memory: bool, reactive: bool):
+        """Implementation of selector decorator."""
         def deco(
             factory: Callable[..., Generator[Any, None, None]],
         ) -> Callable[..., Generator[Any, None, None]]:
