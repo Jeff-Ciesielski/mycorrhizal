@@ -9,6 +9,7 @@ sys.path.insert(0, "src")
 import pytest
 import asyncio
 from enum import Enum, auto
+from typing import Annotated
 from pydantic import BaseModel
 
 from mycorrhizal.enoki.core import (
@@ -20,7 +21,7 @@ from mycorrhizal.enoki.core import (
     Again,
     StateMachineComplete,
 )
-from mycorrhizal.common.interface_builder import blackboard_interface
+from mycorrhizal.common.interface_builder import blackboard_interface, readonly, readwrite
 from mycorrhizal.common.wrappers import AccessControlError
 
 
@@ -38,11 +39,8 @@ class TestBlackboard(BaseModel):
 @blackboard_interface
 class TestInterface:
     """Interface for state machine"""
-    _readonly_fields = {'max_steps'}
-    _readwrite_fields = {'steps_taken'}
-
-    max_steps: int
-    steps_taken: int
+    max_steps: Annotated[int, readonly]
+    steps_taken: Annotated[int, readwrite]
 
 
 # ============================================================================

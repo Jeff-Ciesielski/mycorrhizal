@@ -39,9 +39,9 @@ def Engage():
 
     @bt.root
     @bt.sequence(memory=False)
-    def engage_threat(N):
-        yield N.threat_detected
-        yield bt.failer().gate(N.battery_ok).timeout(0.12)(N.engage)
+    def engage_threat():
+        yield threat_detected
+        yield bt.failer().gate(battery_ok).timeout(0.12)(engage)
 
 @bt.tree
 def Demo():
@@ -66,17 +66,17 @@ def Demo():
         return Status.SUCCESS
 
     @bt.sequence(memory=True)
-    def patrol(N):
-        yield N.has_waypoints
-        yield N.go_to_next
-        yield bt.succeeder().retry(3).timeout(1.0)(N.scan_area)
+    def patrol():
+        yield has_waypoints
+        yield go_to_next
+        yield bt.succeeder().retry(3).timeout(1.0)(scan_area)
 
     @bt.root
     @bt.selector(memory=True, reactive=True)
-    def root(N):
+    def root():
         yield bt.subtree(Engage)
-        yield N.patrol
-        yield bt.failer().ratelimit(hz=5.0)(N.telemetry_push)
+        yield patrol
+        yield bt.failer().ratelimit(hz=5.0)(telemetry_push)
 
 
 async def _demo():

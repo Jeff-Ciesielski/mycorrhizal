@@ -11,10 +11,11 @@ sys.path.insert(0, "src")
 
 import pytest
 import asyncio
+from typing import Annotated
 from pydantic import BaseModel
 
 from mycorrhizal.hypha.core import pn, PlaceType, Runner as PNRunner, NetBuilder
-from mycorrhizal.common.interface_builder import blackboard_interface
+from mycorrhizal.common.interface_builder import blackboard_interface, readonly, readwrite
 from mycorrhizal.common.wrappers import AccessControlError
 
 
@@ -27,11 +28,8 @@ class TestBlackboard(BaseModel):
 @blackboard_interface
 class TaskInterface:
     """Interface for task processing"""
-    _readonly_fields = {'max_tasks'}
-    _readwrite_fields = {'tasks_completed'}
-
-    max_tasks: int
-    tasks_completed: int
+    max_tasks: Annotated[int, readonly]
+    tasks_completed: Annotated[int, readwrite]
 
 
 def test_hypha_interface_integration():

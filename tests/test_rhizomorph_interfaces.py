@@ -6,10 +6,11 @@ sys.path.insert(0, "src")
 
 import pytest
 from enum import Enum
+from typing import Annotated, Optional
 from pydantic import BaseModel
 
 from mycorrhizal.rhizomorph.core import bt, Runner, Status
-from mycorrhizal.common.interface_builder import blackboard_interface
+from mycorrhizal.common.interface_builder import blackboard_interface, readonly, readwrite
 from mycorrhizal.common.wrappers import AccessControlError
 
 
@@ -28,30 +29,23 @@ class TaskBlackboard(BaseModel):
 @blackboard_interface
 class TaskInterface:
     """Interface for task processing"""
-    _readonly_fields = {'max_tasks'}
-    _readwrite_fields = {'tasks_completed', 'current_task'}
-
-    max_tasks: int
-    tasks_completed: int
-    current_task: str | None
+    max_tasks: Annotated[int, readonly]
+    tasks_completed: Annotated[int, readwrite]
+    current_task: Annotated[Optional[str], readwrite]
 
 
 @blackboard_interface
 class ReadOnlyInterface:
     """Read-only interface for configuration"""
-    _readonly_fields = {'max_tasks', 'timeout'}
-
-    max_tasks: int
-    timeout: float = 5.0
+    max_tasks: Annotated[int, readonly]
+    timeout: Annotated[float, readonly] = 5.0
 
 
 @blackboard_interface
 class WriteOnlyInterface:
     """Write-only interface for updates"""
-    _readwrite_fields = {'tasks_completed', 'status'}
-
-    tasks_completed: int
-    status: str = "ok"
+    tasks_completed: Annotated[int, readwrite]
+    status: Annotated[str, readwrite] = "ok"
 
 
 # ============================================================================

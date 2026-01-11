@@ -5,9 +5,10 @@ import sys
 sys.path.insert(0, "src")
 
 import pytest
+from typing import Annotated
 from pydantic import BaseModel
 
-from mycorrhizal.common.interface_builder import blackboard_interface, FieldSpec
+from mycorrhizal.common.interface_builder import blackboard_interface, readonly, readwrite, FieldSpec
 from mycorrhizal.common.wrappers import ConstrainedView, ReadOnlyView, AccessControlError
 
 
@@ -43,11 +44,10 @@ def test_blackboard_interface_creates_class():
 
 
 def test_blackboard_interface_with_readonly_fields():
-    """Test @blackboard_interface with _readonly_fields attribute"""
+    """Test @blackboard_interface with Annotated readonly fields"""
     @blackboard_interface
     class TaskInterface:
-        _readonly_fields = ['max_tasks']
-        max_tasks: int
+        max_tasks: Annotated[int, readonly]
         tasks_completed: int
 
     # Should have readonly metadata
@@ -57,12 +57,11 @@ def test_blackboard_interface_with_readonly_fields():
 
 
 def test_blackboard_interface_with_readwrite_fields():
-    """Test @blackboard_interface with _readwrite_fields attribute"""
+    """Test @blackboard_interface with Annotated readwrite fields"""
     @blackboard_interface
     class TaskInterface:
-        _readwrite_fields = ['tasks_completed']
         max_tasks: int
-        tasks_completed: int
+        tasks_completed: Annotated[int, readwrite]
 
     # Should have readwrite metadata
     assert hasattr(TaskInterface, '_readwrite_fields')
@@ -73,10 +72,8 @@ def test_blackboard_interface_with_mixed_fields():
     """Test @blackboard_interface with both readonly and readwrite fields"""
     @blackboard_interface
     class TaskInterface:
-        _readonly_fields = ['max_tasks']
-        _readwrite_fields = ['tasks_completed']
-        max_tasks: int
-        tasks_completed: int
+        max_tasks: Annotated[int, readonly]
+        tasks_completed: Annotated[int, readwrite]
 
     # Should have both metadata sets
     assert TaskInterface._readonly_fields == frozenset(['max_tasks'])
@@ -103,10 +100,8 @@ def test_blackboard_interface_with_constrained_view():
     """Test using interface from DSL with ConstrainedView"""
     @blackboard_interface
     class TaskInterface:
-        _readonly_fields = ['max_tasks']
-        _readwrite_fields = ['tasks_completed']
-        max_tasks: int
-        tasks_completed: int
+        max_tasks: Annotated[int, readonly]
+        tasks_completed: Annotated[int, readwrite]
 
     bb = TestBlackboard()
     view = ConstrainedView(bb, {'max_tasks', 'tasks_completed'}, {'max_tasks'})
@@ -120,9 +115,8 @@ def test_create_view_from_protocol_with_dsl_interface():
     """Test create_view_from_protocol works with DSL-generated interface"""
     @blackboard_interface
     class TaskInterface:
-        _readonly_fields = ['max_tasks']
-        max_tasks: int
-        tasks_completed: int
+        max_tasks: Annotated[int, readonly]
+        tasks_completed: Annotated[int, readwrite]
 
     bb = TestBlackboard()
     view = ConstrainedView(bb, {'max_tasks', 'tasks_completed'}, {'max_tasks'})
@@ -255,16 +249,14 @@ def test_real_world_config_interface():
     @blackboard_interface
     class ConfigInterface:
         """Read-only configuration interface"""
-        _readonly_fields = {'max_concurrent', 'timeout'}
-
-        max_concurrent: int
-        timeout: float
-        retry_count: int
+        max_concurrent: Annotated[int, readonly]
+        timeout: Annotated[float, readonly]
+        retry_count: Annotated[int, readwrite]
 
     # Verify readonly fields
     assert ConfigInterface._readonly_fields == frozenset(['max_concurrent', 'timeout'])
 
-    # Verify defaults to readwrite for unspecified
+    # Verify readwrite for specified
     assert 'retry_count' in ConfigInterface._readwrite_fields
 
 
