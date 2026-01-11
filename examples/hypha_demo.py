@@ -246,9 +246,11 @@ async def demonstrate_comprehensive_system():
 
     runner = Runner(TaskProcessingSystem, bb)
 
+    from mycorrhizal.hypha.util import to_mermaid
+
     print("\nMermaid Diagram:")
     print("-" * 40)
-    print(TaskProcessingSystem.to_mermaid())
+    print(to_mermaid(TaskProcessingSystem._spec))
     print("-" * 40)
 
     await runner.start(timebase)

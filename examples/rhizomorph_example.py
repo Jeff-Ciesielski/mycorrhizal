@@ -97,7 +97,9 @@ async def _demo():
         )
         await asyncio.sleep(0)
 
+    from mycorrhizal.rhizomorph.util import to_mermaid
+
     print("\n--- Mermaid ---")
-    print(Demo.to_mermaid())
+    print(to_mermaid(Demo))
 
 asyncio.run(_demo())

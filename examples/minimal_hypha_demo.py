@@ -69,8 +69,10 @@ async def main():
     # progress here which prevented the IO input from running.
     timebase = MonotonicClock()
 
+    from mycorrhizal.hypha.util import to_mermaid
+
     runner = Runner(MinimalNet, bb)
-    print("Mermaid Diagram:\n", MinimalNet.to_mermaid())
+    print("Mermaid Diagram:\n", to_mermaid(MinimalNet._spec))
 
     await runner.start(timebase)
 
