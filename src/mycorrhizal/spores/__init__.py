@@ -1,29 +1,47 @@
 #!/usr/bin/env python3
 """
-Spores - Event and Object Logging for Mycorrhizal
+Spores - Event and Object Logging for Observability
 
-Spores provides decorator-based event and object logging for OCPM integration.
-Generates OCEL-compatible logs for consumption by OCEL systems.
+OCEL (Object-Centric Event Log) compatible logging system for tracking events
+and objects in Mycorrhizal systems. Provides automatic extraction of events
+and objects from DSL execution.
 
-Example:
-    ```python
-    from mycorrhizal.spores import spore
-    from mycorrhizal.spores.transport import FileTransport
+Usage:
+    from mycorrhizal.spores import configure, spore, EventAttr, ObjectRef
 
-    # Configure spores
-    spore.configure(transport=FileTransport("logs/ocel.jsonl"))
+    # Configure logging
+    configure(
+        enabled=True,
+        object_cache_size=100,
+        transport=FileTransport("logs/ocel.jsonl"),
+    )
 
-    # Mark objects
+    # Mark model fields for automatic extraction
+    class MissionContext(BaseModel):
+        mission_id: Annotated[str, EventAttr]
+        robot: Annotated[Robot, ObjectRef(qualifier="actor", scope=ObjectScope.GLOBAL)]
+
+    # Mark object types
     @spore.object(object_type="Robot")
     class Robot(BaseModel):
         id: str
         name: str
 
-    # Log events
-    @spore.event(event_type="navigate")
-    async def navigate(bb: MissionContext):
-        return Status.SUCCESS
-    ```
+DSL Adapters:
+    HyphaAdapter - Log Petri net transitions with token relationships
+    RhizomorphAdapter - Log behavior tree node execution with status
+    EnokiAdapter - Log state machine execution and lifecycle events
+
+Key Concepts:
+    Event - Something that happens at a point in time with attributes
+    Object - An entity with a type and attributes
+    Relationship - Link between events and objects (e.g., "actor", "target")
+    EventAttr - Mark blackboard fields for automatic event attribute extraction
+    ObjectRef - Mark blackboard fields as object references with scope
+
+Object Scopes:
+    EVENT - Object exists only for this event (default)
+    GLOBAL - Object exists across all events (deduplicated by ID)
 """
 
 from .core import (

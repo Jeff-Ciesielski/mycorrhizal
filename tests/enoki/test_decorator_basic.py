@@ -89,15 +89,15 @@ def test_state_registration():
 
     # Check that all expected states are registered
     # Note: module name is 'tests.test_decorator_basic' when run via pytest
-    assert "tests.test_decorator_basic.InitialState" in states
-    assert "tests.test_decorator_basic.ProcessingState" in states
-    assert "tests.test_decorator_basic.CompleteState" in states
+    assert "tests.enoki.test_decorator_basic.InitialState" in states
+    assert "tests.enoki.test_decorator_basic.ProcessingState" in states
+    assert "tests.enoki.test_decorator_basic.CompleteState" in states
 
 
 def test_state_spec_properties():
     """Test that StateSpec has all required properties"""
     # Note: module name includes 'tests.' prefix when run via pytest
-    assert InitialState.name == "tests.test_decorator_basic.InitialState"
+    assert InitialState.name == "tests.enoki.test_decorator_basic.InitialState"
     assert InitialState.base_name == "InitialState"
     assert InitialState.config.timeout == 5.0
     assert InitialState.config.terminal == False
@@ -143,7 +143,7 @@ def test_state_is_state_transition():
 def test_state_equality():
     """Test state equality"""
     # Note: module name includes 'tests.' prefix when run via pytest
-    same_state = get_state("tests.test_decorator_basic.InitialState")
+    same_state = get_state("tests.enoki.test_decorator_basic.InitialState")
     assert InitialState == same_state
     assert not (InitialState == "wrong name")
     assert InitialState != ProcessingState
@@ -152,5 +152,5 @@ def test_state_equality():
 def test_state_name_property():
     """Test that StateSpec name property works correctly"""
     # Note: module name includes 'tests.' prefix when run via pytest
-    assert InitialState.name == "tests.test_decorator_basic.InitialState"
+    assert InitialState.name == "tests.enoki.test_decorator_basic.InitialState"
     assert InitialState.base_name == "InitialState"

@@ -96,12 +96,12 @@ def test_registry_resolve_state_ref():
     registry = StateRegistry()
 
     # Create a StateRef
-    state_ref = StateRef("tests.test_state_registry.StateB")
+    state_ref = StateRef("tests.enoki.test_state_registry.StateB")
 
     # Should resolve from global registry
     resolved = registry.resolve_state(state_ref)
     assert resolved is not None
-    assert resolved.name == "tests.test_state_registry.StateB"
+    assert resolved.name == "tests.enoki.test_state_registry.StateB"
 
 
 def test_registry_resolve_string():
@@ -109,9 +109,9 @@ def test_registry_resolve_string():
     registry = StateRegistry()
 
     # Resolve by string name
-    resolved = registry.resolve_state("tests.test_state_registry.StateC")
+    resolved = registry.resolve_state("tests.enoki.test_state_registry.StateC")
     assert resolved is not None
-    assert resolved.name == "tests.test_state_registry.StateC"
+    assert resolved.name == "tests.enoki.test_state_registry.StateC"
     assert resolved.config.terminal is True
 
 
@@ -167,9 +167,9 @@ def test_registry_validate_all_states():
 
     assert result.valid is True
     assert len(result.errors) == 0
-    assert "tests.test_state_registry.StateA" in result.discovered_states
-    assert "tests.test_state_registry.StateB" in result.discovered_states
-    assert "tests.test_state_registry.StateC" in result.discovered_states
+    assert "tests.enoki.test_state_registry.StateA" in result.discovered_states
+    assert "tests.enoki.test_state_registry.StateB" in result.discovered_states
+    assert "tests.enoki.test_state_registry.StateC" in result.discovered_states
 
 
 def test_registry_validate_with_error_state():
@@ -179,7 +179,7 @@ def test_registry_validate_with_error_state():
     result = registry.validate_all_states(StateA, error_state=StateC)
 
     assert result.valid is True
-    assert "tests.test_state_registry.StateC" in result.discovered_states
+    assert "tests.enoki.test_state_registry.StateC" in result.discovered_states
 
 
 def test_registry_validate_includes_continuations():
@@ -211,7 +211,7 @@ def test_registry_warns_about_unlabeled_transitions():
         @enoki.transitions
         def transitions():
             # Direct state reference without label
-            return [StateRef("tests.test_state_registry.StateA")]
+            return [StateRef("tests.enoki.test_state_registry.StateA")]
 
         return {
             "on_state": on_state,

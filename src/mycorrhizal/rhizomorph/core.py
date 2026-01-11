@@ -1,7 +1,53 @@
 #!/usr/bin/env python3
 """
-Rhizomorph — asyncio Behavior Tree core (owner-aware + fluent wrappers)
-Multi-file composition: owner tagging + bt.subtree/bt.bind
+Rhizomorph - Asyncio Behavior Tree Framework
+
+A decorator-based DSL for defining and executing behavior trees with support for
+asyncio, multi-file composition, and type-safe blackboard interfaces.
+
+Usage:
+    from mycorrhizal.rhizomorph.core import bt, Runner, Status
+
+    @bt.tree
+    def MyBehaviorTree():
+        @bt.action
+        async def do_work(bb) -> Status:
+            # Do some work
+            return Status.SUCCESS
+
+        @bt.condition
+        def should_work(bb) -> bool:
+            return bb.work_available
+
+        @bt.root
+        @bt.sequence
+        def root():
+            yield should_work
+            yield do_work
+
+    # Run the tree
+    runner = Runner(MyBehaviorTree, bb=blackboard)
+    result = await runner.tick_until_complete()
+
+Key Classes:
+    Status - Result status for behavior tree nodes (SUCCESS, FAILURE, RUNNING, etc.)
+    Node - Base class for all behavior tree nodes
+    Action - Leaf node that executes a function
+    Condition - Leaf node that evaluates a predicate
+    Sequence - Composite that runs children in order
+    Selector - Composite that runs children until one succeeds
+    Parallel - Composite that runs children concurrently
+
+Multi-file Composition:
+    Use bt.subtree() to reference trees defined in other modules:
+        from other_module import OtherTree
+
+        @bt.tree
+        def MainTree():
+            @bt.root
+            @bt.sequence
+            def root():
+                yield bt.subtree(OtherTree, owner=MainTree)
 """
 from __future__ import annotations
 
@@ -118,6 +164,22 @@ async def _call_node_function(func: Callable, bb: Any, tb: Timebase) -> Any:
 
 
 class Status(Enum):
+    """Result status for behavior tree node execution.
+
+    Attributes:
+        SUCCESS - Node completed successfully
+        FAILURE - Node failed
+        RUNNING - Node is still running (async operation in progress)
+        CANCELLED - Node was cancelled before completion
+        ERROR - Node encountered an error
+
+    Note:
+        Composite nodes use these statuses to determine control flow:
+        - Sequence stops on first FAILURE
+        - Selector stops on first SUCCESS
+        - Parallel waits for all children, fails if any fail
+    """
+
     SUCCESS = 1
     FAILURE = 2
     RUNNING = 3
@@ -157,7 +219,29 @@ class RecursionError(Exception):
 
 
 class Node(Generic[BB]):
-    """Abstract BT node; override `tick` and (optionally) lifecycle hooks."""
+    """Base class for behavior tree nodes.
+
+    All behavior tree nodes inherit from this class. Nodes are executed
+    by calling the tick() method, which returns a Status indicating
+    the result of execution.
+
+    Args:
+        name: Optional name for this node (used in debugging and logging)
+        exception_policy: How to handle exceptions during execution
+
+    Attributes:
+        name: Node name
+        parent: Parent node in the tree
+        exception_policy: Exception handling policy
+        _entered: Whether on_enter has been called
+        _last_status: Last status returned by tick
+
+    Methods:
+        tick(bb, tb): Execute the node, return Status
+        on_enter(bb, tb): Called when node is first entered
+        on_exit(bb, status, tb): Called when node exits (not RUNNING)
+        reset(): Reset node state for reuse
+    """
 
     def __init__(
         self,
@@ -204,7 +288,25 @@ class Node(Generic[BB]):
 
 
 class Action(Node[BB]):
-    """Leaf wrapping a sync/async function -> Status | bool | None."""
+    """Leaf node that executes a function.
+
+    Action nodes wrap sync or async functions that perform work or
+    check conditions. The function can return:
+    - Status enum (SUCCESS, FAILURE, RUNNING, etc.)
+    - bool (True -> SUCCESS, False -> FAILURE)
+    - None (treated as SUCCESS)
+
+    Args:
+        func: Function to execute (sync or async)
+        name: Optional name for this action
+        exception_policy: How to handle exceptions
+
+    The function signature can be:
+    - func(bb) -> Status | bool | None
+    - func(bb, tb) -> Status | bool | None
+
+    where bb is the blackboard and tb is an optional timebase.
+    """
 
     def __init__(
         self,
@@ -1565,6 +1667,33 @@ def _generate_mermaid(tree: SimpleNamespace) -> str:
 
 
 class Runner(Generic[BB]):
+    """Runtime for executing behavior trees.
+
+    The Runner manages the execution of a behavior tree, handling tick
+    calls, timebase management, and result processing.
+
+    Args:
+        tree: A behavior tree namespace with a 'root' attribute (from @bt.tree)
+        bb: Blackboard containing shared state
+        tb: Optional timebase for time management (defaults to MonotonicClock)
+        exception_policy: How to handle exceptions during tree execution
+
+    Methods:
+        tick(): Execute one tick of the behavior tree
+        tick_until_complete(): Run the tree until it returns a terminal status
+
+    Example:
+        @bt.tree
+        def MyTree():
+            @bt.root
+            @bt.sequence
+            def root():
+                yield check_condition
+                yield do_work
+
+        runner = Runner(MyTree, bb=blackboard)
+        result = await runner.tick_until_complete()
+    """
     def __init__(
         self,
         tree: SimpleNamespace,

@@ -1,8 +1,53 @@
 #!/usr/bin/env python3
 """
-mycorrhizal.hypha.core - Decorator-based Petri Net DSL
+Hypha - Decorator-based Colored Petri Net Framework
 
-Public API for defining and executing Petri nets using a decorator-based syntax.
+A DSL for defining and executing colored Petri nets with support for asyncio,
+various place types, guards, and hierarchical subnet composition.
+
+Usage:
+    from mycorrhizal.hypha.core import pn, Runner, PlaceType
+
+    @pn.net
+    def ProcessingNet(builder):
+        # Define places
+        pending = builder.place("pending", type=PlaceType.QUEUE)
+        processed = builder.place("processed", type=PlaceType.QUEUE)
+
+        # Define transitions
+        @builder.transition()
+        async def process(consumed, bb, timebase):
+            for token in consumed:
+                result = await handle(token)
+                yield {processed: result}
+
+        # Wire the net
+        builder.arc(pending, process).arc(processed)
+
+    # Run the Petri net
+    runner = Runner(ProcessingNet, bb=blackboard)
+    await runner.start(timebase)
+
+Key Classes:
+    NetBuilder - Builder for constructing Petri nets
+    PlaceType - Type of place (QUEUE, SET, FLAG, COUNTER)
+    PlaceSpec - Specification for a place
+    TransitionSpec - Specification for a transition
+    Runner - Runtime for executing Petri nets
+
+Place Types:
+    QUEUE - FIFO queue, allows multiple tokens
+    SET - Unordered collection with unique tokens
+    FLAG - Boolean place (has token or not)
+    COUNTER - Numeric place with bounded capacity
+
+Transitions:
+    Transitions consume tokens from input places and produce tokens for output places.
+    They are async functions that yield dictionaries mapping place references to tokens.
+
+Guards:
+    Guards are conditions that must be satisfied for a transition to fire.
+    They can check token values, blackboard state, or external conditions.
 """
 
 from .specs import (

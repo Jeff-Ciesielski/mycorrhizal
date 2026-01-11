@@ -1,36 +1,61 @@
 #!/usr/bin/env python3
 """
-Enoki State System - Decorator-based State Definition
+Enoki - Asyncio Finite State Machine Framework
 
-This module provides a decorator-based API for defining FSM states without
-class-based inheritance or metaclass magic. States are defined using functions
-and decorators, and the framework constructs StateSpec objects that behave
-like State classes.
+A decorator-based DSL for defining and executing state machines with support for
+asyncio, timeouts, message passing, and hierarchical state composition.
 
-Example:
-    @enoki.state(config=StateConfiguration(timeout=5.0))
-    def MyState():
-        class T(Enum):
-            DONE = auto()
-            NEXT = auto()
+Usage:
+    from mycorrhizal.enoki.core import enoki, StateMachine, LabeledTransition
+    from enum import Enum, auto
+
+    @enoki.state()
+    def IdleState():
+        class Events(Enum):
+            START = auto()
+            QUIT = auto()
 
         @enoki.on_state
-        async def on_state(bb: Blackboard):
-            # State logic here
-            return T.DONE
+        async def on_state(ctx):
+            if ctx.msg == "start":
+                return Events.START
+            return None
 
         @enoki.transitions
         def transitions():
             return [
-                LabeledTransition(T.DONE, NextState),
-                LabeledTransition(T.NEXT, Again),
+                LabeledTransition(Events.START, ProcessingState),
+                LabeledTransition(Events.QUIT, DoneState),
             ]
 
-Key Design:
-- States are StateTransitions (can be used directly in transitions)
-- Decorators construct StateSpec dataclasses
-- No metaclass magic - just plain dataclasses and functions
-- Compatible with existing StateMachine runtime
+    # Create and run the FSM
+    fsm = StateMachine(initial_state=IdleState, common_data={})
+    await fsm.initialize()
+    fsm.send_message("start")
+    await fsm.tick()
+
+Key Classes:
+    StateMachine - Main FSM runtime with message queue and tick-based execution
+    StateConfiguration - Configuration for states (timeout, retries, terminal, can_dwell)
+    SharedContext - Context object passed to state handlers with msg and common data
+    LabeledTransition - Maps events to target states
+
+Transition Types:
+    State references - Direct transition to another state
+    Again - Re-execute current state immediately
+    Unhandled - Wait for next message
+    Retry - Re-enter state with retry counter
+    Restart - Reset retry counter and wait for message
+    Repeat - Re-enter state from on_enter
+    Push(state1, state2, ...) - Push states onto stack
+    Pop - Pop and return to previous state
+
+State Handlers:
+    on_state(ctx) - Main state logic, return transition or None to wait
+    on_enter(ctx) - Called when entering state
+    on_leave(ctx) - Called when leaving state
+    on_timeout(ctx) - Called if timeout expires
+    on_fail(ctx) - Called if exception occurs
 """
 
 from __future__ import annotations
@@ -114,7 +139,24 @@ def _create_interface_view_for_context(context: SharedContext, handler: Callable
 
 @dataclass
 class StateConfiguration:
-    """Configuration for a state"""
+    """Configuration options for states.
+
+    Args:
+        timeout: Optional timeout in seconds. If no message received within
+            this time, on_timeout handler is called.
+        retries: Optional number of retries allowed. If state returns Retry,
+            the retry counter increments. When max retries exceeded, state fails.
+        terminal: If True, reaching this state completes the FSM (raises
+            StateMachineComplete exception).
+        can_dwell: If True, state can wait indefinitely without returning a
+            transition (returning None from on_state is allowed).
+
+    Example:
+        @enoki.state(config=StateConfiguration(timeout=5.0, retries=3))
+        def MyState():
+            # State with timeout and retry handling
+            pass
+    """
 
     timeout: Optional[float] = None
     retries: Optional[int] = None
@@ -124,9 +166,31 @@ class StateConfiguration:
 
 @dataclass
 class SharedContext(Generic[T]):
-    """Context passed to state methods.
+    """Context passed to state handler methods.
+
+    The SharedContext provides access to the current message, shared data,
+    and utilities for state handlers.
+
+    Attributes:
+        send_message: Function to send messages to the state machine
+        log: Function to log messages (default: prints with [FSM] prefix)
+        common: Shared data passed to StateMachine (accessible as ctx.common)
+        msg: The current message being processed (if any)
 
     Type parameter T represents the type of the 'common' field for type safety.
+
+    Example:
+        @enoki.on_state
+        async def on_state(ctx: SharedContext):
+            # Access shared data
+            counter = ctx.common.get("counter", 0)
+
+            # Check for messages
+            if ctx.msg == "start":
+                return Events.START
+
+            # Send new messages
+            ctx.send_message("ping")
     """
 
     send_message: Callable
@@ -726,16 +790,40 @@ class NoStateToTick(Exception):
 # ============================================================================
 
 class StateMachine:
-    """
-    State Machine for executing StateSpec-based states.
+    """Asyncio-native finite state machine for executing StateSpec-based states.
 
-    This is an asyncio-native state machine that handles:
-    - State transitions (including Again, Retry, Push, Pop, etc.)
-    - Timeout handling
-    - Message passing via priority queues
-    - Lifecycle method execution (on_enter, on_state, on_leave, on_timeout, on_fail)
-    - Retry counters
-    - Push/pop stack for hierarchical states
+    The StateMachine manages state execution, transitions, message passing,
+    and lifecycle handling. States are defined using the @enoki.state decorator
+    and should define on_state, on_enter, on_leave, on_timeout, or on_fail handlers.
+
+    Args:
+        initial_state: The initial state (state function, StateRef, or StateSpec)
+        error_state: Optional error state for handling exceptions
+        filter_fn: Optional function to filter messages (ctx, msg) -> bool
+        trap_fn: Optional function to trap exceptions (exc) -> None
+        on_error_fn: Optional function called on errors (ctx, exc) -> None
+        common_data: Shared data accessible via ctx.common in all states
+
+    Attributes:
+        current_state: The currently executing state
+        context: SharedContext containing msg and common data
+        state_stack: Stack for Push/Pop hierarchical state management
+
+    Methods:
+        initialize(): Initialize the state machine (must be called before tick)
+        tick(timeout): Process one state machine tick
+        send_message(msg): Send a message to the state machine
+        reset(): Reset to initial state
+
+    Example:
+        fsm = StateMachine(
+            initial_state=IdleState,
+            error_state=ErrorState,
+            common_data={"counter": 0}
+        )
+        await fsm.initialize()
+        fsm.send_message("start")
+        await fsm.tick()
     """
 
     class MessagePriorities(IntEnum):

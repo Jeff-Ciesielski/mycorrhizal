@@ -108,14 +108,14 @@ async def test_statemachine_basic_execution():
     fsm = StateMachine(initial_state=StartState, common_data=common)
 
     await fsm.initialize()
-    assert fsm.current_state.name == "tests.test_state_machine.StartState"
+    assert fsm.current_state.name == "tests.enoki.test_state_machine.StartState"
 
     # Run to completion - should raise StateMachineComplete
     with pytest.raises(StateMachineComplete):
         await fsm.run(timeout=0.1)
 
     # Should be in terminal state
-    assert fsm.current_state.name == "tests.test_state_machine.EndState"
+    assert fsm.current_state.name == "tests.enoki.test_state_machine.EndState"
     assert fsm.current_state.config.terminal is True
 
 
@@ -150,14 +150,14 @@ async def test_statemachine_tick_by_tick():
         await fsm.tick(timeout=0)
     except StateMachineComplete:
         pass
-    assert fsm.current_state.name == "tests.test_state_machine.MiddleState"
+    assert fsm.current_state.name == "tests.enoki.test_state_machine.MiddleState"
 
     # Second tick: MiddleState loops with Again (count=0 -> 1)
     try:
         await fsm.tick(timeout=0)
     except StateMachineComplete:
         pass
-    assert fsm.current_state.name == "tests.test_state_machine.MiddleState"
+    assert fsm.current_state.name == "tests.enoki.test_state_machine.MiddleState"
     assert common['count'] == 1
 
     # Third tick: MiddleState loops with Again (count=1 -> 2)
@@ -165,7 +165,7 @@ async def test_statemachine_tick_by_tick():
         await fsm.tick(timeout=0)
     except StateMachineComplete:
         pass
-    assert fsm.current_state.name == "tests.test_state_machine.MiddleState"
+    assert fsm.current_state.name == "tests.enoki.test_state_machine.MiddleState"
     assert common['count'] == 2
 
     # Fourth tick: MiddleState -> EndState
@@ -173,7 +173,7 @@ async def test_statemachine_tick_by_tick():
         await fsm.tick(timeout=0)
     except StateMachineComplete:
         pass
-    assert fsm.current_state.name == "tests.test_state_machine.EndState"
+    assert fsm.current_state.name == "tests.enoki.test_state_machine.EndState"
 
 
 # ============================================================================
@@ -212,7 +212,7 @@ async def test_statemachine_again_transition():
     fsm = StateMachine(initial_state=AgainTestState, common_data=common)
 
     await fsm.initialize()
-    assert fsm.current_state.name == "tests.test_state_machine.AgainTestState"
+    assert fsm.current_state.name == "tests.enoki.test_state_machine.AgainTestState"
 
     # Execute multiple ticks - should stay in same state until count reaches 3
     for i in range(5):
@@ -222,7 +222,7 @@ async def test_statemachine_again_transition():
             pass
 
         if common.get('again_count', 0) < 3:
-            assert fsm.current_state.name == "tests.test_state_machine.AgainTestState"
+            assert fsm.current_state.name == "tests.enoki.test_state_machine.AgainTestState"
         else:
             # After 3 Again transitions, should have processed
             break
@@ -278,7 +278,7 @@ async def test_statemachine_retry_logic():
         pass
 
     # Should have reached EndState
-    assert fsm.current_state.name == "tests.test_state_machine.EndState"
+    assert fsm.current_state.name == "tests.enoki.test_state_machine.EndState"
     # Should have retried
     assert common.get('retry_attempts') == 2
 
@@ -343,8 +343,8 @@ async def test_statemachine_push_transition():
 
     # Should be in MiddleState or EndState
     assert fsm.current_state.name in [
-        "tests.test_state_machine.MiddleState",
-        "tests.test_state_machine.EndState"
+        "tests.enoki.test_state_machine.MiddleState",
+        "tests.enoki.test_state_machine.EndState"
     ]
 
 
@@ -378,7 +378,7 @@ async def test_statemachine_pop_transition():
         await fsm.tick(timeout=0)
     except StateMachineComplete:
         pass
-    assert fsm.current_state.name == "tests.test_state_machine.MiddleState"
+    assert fsm.current_state.name == "tests.enoki.test_state_machine.MiddleState"
     assert len(fsm.state_stack) == 1
 
     # Second tick: MiddleState -> EndState (because count=2)
@@ -386,7 +386,7 @@ async def test_statemachine_pop_transition():
         await fsm.tick(timeout=0)
     except StateMachineComplete:
         pass
-    assert fsm.current_state.name == "tests.test_state_machine.EndState"
+    assert fsm.current_state.name == "tests.enoki.test_state_machine.EndState"
 
 
 @pytest.mark.asyncio
@@ -454,7 +454,7 @@ async def test_statemachine_timeout_handling():
 
     # Should have timed out and transitioned to EndState
     assert common.get('timed_out') is True
-    assert fsm.current_state.name == "tests.test_state_machine.EndState"
+    assert fsm.current_state.name == "tests.enoki.test_state_machine.EndState"
 
 
 # ============================================================================
@@ -506,8 +506,8 @@ async def test_statemachine_error_state():
 
     # Should be in error state or FailingState
     assert fsm.current_state.name in [
-        "tests.test_state_machine.ErrorState",
-        "tests.test_state_machine.FailingState"
+        "tests.enoki.test_state_machine.ErrorState",
+        "tests.enoki.test_state_machine.FailingState"
     ]
 
 
@@ -618,4 +618,4 @@ async def test_statemachine_message_passing():
         pass
 
     # Should have transitioned to EndState
-    assert fsm.current_state.name == "tests.test_state_machine.EndState"
+    assert fsm.current_state.name == "tests.enoki.test_state_machine.EndState"
