@@ -6,7 +6,7 @@ NetBuilder provides the API for declaratively constructing Petri net specificati
 Used within @pn.net decorated functions.
 """
 
-from typing import Optional, Callable, List, Dict, Type, Any
+from typing import Optional, Callable, List, Dict, Type, Any, Union
 from .specs import (
     NetSpec,
     PlaceSpec,
@@ -54,14 +54,52 @@ class NetBuilder:
 
     def place(
         self,
-        name: str,
+        name_or_func: Union[str, Callable, None] = None,
         type: PlaceType = PlaceType.BAG,
         state_factory: Optional[Callable] = None,
-    ) -> PlaceRef:
-        """Declare a regular place"""
-        place_spec = PlaceSpec(name, type, state_factory=state_factory)
-        self.spec.places[name] = place_spec
-        return PlaceRef(name, self.spec)
+    ) -> Union[PlaceRef, Callable]:
+        """Declare a regular place.
+
+        Can be used in three ways:
+
+        1. As a method call (returns PlaceRef for use in arcs):
+           queue = builder.place("queue", type=PlaceType.QUEUE)
+
+        2. As a decorator without parens (infers name from function):
+           @builder.place
+           def queue(bb):
+               return bb.tokens
+
+        3. As a decorator with custom name:
+           @builder.place("custom_name")
+           def my_func(bb):
+               return bb.tokens
+        """
+        # Case 1: Used as decorator without parens - first arg is the function
+        if callable(name_or_func):
+            func = name_or_func
+            place_name = func.__name__
+            place_spec = PlaceSpec(place_name, type, handler=func, state_factory=state_factory)
+            self.spec.places[place_name] = place_spec
+            return PlaceRef(place_name, self.spec)
+
+        # Case 2 & 3: Used with explicit name (as method call or decorator with args)
+        # or called without any args (need to return decorator)
+        if isinstance(name_or_func, str):
+            name = name_or_func
+            place_spec = PlaceSpec(name, type, state_factory=state_factory)
+            self.spec.places[name] = place_spec
+            # Return PlaceRef - it's callable via __call__ for decorator use
+            return PlaceRef(name, self.spec)
+
+        # Case 4: Called without any args - shouldn't happen but handle gracefully
+        # This would be like @builder.place() with empty parens
+        def decorator(func: Callable) -> PlaceRef:
+            place_name = func.__name__
+            place_spec = PlaceSpec(place_name, type, handler=func, state_factory=state_factory)
+            self.spec.places[place_name] = place_spec
+            return PlaceRef(place_name, self.spec)
+        return decorator
 
     def io_input_place(self):
         """Decorator for IOInputPlace with async generator"""

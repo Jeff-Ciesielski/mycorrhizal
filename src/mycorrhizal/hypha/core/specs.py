@@ -147,11 +147,11 @@ class PlaceRef:
     def __init__(self, local_name: str, parent_spec: NetSpec):
         self.local_name = local_name
         self.parent_spec = parent_spec
-    
+
     def get_fqn(self) -> str:
         """Compute FQN dynamically"""
         return '.'.join(self.get_parts())
-    
+
     # For backward compatibility
     @property
     def fqn(self) -> str:
@@ -164,7 +164,23 @@ class PlaceRef:
     @property
     def parts(self) -> List[str]:
         return self.get_parts()
-    
+
+    def __call__(self, func: Callable) -> "PlaceRef":
+        """Allow PlaceRef to be used as a decorator to register a handler.
+
+        Example:
+            @builder.place("queue")
+            def queue_handler(bb):
+                return bb.tokens
+
+        The PlaceRef is returned for use in arcs, and the handler is registered.
+        """
+        # Get the place spec and register the handler
+        place_spec = self.parent_spec.places.get(self.local_name)
+        if place_spec is not None:
+            place_spec.handler = func
+        return self
+
     def __repr__(self):
         return f"PlaceRef({self.get_fqn()})"
 
