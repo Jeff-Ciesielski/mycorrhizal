@@ -174,6 +174,28 @@ class EventAttr:
     name: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class SporesAttr:
+    """
+    Metadata annotation for object attributes in OCEL object logging.
+
+    Used with typing.Annotated to mark fields that should be logged when an object is logged:
+
+        class Order(BaseModel):
+            id: str
+            status: Annotated[str, SporesAttr]  # Logged
+            total: Annotated[float, SporesAttr]  # Logged
+            items: list[dict]  # Not marked - not logged
+
+    When using @spore.log_event(relationships={...}), fields marked with SporesAttr
+    are automatically logged. If attributes list is provided, it overrides SporesAttr.
+
+    Attributes:
+        name: Optional custom name for the attribute (defaults to field name)
+    """
+    name: Optional[str] = None
+
+
 # ============================================================================
 # Attribute Value Conversion
 # ============================================================================

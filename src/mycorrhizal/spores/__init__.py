@@ -7,25 +7,24 @@ and objects in Mycorrhizal systems. Provides automatic extraction of events
 and objects from DSL execution.
 
 Usage:
-    from mycorrhizal.spores import configure, spore, EventAttr, ObjectRef
+    from mycorrhizal.spores import configure, get_spore_sync, get_spore_async
+    from mycorrhizal.spores.transport import SyncFileTransport, AsyncFileTransport
 
-    # Configure logging
-    configure(
-        enabled=True,
-        object_cache_size=100,
-        transport=FileTransport("logs/ocel.jsonl"),
-    )
+    # Sync code
+    configure(transport=SyncFileTransport("logs/ocel.jsonl"))
+    spore = get_spore_sync(__name__)
 
-    # Mark model fields for automatic extraction
-    class MissionContext(BaseModel):
-        mission_id: Annotated[str, EventAttr]
-        robot: Annotated[Robot, ObjectRef(qualifier="actor", scope=ObjectScope.GLOBAL)]
+    @spore.log_event(event_type="OrderCreated", order_id="order.id")
+    def create_order(order: Order) -> Order:
+        return order
 
-    # Mark object types
-    @spore.object(object_type="Robot")
-    class Robot(BaseModel):
-        id: str
-        name: str
+    # Async code
+    configure(transport=AsyncFileTransport("logs/ocel.jsonl"))
+    aspore = get_spore_async(__name__)
+
+    @aspore.log_event(event_type="OrderCreated", order_id="order.id")
+    async def create_order_async(order: Order) -> Order:
+        return order
 
 DSL Adapters:
     HyphaAdapter - Log Petri net transitions with token relationships
@@ -38,6 +37,7 @@ Key Concepts:
     Relationship - Link between events and objects (e.g., "actor", "target")
     EventAttr - Mark blackboard fields for automatic event attribute extraction
     ObjectRef - Mark blackboard fields as object references with scope
+    SporesAttr - Mark model fields for automatic object attribute logging
 
 Object Scopes:
     EVENT - Object exists only for this event (default)
@@ -48,8 +48,13 @@ from .core import (
     configure,
     get_config,
     get_object_cache,
+    get_spore_sync,
+    get_spore_async,
     spore,
     SporesConfig,
+    EventLogger,
+    AsyncEventLogger,
+    SyncEventLogger,
 )
 
 from .models import (
@@ -62,6 +67,7 @@ from .models import (
     ObjectRef,
     ObjectScope,
     EventAttr,
+    SporesAttr,
     generate_event_id,
     generate_object_id,
     attribute_value_from_python,
@@ -71,7 +77,7 @@ from .models import (
 from .cache import ObjectLRUCache
 
 from .encoder import Encoder, JSONEncoder
-from .transport import Transport
+from .transport import SyncTransport, AsyncTransport, Transport, SyncFileTransport, AsyncFileTransport
 
 # DSL adapters
 from .dsl import (
@@ -89,7 +95,12 @@ __all__ = [
     'configure',
     'get_config',
     'get_object_cache',
-    'spore',
+    'get_spore_sync',
+    'get_spore_async',
+    'EventLogger',
+    'AsyncEventLogger',
+    'SyncEventLogger',
+    'spore',  # Legacy decorator
     'SporesConfig',
 
     # Models
@@ -102,6 +113,7 @@ __all__ = [
     'ObjectRef',
     'ObjectScope',
     'EventAttr',
+    'SporesAttr',
     'generate_event_id',
     'generate_object_id',
     'attribute_value_from_python',
@@ -115,7 +127,11 @@ __all__ = [
     'JSONEncoder',
 
     # Transport
-    'Transport',
+    'SyncTransport',
+    'AsyncTransport',
+    'Transport',  # Alias for AsyncTransport (backward compatibility)
+    'SyncFileTransport',
+    'AsyncFileTransport',
 
     # DSL Adapters
     'HyphaAdapter',

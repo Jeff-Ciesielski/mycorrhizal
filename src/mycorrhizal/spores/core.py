@@ -2,7 +2,7 @@
 """
 Spores Core API
 
-Main spores module with configuration and decorator functionality.
+Main spores module with configuration and logger functionality.
 """
 
 from __future__ import annotations
@@ -11,17 +11,19 @@ import asyncio
 import inspect
 import functools
 import logging
+import threading
 from datetime import datetime
 from typing import (
     Any, Callable, Optional, Union, Dict, List,
-    ParamSpec, TypeVar, overload
+    ParamSpec, TypeVar, overload, get_origin, get_args, Annotated
 )
 from dataclasses import dataclass
+from abc import ABC, abstractmethod
 
 from .models import (
     Event, Object, LogRecord, Relationship,
     EventAttributeValue, ObjectAttributeValue,
-    ObjectScope, ObjectRef, EventAttr,
+    ObjectScope, ObjectRef, EventAttr, SporesAttr,
     generate_event_id, generate_object_id,
     attribute_value_from_python, object_attribute_from_python
 )
@@ -51,7 +53,7 @@ class SporesConfig:
         enabled: Whether spores logging is enabled
         object_cache_size: Maximum objects in LRU cache
         encoder: Encoder instance to use
-        transport: Transport instance to use (required for logging)
+        transport: Transport instance to use (required for logging to work)
     """
     enabled: bool = True
     object_cache_size: int = 128
@@ -160,7 +162,7 @@ def get_object_cache() -> ObjectLRUCache[str, Object]:
 
 async def _send_log_record(record: LogRecord) -> None:
     """
-    Send a log record via the configured transport.
+    Send a log record via the configured transport (async).
 
     Args:
         record: The LogRecord to send
@@ -179,15 +181,701 @@ async def _send_log_record(record: LogRecord) -> None:
         data = config.encoder.encode(record)
         content_type = config.encoder.content_type()
 
-        # Send via transport
+        # Send via transport (async)
         await config.transport.send(data, content_type)
 
     except Exception as e:
         logger.error(f"Failed to send log record: {e}")
 
 
+def _send_log_record_sync(record: LogRecord) -> None:
+    """
+    Send a log record via the configured transport (sync).
+
+    This is a synchronous version that uses blocking I/O.
+    Used by SyncEventLogger in daemon threads.
+
+    Args:
+        record: The LogRecord to send
+    """
+    config = get_config()
+
+    if not config.enabled:
+        return
+
+    if config.transport is None or config.encoder is None:
+        logger.warning("Spores not properly configured (missing transport or encoder)")
+        return
+
+    try:
+        # Encode the record
+        data = config.encoder.encode(record)
+        content_type = config.encoder.content_type()
+
+        # Send via transport (blocking call)
+        config.transport.send(data, content_type)
+
+    except Exception as e:
+        logger.error(f"Failed to send log record: {e}")
+
+
 # ============================================================================
-# Decorators
+# Logger Interface
+# ============================================================================
+
+class EventLogger(ABC):
+    """
+    Abstract base class for event loggers.
+
+    Implementations can be sync or async, but the interface is the same.
+    """
+
+    @abstractmethod
+    def event(self, event_type: str, **kwargs):
+        """Log an event."""
+        pass
+
+    @abstractmethod
+    def log_object(self, obj_type: str, obj_id: str, **kwargs):
+        """Log an object."""
+        pass
+
+
+class AsyncEventLogger(EventLogger):
+    """
+    Async event logger for use in async contexts.
+    """
+
+    def __init__(self, name: str):
+        self.name = name
+
+    async def event(self, event_type: str, relationships: Dict[str, Relationship] | None = None, **kwargs) -> None:
+        """
+        Log an event asynchronously.
+
+        Args:
+            event_type: The type of event
+            relationships: Optional dict of qualifier -> Relationship for OCEL object relationships
+            **kwargs: Event attributes
+        """
+        config = get_config()
+        if not config.enabled:
+            return
+
+        timestamp = datetime.now()
+
+        attr_values = {}
+        for key, value in kwargs.items():
+            attr_values[key] = EventAttributeValue(
+                name=key,
+                value=str(value),
+                time=timestamp
+            )
+
+        event = Event(
+            id=generate_event_id(),
+            type=event_type,
+            time=timestamp,
+            attributes=attr_values,
+            relationships=relationships or {}
+        )
+
+        record = LogRecord(event=event)
+        await _send_log_record(record)
+
+    async def log_object(self, obj_type: str, obj_id: str, **kwargs) -> None:
+        """Log an object asynchronously."""
+        config = get_config()
+        if not config.enabled:
+            return
+
+        timestamp = datetime.now()
+
+        attr_values = {}
+        for key, value in kwargs.items():
+            attr_values[key] = ObjectAttributeValue(
+                name=key,
+                value=str(value),
+                time=timestamp
+            )
+
+        obj = Object(
+            id=obj_id,
+            type=obj_type,
+            attributes=attr_values
+        )
+
+        record = LogRecord(object=obj)
+        await _send_log_record(record)
+
+    def log_event(self, event_type: str, relationships: Dict[str, tuple] | None = None, attributes: Dict[str, Any] | None = None):
+        """
+        Decorator factory that logs events with auto-logged object relationships (async version).
+
+        Args:
+            event_type: The type of event to log
+            relationships: Dict mapping qualifiers to (source, obj_type, attrs) tuples
+            attributes: Dict mapping event attribute names to values or callables
+
+        Returns:
+            Decorator function
+        """
+        def decorator(func: Callable[P, R]) -> Callable[P, R]:
+            @functools.wraps(func)
+            async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+                # Execute the function
+                result = await func(*args, **kwargs)
+
+                # Build context for resolving objects and attributes
+                context = self._build_context(func, args, kwargs, result)
+
+                # Process relationships - log objects and build event relationships
+                event_relationships = {}
+                if relationships:
+                    for qualifier, rel_spec in relationships.items():
+                        # Handle both 2-tuple and 3-tuple formats
+                        if len(rel_spec) == 2:
+                            source, obj_type = rel_spec
+                            attrs = None  # Auto-detect SporesAttr
+                        else:
+                            source, obj_type, attrs = rel_spec
+
+                        # Resolve object from source
+                        obj = self._resolve_source(source, context)
+                        if obj is None:
+                            continue
+
+                        # Extract object ID
+                        obj_id = self._get_object_id(obj)
+                        if obj_id is None:
+                            continue
+
+                        # Extract and log object attributes
+                        obj_attrs = self._extract_object_attrs(obj, attrs)
+                        await self.log_object(obj_type, obj_id, **obj_attrs)
+
+                        # Add to event relationships
+                        event_relationships[qualifier] = Relationship(object_id=obj_id, qualifier=qualifier)
+
+                # Extract event attributes
+                event_attrs = {}
+                if attributes:
+                    for attr_name, attr_value in attributes.items():
+                        event_attrs[attr_name] = self._evaluate_expression(attr_value, context)
+
+                # Log the event with relationships
+                await self.event(event_type, relationships=event_relationships, **event_attrs)
+
+                return result
+
+            return wrapper  # type: ignore
+        return decorator
+
+    def _build_context(self, func: Callable, args: tuple, kwargs: dict, result: Any) -> Dict[str, Any]:
+        """Build context dict for async version."""
+        context = {
+            'return': result,
+            'ret': result,
+        }
+
+        sig = inspect.signature(func)
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+
+        for param_name, param_value in bound.arguments.items():
+            context[param_name] = param_value
+
+        return context
+
+    def _resolve_source(self, source: str, context: Dict[str, Any]) -> Any:
+        """Resolve source for async version."""
+        if source == "return" or source == "ret":
+            return context.get("return")
+        elif source == "self":
+            return context.get("self")
+        else:
+            return context.get(source)
+
+    def _get_object_id(self, obj: Any) -> str | None:
+        """Extract object ID for async version."""
+        if obj is None:
+            return None
+
+        if hasattr(obj, 'id'):
+            return str(getattr(obj, 'id'))
+        else:
+            return str(obj)
+
+    def _extract_object_attrs(self, obj: Any, attrs_spec: list | dict) -> Dict[str, Any]:
+        """Extract attributes for async version."""
+        if attrs_spec is None:
+            return self._extract_spores_attrs(obj)
+
+        if isinstance(attrs_spec, list):
+            result = {}
+            for attr_name in attrs_spec:
+                if hasattr(obj, attr_name):
+                    result[attr_name] = getattr(obj, attr_name)
+            return result
+
+        elif isinstance(attrs_spec, dict):
+            result = {}
+            for attr_name, expr in attrs_spec.items():
+                if isinstance(expr, str) and expr.startswith(("return.", "ret.", "self.")):
+                    parts = expr.split(".", 1)
+                    source = self._resolve_source(parts[0], {})
+                    if source and len(parts) > 1:
+                        result[attr_name] = getattr(source, parts[1])
+                elif isinstance(expr, str) and hasattr(obj, expr):
+                    result[attr_name] = getattr(obj, expr)
+                elif callable(expr):
+                    result[attr_name] = expr(obj)
+                else:
+                    result[attr_name] = expr
+            return result
+
+        return {}
+
+    def _extract_spores_attrs(self, obj: Any) -> Dict[str, Any]:
+        """Extract SporesAttr-marked fields for async version."""
+        result = {}
+        obj_class = obj if isinstance(obj, type) else type(obj)
+
+        if hasattr(obj_class, '__annotations__'):
+            for field_name, field_type in obj_class.__annotations__.items():
+                if get_origin(field_type) is Annotated:
+                    args = get_args(field_type)
+                    for arg in args:
+                        if arg is SporesAttr:
+                            if hasattr(obj, field_name):
+                                value = getattr(obj, field_name)
+                                result[field_name] = value
+                            break
+
+        return result
+
+    def _evaluate_expression(self, expr: Any, context: Dict[str, Any]) -> Any:
+        """Evaluate expression for async version."""
+        if callable(expr):
+            sig = inspect.signature(expr)
+            params = sig.parameters
+
+            if len(params) == 1 and list(params.values())[0].kind == inspect.Parameter.VAR_POSITIONAL:
+                return expr(**context)
+            elif len(params) == 0:
+                return expr()
+            else:
+                kwargs = {}
+                for param_name in params:
+                    if param_name in context:
+                        kwargs[param_name] = context[param_name]
+                return expr(**kwargs)
+        elif isinstance(expr, str):
+            # Check if it's a simple parameter reference
+            if expr in context:
+                return context[expr]
+            # Check if it's a dotted attribute access
+            elif "." in expr:
+                parts = expr.split(".", 1)
+                if parts[0] in context:
+                    obj = context[parts[0]]
+                    if hasattr(obj, parts[1]):
+                        return getattr(obj, parts[1])
+        return expr
+
+
+class SyncEventLogger(EventLogger):
+    """
+    Sync event logger for use in synchronous contexts.
+
+    Uses daemon threads for fire-and-forget logging - business logic never blocks.
+    Logs are written via sync transport's blocking send() (no event loop needed).
+    """
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def event(self, event_type: str, relationships: Dict[str, Relationship] | None = None, **kwargs) -> None:
+        """
+        Log an event in background daemon thread (fire-and-forget).
+
+        Args:
+            event_type: The type of event
+            relationships: Optional dict of qualifier -> Relationship for OCEL object relationships
+            **kwargs: Event attributes
+        """
+        config = get_config()
+        if not config.enabled:
+            return
+
+        def log_in_thread():
+            timestamp = datetime.now()
+
+            attr_values = {}
+            for key, value in kwargs.items():
+                attr_values[key] = EventAttributeValue(
+                    name=key,
+                    value=str(value),
+                    time=timestamp
+                )
+
+            event = Event(
+                id=generate_event_id(),
+                type=event_type,
+                time=timestamp,
+                attributes=attr_values,
+                relationships=relationships or {}
+            )
+
+            record = LogRecord(event=event)
+            # Blocking send - no event loop needed
+            _send_log_record_sync(record)
+
+        thread = threading.Thread(target=log_in_thread, daemon=True)
+        thread.start()
+
+    def log_object(self, obj_type: str, obj_id: str, **kwargs) -> None:
+        """Log an object in background daemon thread (fire-and-forget)."""
+        config = get_config()
+        if not config.enabled:
+            return
+
+        def log_in_thread():
+            timestamp = datetime.now()
+
+            attr_values = {}
+            for key, value in kwargs.items():
+                attr_values[key] = ObjectAttributeValue(
+                    name=key,
+                    value=str(value),
+                    time=timestamp
+                )
+
+            obj = Object(
+                id=obj_id,
+                type=obj_type,
+                attributes=attr_values
+            )
+
+            record = LogRecord(object=obj)
+            # Blocking send - no event loop needed
+            _send_log_record_sync(record)
+
+        thread = threading.Thread(target=log_in_thread, daemon=True)
+        thread.start()
+
+    def log_event(self, event_type: str, relationships: Dict[str, tuple] | None = None, attributes: Dict[str, Any] | None = None):
+        """
+        Decorator factory that logs events with auto-logged object relationships.
+
+        Args:
+            event_type: The type of event to log
+            relationships: Dict mapping qualifiers to (source, obj_type, attrs) tuples
+                - qualifier: Relationship qualifier (e.g., "order", "customer")
+                - source: Where to get object ("return", "ret", param name, "self")
+                - obj_type: OCEL object type
+                - attrs: List of attribute names to log, or dict for custom attr names
+            attributes: Dict mapping event attribute names to values or callables
+
+        Returns:
+            Decorator function
+
+        Example:
+            ```python
+            @spore.log_event(
+                event_type="OrderCreated",
+                relationships={
+                    "order": ("return", "Order", ["status", "total"]),
+                    "customer": ("customer", "Customer", ["name", "email"]),
+                },
+                attributes={
+                    "item_count": lambda items: len(items),
+                },
+            )
+            def create_order(customer: Customer, items: list) -> Order:
+                order = Order(...)
+                return order
+            ```
+        """
+        def decorator(func: Callable[P, R]) -> Callable[P, R]:
+            @functools.wraps(func)
+            def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+                # Execute the function
+                result = func(*args, **kwargs)
+
+                # Build context for resolving objects and attributes
+                context = self._build_context(func, args, kwargs, result)
+
+                # Process relationships - log objects and build event relationships
+                event_relationships = {}
+                if relationships:
+                    for qualifier, rel_spec in relationships.items():
+                        # Handle both 2-tuple and 3-tuple formats
+                        if len(rel_spec) == 2:
+                            source, obj_type = rel_spec
+                            attrs = None  # Auto-detect SporesAttr
+                        else:
+                            source, obj_type, attrs = rel_spec
+
+                        # Resolve object from source
+                        obj = self._resolve_source(source, context)
+                        if obj is None:
+                            continue
+
+                        # Extract object ID
+                        obj_id = self._get_object_id(obj)
+                        if obj_id is None:
+                            continue
+
+                        # Extract and log object attributes
+                        obj_attrs = self._extract_object_attrs(obj, attrs)
+                        self.log_object(obj_type, obj_id, **obj_attrs)
+
+                        # Add to event relationships
+                        event_relationships[qualifier] = Relationship(object_id=obj_id, qualifier=qualifier)
+
+                # Extract event attributes
+                event_attrs = {}
+                if attributes:
+                    for attr_name, attr_value in attributes.items():
+                        event_attrs[attr_name] = self._evaluate_expression(attr_value, context)
+
+                # Log the event with relationships
+                self.event(event_type, relationships=event_relationships, **event_attrs)
+
+                return result
+
+            return wrapper  # type: ignore
+        return decorator
+
+    def _build_context(self, func: Callable, args: tuple, kwargs: dict, result: Any) -> Dict[str, Any]:
+        """
+        Build a context dict for resolving sources and evaluating expressions.
+
+        Returns dict with:
+            - 'return' and 'ret': The return value
+            - 'self': For methods, the self parameter
+            - All function parameters by name
+        """
+        context = {
+            'return': result,
+            'ret': result,
+        }
+
+        # Bind arguments to parameter names
+        sig = inspect.signature(func)
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+
+        for param_name, param_value in bound.arguments.items():
+            context[param_name] = param_value
+
+        return context
+
+    def _resolve_source(self, source: str, context: Dict[str, Any]) -> Any:
+        """
+        Resolve an object from a source expression.
+
+        Sources:
+            - "return" or "ret": Return value
+            - "self": For methods
+            - Any other string: Parameter name from context
+        """
+        if source == "return" or source == "ret":
+            return context.get("return")
+        elif source == "self":
+            return context.get("self")
+        else:
+            return context.get(source)
+
+    def _get_object_id(self, obj: Any) -> str | None:
+        """
+        Extract object ID from an object.
+
+        Tries:
+            1. obj.id attribute
+            2. str(obj)
+        """
+        if obj is None:
+            return None
+
+        if hasattr(obj, 'id'):
+            return str(getattr(obj, 'id'))
+        else:
+            return str(obj)
+
+    def _extract_object_attrs(self, obj: Any, attrs_spec: list | dict) -> Dict[str, Any]:
+        """
+        Extract attributes from an object for logging.
+
+        Args:
+            obj: The object to extract from
+            attrs_spec: Either a list of attribute names, or a dict of {name: expression}
+
+        Returns:
+            Dict of attribute name -> value
+        """
+        if attrs_spec is None:
+            # Check for SporesAttr annotations on the object's class
+            return self._extract_spores_attrs(obj)
+
+        if isinstance(attrs_spec, list):
+            # Simple list of attribute names
+            result = {}
+            for attr_name in attrs_spec:
+                if hasattr(obj, attr_name):
+                    result[attr_name] = getattr(obj, attr_name)
+            return result
+
+        elif isinstance(attrs_spec, dict):
+            # Dict with custom names or callables
+            result = {}
+            for attr_name, expr in attrs_spec.items():
+                if isinstance(expr, str) and expr.startswith(("return.", "ret.", "self.")):
+                    # Special handling for return/ret/self references
+                    parts = expr.split(".", 1)
+                    source = self._resolve_source(parts[0], {})
+                    if source and len(parts) > 1:
+                        result[attr_name] = getattr(source, parts[1])
+                elif isinstance(expr, str) and hasattr(obj, expr):
+                    # Simple attribute access
+                    result[attr_name] = getattr(obj, expr)
+                elif callable(expr):
+                    # Callable expression
+                    result[attr_name] = expr(obj)
+                else:
+                    # Static value
+                    result[attr_name] = expr
+            return result
+
+        return {}
+
+    def _extract_spores_attrs(self, obj: Any) -> Dict[str, Any]:
+        """
+        Extract attributes marked with SporesAttr from a Pydantic model.
+
+        Checks the object's class __annotations__ for Annotated[type, SporesAttr] fields.
+        """
+        result = {}
+
+        # Get the class (handle both instances and classes)
+        obj_class = obj if isinstance(obj, type) else type(obj)
+
+        if hasattr(obj_class, '__annotations__'):
+            for field_name, field_type in obj_class.__annotations__.items():
+                # Check if this is an Annotated type with SporesAttr
+                if get_origin(field_type) is Annotated:
+                    args = get_args(field_type)
+                    for arg in args:
+                        if arg is SporesAttr:
+                            # Found a SporesAttr marker - log this field
+                            if hasattr(obj, field_name):
+                                value = getattr(obj, field_name)
+                                result[field_name] = value
+                            break
+
+        return result
+
+    def _evaluate_expression(self, expr: Any, context: Dict[str, Any]) -> Any:
+        """
+        Evaluate an expression for event or object attributes.
+
+        Supports:
+            - Static values (strings, numbers, etc.)
+            - Callables (called with context)
+            - Strings that are parameter references or attribute accesses
+        """
+        if callable(expr):
+            # Callable - try to detect what params it wants
+            sig = inspect.signature(expr)
+            params = sig.parameters
+
+            if len(params) == 1 and list(params.values())[0].kind == inspect.Parameter.VAR_POSITIONAL:
+                # **kwargs style
+                return expr(**context)
+            elif len(params) == 0:
+                # No params
+                return expr()
+            else:
+                # Named params - pass relevant context
+                kwargs = {}
+                for param_name in params:
+                    if param_name in context:
+                        kwargs[param_name] = context[param_name]
+                return expr(**kwargs)
+        elif isinstance(expr, str):
+            # Check if it's a simple parameter reference
+            if expr in context:
+                return context[expr]
+            # Check if it's an attribute access like "order.id"
+            elif "." in expr:
+                parts = expr.split(".", 1)
+                if parts[0] in context:
+                    obj = context[parts[0]]
+                    if hasattr(obj, parts[1]):
+                        return getattr(obj, parts[1])
+        return expr
+
+
+def get_spore_sync(name: str) -> SyncEventLogger:
+    """
+    Get a synchronous spore logger.
+
+    Use this in synchronous code. The logger uses daemon threads for
+    fire-and-forget logging - business logic never blocks.
+
+    Args:
+        name: Spore name (typically __module__ or __name__)
+
+    Returns:
+        A SyncEventLogger instance
+
+    Example:
+        ```python
+        from mycorrhizal.spores import configure, get_spore_sync
+        from mycorrhizal.spores.transport import SyncFileTransport
+
+        configure(transport=SyncFileTransport("logs/ocel.jsonl"))
+        spore = get_spore_sync(__name__)
+
+        @spore.log_event(event_type="OrderCreated", order_id="order.id")
+        def create_order(order: Order) -> Order:
+            return order
+        ```
+    """
+    return SyncEventLogger(name)
+
+
+def get_spore_async(name: str) -> AsyncEventLogger:
+    """
+    Get an asynchronous spore logger.
+
+    Use this in asynchronous code. The logger uses async I/O.
+
+    Args:
+        name: Spore name (typically __module__ or __name__)
+
+    Returns:
+        An AsyncEventLogger instance
+
+    Example:
+        ```python
+        from mycorrhizal.spores import configure, get_spore_async
+        from mycorrhizal.spores.transport import AsyncFileTransport
+
+        configure(transport=AsyncFileTransport("logs/ocel.jsonl"))
+        spore = get_spore_async(__name__)
+
+        @spore.log_event(event_type="OrderCreated", order_id="order.id")
+        async def create_order(order: Order) -> Order:
+            return order
+        ```
+    """
+    return AsyncEventLogger(name)
+
+
+# ============================================================================
+# Legacy API (deprecated)
 # ============================================================================
 
 class SporeDecorator:
@@ -237,10 +925,20 @@ class SporeDecorator:
                 # Call the original function
                 result = func(*args, **kwargs)
 
-                # Log the event asynchronously
-                asyncio.create_task(self._log_event(
-                    func, args, kwargs, event_type, attributes, objects
-                ))
+                # Log in background thread since we're not in async context
+                import threading
+                def log_in_thread():
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+                    try:
+                        new_loop.run_until_complete(self._log_event(
+                            func, args, kwargs, event_type, attributes, objects
+                        ))
+                    finally:
+                        new_loop.close()
+
+                thread = threading.Thread(target=log_in_thread, daemon=True)
+                thread.start()
 
                 return result
 
@@ -297,61 +995,73 @@ class SporeDecorator:
             # Extract objects
             event_objects = []
 
-            # 1. Extract from blackboard with ObjectRef metadata
-            if bb is not None:
-                bb_objects = extraction.extract_objects_from_blackboard(bb, objects)
-                event_objects.extend(bb_objects)
+            if objects is not None and bb is not None:
+                # Extract objects from interface using proper Annotated type handling
+                for obj_field in objects:
+                    if hasattr(bb, obj_field):
+                        obj = getattr(bb, obj_field)
 
-            # 2. Manual object specification
-            if isinstance(attributes, dict):
-                # Check for object specifications (tuples with qualifier)
-                manual_objects = extraction.extract_objects_from_spec(
-                    attributes, timestamp
-                )
-                event_objects.extend(manual_objects)
+                        # Get the field type from annotations
+                        field_type = type(bb).__annotations__.get(obj_field)
+                        if field_type is not None:
+                            # Check if it's an Annotated type
+                            if get_origin(field_type) is Annotated:
+                                args = get_args(field_type)
+                                if len(args) >= 2:
+                                    # args[0] is the actual type, args[1:] are metadata
+                                    for metadata in args[1:]:
+                                        # Check if it's an ObjectRef
+                                        if isinstance(metadata, ObjectRef):
+                                            rel = Relationship(
+                                                object_id=obj.id,
+                                                qualifier=metadata.qualifier
+                                            )
+                                            event_objects.append((obj, rel))
+                                            break
 
-            # Build relationships
-            relationships = {}
-            for obj in event_objects:
-                rel = Relationship(object_id=obj.id, qualifier="related")
-                relationships[obj.id] = rel
-
-            # Build event
+            # Create event
             event = Event(
                 id=generate_event_id(),
                 type=event_type,
                 time=timestamp,
-                attributes=event_attrs,
-                relationships=relationships
+                attributes={
+                    k: EventAttributeValue(name=k, value=str(v), time=timestamp)
+                    for k, v in event_attrs.items()
+                },
+                relationships={
+                    r.qualifier: r
+                    for _, r in event_objects
+                }
             )
 
             # Send event
             await _send_log_record(LogRecord(event=event))
 
-            # Send objects to cache
-            cache = get_object_cache()
-            for obj in event_objects:
-                cache.contains_or_add(obj.id, obj)
+            # Send object records (convert Pydantic models to OCEL Objects)
+            for obj, _ in event_objects:
+                ocel_obj = extraction.convert_to_ocel_object(obj)
+                if ocel_obj:
+                    obj_record = LogRecord(object=ocel_obj)
+                    await _send_log_record(obj_record)
 
         except Exception as e:
             logger.error(f"Failed to log event: {e}")
 
     def _find_blackboard(self, args: tuple, kwargs: dict) -> Optional[Any]:
-        """Find blackboard in function arguments."""
-        # Try common parameter names
-        for param_name in ('bb', 'blackboard', 'ctx', 'context'):
-            if param_name in kwargs:
-                return kwargs[param_name]
+        """Find blackboard in arguments.
 
-        # Try positional arguments
-        for i, arg in enumerate(args):
-            # Skip self
-            if i == 0 and inspect.ismethod(args[0] if args else None):
-                continue
+        Looks for objects marked with _is_blackboard, or falls back to
+        the first argument that looks like a Pydantic model (has __annotations__).
+        """
+        # First, look for explicitly marked blackboard
+        for arg in args:
+            if hasattr(arg, '_is_blackboard'):
+                return arg
 
-            # Check for common blackboard patterns
-            type_name = type(arg).__name__.lower()
-            if 'blackboard' in type_name or 'context' in type_name:
+        # Fallback: look for Pydantic BaseModel or dataclass with annotations
+        for arg in args:
+            if hasattr(arg, '__annotations__') and hasattr(arg, '__dict__'):
+                # Looks like a data container (Pydantic model or dataclass)
                 return arg
 
         return None
@@ -377,43 +1087,38 @@ class SporeDecorator:
         def decorator(cls: type) -> type:
             # Store metadata on the class
             cls._spores_object_type = object_type
+            # Store in global registry
+            if not hasattr(self, '_object_types'):
+                self._object_types = {}
+            self._object_types[object_type] = cls
             return cls
 
         return decorator
 
 
-# Global spores decorator instance
+# Create global spore instance for backward compatibility
 spore = SporeDecorator()
 
 
 # ============================================================================
-# Module Exports
+# Public API
 # ============================================================================
 
 __all__ = [
+    # Configuration
     'configure',
     'get_config',
     'get_object_cache',
+
+    # Spore getters (explicit)
+    'get_spore_sync',
+    'get_spore_async',
+
+    # Logger types
+    'EventLogger',
+    'AsyncEventLogger',
+    'SyncEventLogger',
+
+    # Legacy (deprecated)
     'spore',
-    'SporesConfig',
-    # Models
-    'Event',
-    'Object',
-    'LogRecord',
-    'Relationship',
-    'EventAttributeValue',
-    'ObjectAttributeValue',
-    'ObjectRef',
-    'ObjectScope',
-    'EventAttr',
-    'generate_event_id',
-    'generate_object_id',
-    # Cache
-    'ObjectLRUCache',
-    # Encoder
-    'Encoder',
-    'JSONEncoder',
-    # Transport
-    'Transport',
-    'HTTPTransport',
 ]
