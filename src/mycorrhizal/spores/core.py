@@ -314,7 +314,12 @@ class AsyncEventLogger(EventLogger):
 
         Args:
             event_type: The type of event to log
-            relationships: Dict mapping qualifiers to (source, obj_type, attrs) tuples
+            relationships: Dict mapping qualifiers to relationship specs:
+                - qualifier: Relationship qualifier (e.g., "order", "customer")
+                - spec: 2-tuple (source, obj_type) or 3-tuple (source, obj_type, attrs)
+                    - source: Where to get object ("return", "ret", param name, "self")
+                    - obj_type: OCEL object type
+                    - attrs: Optional list of attribute names to log (omitted = auto-detect SporesAttr)
             attributes: Dict mapping event attribute names to values or callables
 
         Returns:
@@ -570,11 +575,12 @@ class SyncEventLogger(EventLogger):
 
         Args:
             event_type: The type of event to log
-            relationships: Dict mapping qualifiers to (source, obj_type, attrs) tuples
+            relationships: Dict mapping qualifiers to relationship specs:
                 - qualifier: Relationship qualifier (e.g., "order", "customer")
-                - source: Where to get object ("return", "ret", param name, "self")
-                - obj_type: OCEL object type
-                - attrs: List of attribute names to log, or dict for custom attr names
+                - spec: 2-tuple (source, obj_type) or 3-tuple (source, obj_type, attrs)
+                    - source: Where to get object ("return", "ret", param name, "self")
+                    - obj_type: OCEL object type
+                    - attrs: Optional list of attribute names to log (omitted = auto-detect SporesAttr)
             attributes: Dict mapping event attribute names to values or callables
 
         Returns:
@@ -585,8 +591,8 @@ class SyncEventLogger(EventLogger):
             @spore.log_event(
                 event_type="OrderCreated",
                 relationships={
-                    "order": ("return", "Order", ["status", "total"]),
-                    "customer": ("customer", "Customer", ["name", "email"]),
+                    "order": ("return", "Order"),  # 2-tuple: auto-detect SporesAttr
+                    "customer": ("customer", "Customer"),  # 2-tuple: auto-detect SporesAttr
                 },
                 attributes={
                     "item_count": lambda items: len(items),

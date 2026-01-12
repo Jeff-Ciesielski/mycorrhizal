@@ -38,7 +38,7 @@ def Engage():
         return bb.battery > 20
 
     @bt.root
-    @bt.sequence(memory=False)
+    @bt.sequence
     def engage_threat():
         yield threat_detected
         yield bt.failer().gate(battery_ok).timeout(0.12)(engage)
