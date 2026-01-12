@@ -1,6 +1,6 @@
 [project]
 name = "mycorrhizal"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Utilities and DSLs for modelling and implementing safe, performant, structured systems"
 readme = "README.md"
 authors = [{ name = "Jeff Ciesielski", email = "jeffciesielski@gmail.com" }]
@@ -14,8 +14,17 @@ dependencies = [
 [tool.hatch.build]
 exclude = ["examples/*", "tests/*"]
 
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/mycorrhizal/_version.py"
+template = """
+version = "{version}"
+"""
+
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27.0", "hatch-vcs>=0.4.0"]
 build-backend = "hatchling.build"
 
 [dependency-groups]

@@ -121,7 +121,10 @@ from .dsl import (
 )
 
 
-__version__ = "0.1.0"
+try:
+    from mycorrhizal._version import version as __version__
+except ImportError:
+    __version__ = "0.0.0+dev"
 
 
 __all__ = [

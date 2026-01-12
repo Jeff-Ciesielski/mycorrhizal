@@ -2,3 +2,6 @@
 **/__pycache__/
 *.claude_todo/
 *.pyclogs/
+
+# Generated version file
+src/*/_version.py
