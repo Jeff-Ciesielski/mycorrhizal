@@ -8,7 +8,7 @@ Manages token flow, transition firing, and asyncio task coordination.
 
 import asyncio
 from asyncio import Event, Task
-from typing import Any, List, Dict, Optional, Set, Tuple, Callable, Deque, Union
+from typing import Any, List, Dict, Optional, Set, Tuple, Callable, Deque, Union, Type
 from collections import deque
 from itertools import product
 import inspect
@@ -23,6 +23,15 @@ logger = logging.getLogger(__name__)
 # Interface Integration Helper
 # ======================================================================================
 
+# Cache for interface views to avoid repeated creation
+_interface_view_cache: Dict[Tuple[int, Type], Any] = {}
+
+
+def _clear_interface_view_cache() -> None:
+    """Clear the interface view cache. Useful for testing."""
+    global _interface_view_cache
+    _interface_view_cache.clear()
+
 
 def _create_interface_view_if_needed(bb: Any, handler: Callable) -> Any:
     """
@@ -31,6 +40,11 @@ def _create_interface_view_if_needed(bb: Any, handler: Callable) -> Any:
 
     This enables type-safe, constrained access to blackboard state based on
     interface definitions created with @blackboard_interface.
+
+    The function signature can use an interface type:
+        async def my_transition(consumed, bb: MyInterface, timebase):
+            # bb is automatically a constrained view
+            yield {output: token}
 
     Args:
         bb: The blackboard instance
@@ -59,7 +73,23 @@ def _create_interface_view_if_needed(bb: Any, handler: Callable) -> Any:
                 # If type hint exists and has interface metadata
                 if bb_type and hasattr(bb_type, '_readonly_fields'):
                     from mycorrhizal.common.wrappers import create_view_from_protocol
-                    return create_view_from_protocol(bb, bb_type)
+
+                    # Check cache
+                    cache_key = (id(bb), bb_type)
+                    if cache_key in _interface_view_cache:
+                        return _interface_view_cache[cache_key]
+
+                    # Create view with interface metadata
+                    readonly_fields = getattr(bb_type, '_readonly_fields', set())
+                    view = create_view_from_protocol(
+                        bb,
+                        bb_type,
+                        readonly_fields=readonly_fields
+                    )
+
+                    # Cache for reuse
+                    _interface_view_cache[cache_key] = view
+                    return view
     except Exception:
         # If anything goes wrong with type inspection, fall back to original bb
         pass

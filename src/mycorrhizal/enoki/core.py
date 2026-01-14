@@ -79,6 +79,8 @@ from typing import (
     Awaitable,
     TypeVar,
     Generic,
+    Tuple,
+    Type,
 )
 from functools import cache
 
@@ -90,6 +92,15 @@ T = TypeVar('T')
 # Interface Integration Helper
 # ============================================================================
 
+# Cache for interface views to avoid repeated creation
+_interface_view_cache: Dict[Tuple[int, Type], Any] = {}
+
+
+def _clear_interface_view_cache() -> None:
+    """Clear the interface view cache. Useful for testing."""
+    global _interface_view_cache
+    _interface_view_cache.clear()
+
 
 def _create_interface_view_for_context(context: SharedContext, handler: Callable) -> SharedContext:
     """
@@ -97,6 +108,11 @@ def _create_interface_view_for_context(context: SharedContext, handler: Callable
 
     This enables type-safe, constrained access to blackboard state based on
     interface definitions created with @blackboard_interface.
+
+    The function signature can use an interface type:
+        async def on_state(ctx: SharedContext[MyInterface]):
+            # ctx.common is automatically a constrained view
+            return Events.DONE
 
     Args:
         context: The SharedContext object
@@ -125,8 +141,22 @@ def _create_interface_view_for_context(context: SharedContext, handler: Callable
                     from mycorrhizal.common.wrappers import create_view_from_protocol
                     from dataclasses import replace
 
-                    # Create constrained view of common
-                    constrained_common = create_view_from_protocol(context.common, interface_type)
+                    # Check cache
+                    cache_key = (id(context.common), interface_type)
+                    if cache_key in _interface_view_cache:
+                        constrained_common = _interface_view_cache[cache_key]
+                        return replace(context, common=constrained_common)
+
+                    # Create constrained view of common with interface metadata
+                    readonly_fields = getattr(interface_type, '_readonly_fields', set())
+                    constrained_common = create_view_from_protocol(
+                        context.common,
+                        interface_type,
+                        readonly_fields=readonly_fields
+                    )
+
+                    # Cache for reuse
+                    _interface_view_cache[cache_key] = constrained_common
 
                     # Return new context with constrained common
                     return replace(context, common=constrained_common)
