@@ -3,7 +3,7 @@
 
 Asyncio-friendly **Behavior Trees** for Python, designed for clarity, composability, and ergonomics in asynchronous systems.
 
-- **Fluent decorator chains**: `bt.failer().gate(N.condition).timeout(0.5)(N.action)`
+- **Fluent decorator chains**: `bt.failer().gate(condition).timeout(0.5)(action)`
 - **Owner-aware composites**: factories expand with the correct class owner, so large trees can be split across modules
 - **Cross-tree composition**: embed full subtrees with `bt.subtree()` or borrow composites with `bt.bind()`
 - **Mermaid diagrams**: export static structure diagrams for documentation/debugging
@@ -34,9 +34,9 @@ def Patrol():
 
     @bt.root
     @bt.sequence(memory=True)
-    def root(N):
-        yield N.has_waypoints
-        yield bt.timeout(1.0)(N.go_to_next)
+    def root():
+        yield has_waypoints
+        yield bt.timeout(1.0)(go_to_next)
 
 async def main():
     bb = BB(waypoints=3)
@@ -55,15 +55,15 @@ async def main():
 Decorator wrappers are available via **fluent chains** that read left→right and apply to a child when called at the end:
 
 ```python
-yield bt.failer().gate(N.battery_ok).timeout(0.25)(N.engage)
+yield bt.failer().gate(battery_ok).timeout(0.25)(engage)
 ```
 
 **Reads left→right:**
 
 1. `failer()` → forces **FAILURE** once the child completes (whether the child succeeds or fails). While the child is RUNNING, RUNNING bubbles.
-2. `gate(N.battery_ok)` → only ticks the child if `battery_ok` returns SUCCESS. If the condition returns RUNNING, the whole gate is RUNNING. If it returns FAILURE, the gate returns FAILURE without ticking the child.
+2. `gate(battery_ok)` → only ticks the child if `battery_ok` returns SUCCESS. If the condition returns RUNNING, the whole gate is RUNNING. If it returns FAILURE, the gate returns FAILURE without ticking the child.
 3. `timeout(0.25)` → if the child does not finish before 0.25 (per the configured timebase), it is cancelled/reset and the decorator returns FAILURE.
-4. Applied to `N.engage`.
+4. Applied to `engage`.
 
 ### Wrapper Cheat‑Sheet
 
@@ -75,7 +75,7 @@ yield bt.failer().gate(N.battery_ok).timeout(0.25)(N.engage)
 | `timeout()` | `bt.timeout(seconds: float)` | RUNNING until deadline; then **FAILURE** | Child status on completion | Child status on completion (unless deadline hit) | Uses the tree’s `Timebase`; cancels child when expired |
 | `retry()` | `bt.retry(max_attempts: int, retry_on=(FAILURE, ERROR))` | Pass-through | **SUCCESS** and resets attempt count | Retries while child in `retry_on` until attempts exhausted → **FAILURE** | Does not retry on RUNNING or CANCELLED by default |
 | `ratelimit()` | `bt.ratelimit(hz: float=None, period: float=None)` | If child is currently RUNNING, pass-through (no throttling) | Propagates child result and schedules next allowed start | If throttled: returns **RUNNING** (child not started) | Accepts exactly one of `hz` or `period` |
-| `gate()` | `bt.gate(condition: NodeSpec | @bt.condition)` | If condition RUNNING → **RUNNING** | Ticks child and propagates its terminal status | If condition not SUCCESS → **FAILURE** | Condition is built owner‑aware under the hood |
+| `gate()` | `bt.gate(condition: NodeSpec | @bt.condition)` | If condition RUNNING → **RUNNING** | Ticks child and propagates its terminal status | If condition not SUCCESS → **FAILURE** | Condition node is resolved from the owning tree |
 
 > Tip: You can compose wrappers in any order. The chain is applied **outside‑in** (the leftmost wrapper becomes the outermost decorator).
 
@@ -93,9 +93,9 @@ yield bt.failer().gate(N.battery_ok).timeout(0.25)(N.engage)
   - Truthy → `SUCCESS`, falsy → `FAILURE`.  
   - Returning a `Status` is allowed but discouraged; use plain booleans.
 
-### Composites (owner‑aware factories)
+### Composites
 
-Define composites as **generator factories** that yield children. The factory receives the **owner class** `N`, so you reference members with `N.<member>` (no strings).
+Define composites as **generator factories** that yield children. Node references are resolved directly by name from the owning tree.
 
 - `@bt.sequence(memory: bool = True)`  
   **AND**: ticks children in order.  
@@ -118,9 +118,9 @@ Define composites as **generator factories** that yield children. The factory re
   - Otherwise `RUNNING`.  
   - Default `failure_threshold = n - success_threshold + 1` (i.e., once success is impossible).
 
-#### On owner‑aware expansion
+#### On node resolution
 
-Inside diagramming and building, composites are expanded with the correct **owner class** context. This lets you split behavior across modules while keeping references (`N.something`) type‑safe and string‑free.
+Inside diagramming and building, composites are expanded with the correct **owner class** context. This lets you split behavior across modules while keeping references type‑safe and string‑free.
 
 ---
 
@@ -143,9 +143,9 @@ def Engage():
 
     @bt.root
     @bt.sequence(memory=False)
-    def engage_threat(N):
-        yield N.threat_detected
-        yield bt.failer().timeout(0.25)(N.engage)
+    def engage_threat():
+        yield threat_detected
+        yield bt.failer().timeout(0.25)(engage)
 
 # Telemetry subtree
 @bt.tree
@@ -155,15 +155,15 @@ def Telemetry():
 
     @bt.root
     @bt.sequence()
-    def telemetry_seq(N):
-        yield bt.ratelimit(hz=2.0)(N.push)
+    def telemetry_seq():
+        yield bt.ratelimit(hz=2.0)(push)
 
 # Main tree
 @bt.tree
 def Main():
     @bt.root
     @bt.selector(reactive=True, memory=True)
-    def root(N):
+    def root():
         yield bt.subtree(Engage)
         yield bt.bind(Telemetry, Telemetry.telemetry_seq)
 ```
@@ -208,9 +208,9 @@ Paste the output into the Mermaid Live Editor.
 
 ## Design Principles
 
-- **Async‑first** — every node can be `async def`; scheduling is `asyncio`‑based.  
-- **String‑free** — reference nodes via `N.<member>` (no magic strings).  
-- **Composable** — split and recombine trees across modules with `subtree`/`bind`.  
+- **Async‑first** — every node can be `async def`; scheduling is `asyncio`‑based.
+- **String‑free** — reference nodes directly by name (no magic strings).
+- **Composable** — split and recombine trees across modules with `subtree`/`bind`.
 - **Fluent‑only** — decorator chains read naturally left→right.
 
 ---

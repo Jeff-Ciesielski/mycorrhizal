@@ -122,7 +122,7 @@ class TestActionNode:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield succeed
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -141,7 +141,7 @@ class TestActionNode:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield fail
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -159,7 +159,7 @@ class TestActionNode:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bool_action
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -177,7 +177,7 @@ class TestActionNode:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bool_action
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -196,7 +196,7 @@ class TestActionNode:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield none_action
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -217,7 +217,7 @@ class TestActionNode:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield async_action
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -237,7 +237,7 @@ class TestActionNode:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield timed_action
 
         mock_tb.set_time(42.0)
@@ -261,7 +261,7 @@ class TestConditionNode:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield is_true
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -279,7 +279,7 @@ class TestConditionNode:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield is_false
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -297,7 +297,7 @@ class TestConditionNode:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield check_value
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -341,7 +341,7 @@ class TestSequence:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield action1
                 yield action2
                 yield action3
@@ -373,7 +373,7 @@ class TestSequence:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield action1
                 yield action2
                 yield action3
@@ -408,7 +408,7 @@ class TestSequence:
 
             @bt.root
             @bt.sequence(memory=True)
-            def root(N):
+            def root():
                 yield action1
                 yield running_then_success
                 yield action3
@@ -442,7 +442,7 @@ class TestSequence:
 
             @bt.root
             @bt.sequence(memory=False)
-            def root(N):
+            def root():
                 yield action1
                 yield running_then_success
 
@@ -476,7 +476,7 @@ class TestSelector:
 
             @bt.root
             @bt.selector()
-            def root(N):
+            def root():
                 yield action1
                 yield action2
 
@@ -507,7 +507,7 @@ class TestSelector:
 
             @bt.root
             @bt.selector()
-            def root(N):
+            def root():
                 yield fail1
                 yield fail2
                 yield succeed
@@ -534,7 +534,7 @@ class TestSelector:
 
             @bt.root
             @bt.selector()
-            def root(N):
+            def root():
                 yield fail1
                 yield fail2
 
@@ -569,7 +569,7 @@ class TestParallel:
 
             @bt.root
             @bt.parallel(success_threshold=2)
-            def root(N):
+            def root():
                 yield succeed1
                 yield succeed2
                 yield fail1
@@ -601,7 +601,7 @@ class TestParallel:
 
             @bt.root
             @bt.parallel(success_threshold=2, failure_threshold=2)
-            def root(N):
+            def root():
                 yield succeed1
                 yield fail1
                 yield fail2
@@ -630,7 +630,7 @@ class TestInverter:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.inverter()(succeed)
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -648,7 +648,7 @@ class TestInverter:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.inverter()(fail)
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -666,7 +666,7 @@ class TestInverter:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.inverter()(running)
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -688,7 +688,7 @@ class TestSucceeder:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.succeeder()(fail)
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -706,7 +706,7 @@ class TestSucceeder:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.succeeder()(running)
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -728,7 +728,7 @@ class TestFailer:
 
             @bt.root
             @bt.selector()
-            def root(N):
+            def root():
                 yield bt.failer()(succeed)
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -754,7 +754,7 @@ class TestRetry:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.retry(max_attempts=5)(fail_twice_then_succeed)
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -783,7 +783,7 @@ class TestRetry:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.retry(max_attempts=3)(always_fail)
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -812,7 +812,7 @@ class TestTimeout:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.timeout(5.0)(quick_action)
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -830,7 +830,7 @@ class TestTimeout:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.timeout(1.0)(slow_action)
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -866,7 +866,7 @@ class TestGate:
 
             @bt.root
             @bt.selector()
-            def root(N):
+            def root():
                 yield bt.gate(is_allowed)(guarded_action)
 
         simple_bb.should_succeed = True
@@ -891,7 +891,7 @@ class TestGate:
 
             @bt.root
             @bt.selector()
-            def root(N):
+            def root():
                 yield bt.gate(is_allowed)(guarded_action)
 
         simple_bb.should_succeed = False
@@ -916,7 +916,7 @@ class TestRateLimit:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.ratelimit(period=1.0)(action)
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -949,7 +949,7 @@ class TestRateLimit:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.ratelimit(hz=2.0)(action)  # 0.5 second period
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -990,7 +990,7 @@ class TestDecoratorChaining:
 
             @bt.root
             @bt.selector()
-            def root(N):
+            def root():
                 yield bt.gate(is_enabled).retry(max_attempts=5)(flaky_action)
 
         simple_bb.should_succeed = True
@@ -1023,7 +1023,7 @@ class TestDecoratorChaining:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.succeeder().inverter()(fail)
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -1048,7 +1048,7 @@ class TestDecoratorChaining:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.inverter().succeeder()(succeed)
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -1086,7 +1086,7 @@ class TestMatch:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.match(lambda bb: bb.current_action)(
                     bt.case(ImageAction)(handle_image),
                     bt.case(MoveAction)(handle_move),
@@ -1132,7 +1132,7 @@ class TestMatch:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.match(lambda bb: bb.current_action)(
                     bt.case(lambda a: a.priority > 5)(handle_urgent),
                     bt.case(lambda a: a.priority <= 5)(handle_normal),
@@ -1167,7 +1167,7 @@ class TestMatch:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.match(lambda bb: bb.current_action)(
                     bt.case("start")(handle_start),
                     bt.case("stop")(handle_stop),
@@ -1202,7 +1202,7 @@ class TestMatch:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.match(lambda bb: bb.current_action)(
                     bt.case(ImageAction)(handle_image),
                     bt.defaultcase(handle_unknown),
@@ -1225,7 +1225,7 @@ class TestMatch:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.match(lambda bb: bb.current_action)(
                     bt.case(ImageAction)(handle_image),
                 )
@@ -1258,7 +1258,7 @@ class TestMatch:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.match(lambda bb: bb.current_action)(
                     bt.case(ImageAction)(multi_tick_handler),
                     bt.case(MoveAction)(should_not_run),
@@ -1299,7 +1299,7 @@ class TestMatch:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.match(lambda bb: bb.current_action)(
                     bt.case(lambda a: a.priority > 5)(handle_high_priority),
                     bt.case(PriorityAction)(handle_any_priority),  # Would also match
@@ -1338,7 +1338,7 @@ class TestDoWhile:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.do_while(has_items)(process_item)
 
         simple_bb.value = 3
@@ -1385,7 +1385,7 @@ class TestDoWhile:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.do_while(has_items)(process_item)
 
         simple_bb.value = 0
@@ -1415,7 +1415,7 @@ class TestDoWhile:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.do_while(always_true)(fail_on_second)
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -1451,7 +1451,7 @@ class TestDoWhile:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.do_while(has_items)(slow_process)
 
         simple_bb.value = 2
@@ -1503,13 +1503,13 @@ class TestDoWhile:
                 return Status.SUCCESS
 
             @bt.sequence()
-            def process_sample(N):
+            def process_sample():
                 yield step_one
                 yield step_two
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.do_while(samples_remain)(process_sample)
 
         simple_bb.value = 0
@@ -1555,7 +1555,7 @@ class TestDoWhile:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 # Loop until is_done is true (i.e., while NOT is_done)
                 yield bt.do_while(bt.inverter()(is_done))(increment)
 
@@ -1596,7 +1596,7 @@ class TestSubtree:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield sub_action
 
         @bt.tree
@@ -1608,7 +1608,7 @@ class TestSubtree:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield main_action
                 yield bt.subtree(SubTree)
 
@@ -1629,7 +1629,7 @@ class TestSubtree:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield fail
 
         @bt.tree
@@ -1646,7 +1646,7 @@ class TestSubtree:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield before
                 yield bt.subtree(FailingSubTree)
                 yield after
@@ -1676,7 +1676,7 @@ class TestExceptionHandling:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield raise_error
 
         runner = Runner(
@@ -1696,7 +1696,7 @@ class TestExceptionHandling:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield raise_error
 
         runner = Runner(
@@ -1728,7 +1728,7 @@ class TestMermaidGeneration:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield action1
                 yield action2
 
@@ -1749,7 +1749,7 @@ class TestMermaidGeneration:
 
             @bt.root
             @bt.selector()
-            def root(N):
+            def root():
                 yield action1
 
         mermaid = Tree.to_mermaid()
@@ -1772,7 +1772,7 @@ class TestMermaidGeneration:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.match(lambda bb: bb.action)(
                     bt.case(ImageAction)(handle_image),
                     bt.case(MoveAction)(handle_move),
@@ -1796,7 +1796,7 @@ class TestMermaidGeneration:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield sub_action
 
         @bt.tree
@@ -1807,7 +1807,7 @@ class TestMermaidGeneration:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield main_action
                 yield bt.subtree(SubTree)
 
@@ -1827,7 +1827,7 @@ class TestMermaidGeneration:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.do_while(has_items)(process)
 
         mermaid = Tree.to_mermaid()
@@ -1851,7 +1851,7 @@ class TestMermaidGeneration:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.match(lambda bb: bb.value, name="action_type")(
                     bt.case("a")(handle_a),
                     bt.case("b")(handle_b),
@@ -1871,7 +1871,7 @@ class TestMermaidGeneration:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield take_image
 
         @bt.tree
@@ -1882,7 +1882,7 @@ class TestMermaidGeneration:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield setup
                 yield bt.subtree(ImagePodHandler)
 
@@ -1906,12 +1906,12 @@ class TestRecursionDetection:
             @bt.tree
             def RecursiveTree():
                 @bt.sequence()
-                def recursive(N):
+                def recursive():
                     yield recursive  # Direct recursion
 
                 @bt.root
                 @bt.sequence()
-                def root(N):
+                def root():
                     yield recursive
 
             # Force expansion by building or generating mermaid
@@ -1939,7 +1939,7 @@ class TestRunner:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield three_tick_action
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -1959,7 +1959,7 @@ class TestRunner:
 
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield never_completes
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -1992,7 +1992,7 @@ class TestLambdaActions:
         def Tree():
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.action(lambda bb: Status.SUCCESS)
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)
@@ -2010,7 +2010,7 @@ class TestLambdaActions:
         def Tree():
             @bt.root
             @bt.sequence()
-            def root(N):
+            def root():
                 yield bt.action(set_value)
 
         runner = Runner(Tree, simple_bb, tb=mock_tb)

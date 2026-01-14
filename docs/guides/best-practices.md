@@ -48,10 +48,10 @@ async def chk_usr(bb) -> Status:
 
 ```python
 @bt.sequence
-def login_flow(N):
-    yield N.validate_credentials
-    yield N.check_account_status
-    yield N.create_session
+def login_flow():
+    yield validate_credentials
+    yield check_account_status
+    yield create_session
 ```
 
 **Bad**: One giant complex component

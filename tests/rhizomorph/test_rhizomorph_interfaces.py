@@ -64,8 +64,8 @@ def test_action_with_interface_type_hint():
 
         @bt.root
         @bt.sequence()
-        def root(N):
-            yield N.increment_tasks
+        def root():
+            yield increment_tasks
 
     bb = TaskBlackboard()
     runner = Runner(TestTree, bb)
@@ -91,8 +91,8 @@ def test_action_readonly_field_enforced():
 
         @bt.root
         @bt.sequence()
-        def root(N):
-            yield N.try_modify_readonly
+        def root():
+            yield try_modify_readonly
 
     bb = TaskBlackboard()
     runner = Runner(TestTree, bb)
@@ -121,8 +121,8 @@ def test_action_unspecified_field_inaccessible():
 
         @bt.root
         @bt.sequence()
-        def root(N):
-            yield N.try_access_secret
+        def root():
+            yield try_access_secret
 
     bb = TaskBlackboard()
     runner = Runner(TestTree, bb)
@@ -150,9 +150,9 @@ def test_condition_with_interface():
 
         @bt.root
         @bt.sequence()
-        def root(N):
-            yield N.check_task_limit
-            yield N.increment
+        def root():
+            yield check_task_limit
+            yield increment
 
     bb = TaskBlackboard()
     runner = Runner(TestTree, bb)
@@ -189,9 +189,9 @@ def test_selector_with_interfaces():
 
         @bt.root
         @bt.selector()
-        def root(N):
-            yield N.process_task  # Try processing first
-            yield N.no_task  # Fallback
+        def root():
+            yield process_task  # Try processing first
+            yield no_task  # Fallback
 
     bb = TaskBlackboard()
     runner = Runner(TestTree, bb)
@@ -229,8 +229,8 @@ def test_action_without_interface_still_works():
 
         @bt.root
         @bt.sequence()
-        def root(N):
-            yield N.full_access
+        def root():
+            yield full_access
 
     bb = TaskBlackboard()
     runner = Runner(TestTree, bb)
@@ -256,8 +256,8 @@ def test_action_with_untyped_bb():
 
         @bt.root
         @bt.sequence()
-        def root(N):
-            yield N.untyped
+        def root():
+            yield untyped
 
     bb = TaskBlackboard()
     runner = Runner(TestTree, bb)
@@ -285,8 +285,8 @@ def test_action_with_interface_and_timebase():
 
         @bt.root
         @bt.sequence()
-        def root(N):
-            yield N.increment_with_time
+        def root():
+            yield increment_with_time
 
     bb = TaskBlackboard()
     runner = Runner(TestTree, bb)
@@ -318,9 +318,9 @@ def test_parallel_with_interfaces():
 
         @bt.root
         @bt.parallel(success_threshold=2)
-        def root(N):
-            yield N.increment_a
-            yield N.increment_b
+        def root():
+            yield increment_a
+            yield increment_b
 
     bb = TaskBlackboard()
     runner = Runner(TestTree, bb)
@@ -348,7 +348,7 @@ def test_decorator_stack_with_interfaces():
 
         @bt.root
         @bt.sequence()
-        def root(N):
+        def root():
             # Stack decorators: gate -> timeout -> action
             yield bt.timeout(seconds=1.0).gate(not_at_limit)(increment)
 
@@ -390,9 +390,9 @@ def test_interface_violation_in_sequence():
 
         @bt.root
         @bt.sequence()
-        def root(N):
-            yield N.good_action
-            yield N.bad_action
+        def root():
+            yield good_action
+            yield bad_action
 
     bb = TaskBlackboard()
     runner = Runner(TestTree, bb)
@@ -423,8 +423,8 @@ def test_multiple_interfaces_same_tree():
         # But we can test that the tree handles this correctly
         @bt.root
         @bt.sequence()
-        def root(N):
-            yield N.use_task_interface
+        def root():
+            yield use_task_interface
 
     bb = TaskBlackboard()
     runner = Runner(TestTree, bb)

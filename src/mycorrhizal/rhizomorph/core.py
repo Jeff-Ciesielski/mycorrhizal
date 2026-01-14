@@ -66,10 +66,13 @@ from typing import (
     List,
     Optional,
     Tuple,
+    Type,
     TypeVar,
     Union,
     Set,
     Protocol,
+    overload,
+    Literal,
 )
 from typing import Sequence as SequenceT
 from types import SimpleNamespace
@@ -79,6 +82,7 @@ from mycorrhizal.common.timebase import *
 logger = logging.getLogger(__name__)
 
 BB = TypeVar("BB")
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 # ======================================================================================
@@ -1001,7 +1005,6 @@ class NodeSpec:
 
     def to_node(
         self,
-        owner: Optional[Any] = None,
         exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE,
     ) -> Node[Any]:
         match self.kind:
@@ -1010,12 +1013,11 @@ class NodeSpec:
             case NodeSpecKind.CONDITION:
                 return Condition(self.payload, exception_policy=exception_policy)
             case NodeSpecKind.SEQUENCE | NodeSpecKind.SELECTOR | NodeSpecKind.PARALLEL:
-                owner_effective = getattr(self, "owner", None) or owner
                 factory = self.payload["factory"]
-                expanded = _bt_expand_children(factory, owner_effective)
+                expanded = _bt_expand_children(factory)
                 self.children = expanded
                 built = [
-                    ch.to_node(owner_effective, exception_policy) for ch in expanded
+                    ch.to_node(exception_policy) for ch in expanded
                 ]
                 match self.kind:
                     case NodeSpecKind.SEQUENCE:
@@ -1043,7 +1045,7 @@ class NodeSpec:
 
             case NodeSpecKind.DECORATOR:
                 assert len(self.children) == 1, "Decorator must wrap exactly one child"
-                child_node = self.children[0].to_node(owner, exception_policy)
+                child_node = self.children[0].to_node(exception_policy)
                 builder = self.payload
                 return builder(child_node)
 
@@ -1055,7 +1057,7 @@ class NodeSpec:
                 key_fn = self.payload["key_fn"]
                 case_specs: List[CaseSpec] = self.payload["cases"]
                 cases = [
-                    (cs.matcher, cs.child.to_node(owner, exception_policy))
+                    (cs.matcher, cs.child.to_node(exception_policy))
                     for cs in case_specs
                 ]
                 return Match(
@@ -1069,8 +1071,8 @@ class NodeSpec:
                 cond_spec = self.payload["condition"]
                 child_spec = self.children[0]
                 return DoWhile(
-                    cond_spec.to_node(owner, exception_policy),
-                    child_spec.to_node(owner, exception_policy),
+                    cond_spec.to_node(exception_policy),
+                    child_spec.to_node(exception_policy),
                     name=self.name,
                     exception_policy=exception_policy,
                 )
@@ -1081,7 +1083,6 @@ class NodeSpec:
 
 def _bt_expand_children(
     factory: Callable[..., Generator[Any, None, None]],
-    owner: Optional[Any],
     expansion_stack: Optional[Set[str]] = None,
 ) -> List[NodeSpec]:
     """
@@ -1089,7 +1090,6 @@ def _bt_expand_children(
 
     Args:
         factory: The generator function that yields child specs
-        owner: The namespace object for resolving N references
         expansion_stack: Stack of factory names to detect recursion
     """
     if expansion_stack is None:
@@ -1110,10 +1110,7 @@ def _bt_expand_children(
     expansion_stack = expansion_stack.copy()
     expansion_stack.add(factory_name)
 
-    try:
-        gen = factory(owner)
-    except TypeError:
-        gen = factory()
+    gen = factory()
 
     if not inspect.isgenerator(gen):
         raise TypeError(
@@ -1149,8 +1146,7 @@ def _bt_expand_children(
             NodeSpecKind.PARALLEL,
         ) and hasattr(spec, "_expansion_stack"):
             child_factory = spec.payload["factory"]
-            child_owner = getattr(spec, "owner", None) or owner
-            _bt_expand_children(child_factory, child_owner, spec._expansion_stack)  # type: ignore
+            _bt_expand_children(child_factory, spec._expansion_stack)  # type: ignore
 
     return out
 
@@ -1339,7 +1335,15 @@ class _BT:
             self._tracking_stack[-1].append((fn.__name__, fn))
         return fn
 
-    def sequence(self, func_or_none=None, *, memory: bool = True):
+    @overload
+    def sequence(self, func: F, *, memory: bool = True) -> F: ...
+
+    @overload
+    def sequence(self, func: Literal[None] = None, *, memory: bool = True) -> Callable[[F], F]: ...
+
+    def sequence(
+        self, func: Optional[F] = None, *, memory: bool = True
+    ) -> Union[F, Callable[[F], F]]:
         """Decorator to mark a generator function as a sequence composite.
 
         Can be used with or without parentheses:
@@ -1352,26 +1356,24 @@ class _BT:
                 ...
         """
         # Case 1: Used as @bt.sequence (no parens)
-        if callable(func_or_none):
+        if callable(func):
             # Apply decorator directly with defaults
             spec = NodeSpec(
                 kind=NodeSpecKind.SEQUENCE,
-                name=_name_of(func_or_none),
-                payload={"factory": func_or_none, "memory": memory},
+                name=_name_of(func),
+                payload={"factory": func, "memory": memory},
             )
-            func_or_none.node_spec = spec  # type: ignore
+            func.node_spec = spec  # type: ignore
             if self._tracking_stack:
-                self._tracking_stack[-1].append((func_or_none.__name__, func_or_none))
-            return func_or_none
+                self._tracking_stack[-1].append((func.__name__, func))
+            return func
 
         # Case 2: Used as @bt.sequence() or @bt.sequence(memory=False)
         return self._sequence_impl(memory=memory)
 
-    def _sequence_impl(self, memory: bool):
+    def _sequence_impl(self, memory: bool) -> Callable[[F], F]:
         """Implementation of sequence decorator."""
-        def deco(
-            factory: Callable[..., Generator[Any, None, None]],
-        ) -> Callable[..., Generator[Any, None, None]]:
+        def deco(factory: F) -> F:
             spec = NodeSpec(
                 kind=NodeSpecKind.SEQUENCE,
                 name=_name_of(factory),
@@ -1384,7 +1386,15 @@ class _BT:
 
         return deco
 
-    def selector(self, func_or_none=None, *, memory: bool = True, reactive: bool = False):
+    @overload
+    def selector(self, func: F, *, memory: bool = True, reactive: bool = False) -> F: ...
+
+    @overload
+    def selector(self, func: Literal[None] = None, *, memory: bool = True, reactive: bool = False) -> Callable[[F], F]: ...
+
+    def selector(
+        self, func: Optional[F] = None, *, memory: bool = True, reactive: bool = False
+    ) -> Union[F, Callable[[F], F]]:
         """Decorator to mark a generator function as a selector composite.
 
         Can be used with or without parentheses:
@@ -1401,26 +1411,24 @@ class _BT:
                 ...
         """
         # Case 1: Used as @bt.selector (no parens)
-        if callable(func_or_none):
+        if callable(func):
             # Apply decorator directly with defaults
             spec = NodeSpec(
                 kind=NodeSpecKind.SELECTOR,
-                name=_name_of(func_or_none),
-                payload={"factory": func_or_none, "memory": memory, "reactive": reactive},
+                name=_name_of(func),
+                payload={"factory": func, "memory": memory, "reactive": reactive},
             )
-            func_or_none.node_spec = spec  # type: ignore
+            func.node_spec = spec  # type: ignore
             if self._tracking_stack:
-                self._tracking_stack[-1].append((func_or_none.__name__, func_or_none))
-            return func_or_none
+                self._tracking_stack[-1].append((func.__name__, func))
+            return func
 
         # Case 2: Used as @bt.selector() or @bt.selector(memory=False)
         return self._selector_impl(memory=memory, reactive=reactive)
 
-    def _selector_impl(self, memory: bool, reactive: bool):
+    def _selector_impl(self, memory: bool, reactive: bool) -> Callable[[F], F]:
         """Implementation of selector decorator."""
-        def deco(
-            factory: Callable[..., Generator[Any, None, None]],
-        ) -> Callable[..., Generator[Any, None, None]]:
+        def deco(factory: F) -> F:
             spec = NodeSpec(
                 kind=NodeSpecKind.SELECTOR,
                 name=_name_of(factory),
@@ -1435,12 +1443,10 @@ class _BT:
 
     def parallel(
         self, *, success_threshold: int, failure_threshold: Optional[int] = None
-    ):
+    ) -> Callable[[F], F]:
         """Decorator to mark a generator function as a parallel composite."""
 
-        def deco(
-            factory: Callable[..., Generator[Any, None, None]],
-        ) -> Callable[..., Generator[Any, None, None]]:
+        def deco(factory: F) -> F:
             spec = NodeSpec(
                 kind=NodeSpecKind.PARALLEL,
                 name=_name_of(factory),
@@ -1599,8 +1605,8 @@ class _BT:
                     ...
 
                 @bt.sequence()
-                def root(N):
-                    yield N.my_action
+                def root():
+                    yield my_action
         """
         created_nodes = []
         self._tracking_stack.append(created_nodes)
@@ -1630,10 +1636,13 @@ class _BT:
 
         return namespace
 
-    def root(
-        self, fn: Callable[..., Generator[Any, None, None]]
-    ) -> Callable[..., Generator[Any, None, None]]:
+    def root(self, fn: F) -> F:
         """Mark a composite as the root of the tree."""
+        if not hasattr(fn, "node_spec"):
+            raise TypeError(
+                f"@bt.root can only be used on composites (sequences, selectors, etc.), "
+                f"got {fn!r}"
+            )
         fn.node_spec.is_root = True  # type: ignore
         return fn
 
@@ -1697,9 +1706,8 @@ def _generate_mermaid(tree: SimpleNamespace) -> str:
     def ensure_children(spec: NodeSpec) -> List[NodeSpec]:
         match spec.kind:
             case NodeSpecKind.SEQUENCE | NodeSpecKind.SELECTOR | NodeSpecKind.PARALLEL:
-                owner = getattr(spec, "owner", None) or tree
                 factory = spec.payload["factory"]
-                spec.children = _bt_expand_children(factory, owner)
+                spec.children = _bt_expand_children(factory)
             case NodeSpecKind.SUBTREE:
                 subtree_root = spec.payload["root"]
                 spec.children = [subtree_root]
@@ -1798,7 +1806,7 @@ class Runner(Generic[BB]):
             raise ValueError("Tree namespace must have a 'root' attribute")
 
         self.root: Node[BB] = tree.root.to_node(
-            owner=tree, exception_policy=exception_policy
+            exception_policy=exception_policy
         )
 
     async def tick(self) -> Status:

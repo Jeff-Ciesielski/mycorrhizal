@@ -49,9 +49,9 @@ class TaskProcessor:
 
     @bt.root
     @bt.sequence
-    def root(N):
-        yield N.has_task
-        yield N.process_task
+    def root():
+        yield has_task
+        yield process_task
 ```
 
 ### Spores Observability
@@ -96,9 +96,9 @@ class NavigationSubtree:
 
     @bt.root
     @bt.sequence
-    def root(N):
-        yield N.avoid_obstacles
-        yield N.move_to_target
+    def root():
+        yield avoid_obstacles
+        yield move_to_target
 ```
 
 ### Binding Subtrees
@@ -115,10 +115,10 @@ class MainRobotAI:
 
     @bt.root
     @bt.sequence
-    def root(N):
+    def root():
         # Subtree placeholder
         nav = bt.subtree("navigation")
-        yield N.patrol
+        yield patrol
         yield nav.move_to_target
 
 # Bind the subtree
@@ -258,11 +258,11 @@ class ParallelTasks:
 
     @bt.root
     @bt.parallel
-    def root(N):
+    def root():
         # All tasks run concurrently
-        yield N.task_a
-        yield N.task_b
-        yield N.task_c
+        yield task_a
+        yield task_b
+        yield task_c
 ```
 
 ### Hypha Concurrent Transitions
@@ -328,20 +328,20 @@ Monitor and manage multiple systems:
 @bt.tree
 class Supervisor:
     @bt.sequence
-    def system_a(N):
-        yield N.check_system_a
-        yield N.run_system_a
+    def system_a():
+        yield check_system_a
+        yield run_system_a
 
     @bt.sequence
-    def system_b(N):
-        yield N.check_system_b
-        yield N.run_system_b
+    def system_b():
+        yield check_system_b
+        yield run_system_b
 
     @bt.root
     @bt.parallel
-    def root(N):
-        yield N.system_a
-        yield N.system_b
+    def root():
+        yield system_a
+        yield system_b
 ```
 
 ### State Recovery Pattern

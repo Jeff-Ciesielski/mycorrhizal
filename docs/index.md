@@ -74,10 +74,10 @@ from mycorrhizal.rhizomorph import bt, Runner, Status
 def ThreatResponse():
     @bt.root
     @bt.sequence
-    def root(N):
-        yield N.threat_detected
-        yield N.engage_threat
-        yield N.return_to_base
+    def root():
+        yield threat_detected
+        yield engage_threat
+        yield return_to_base
 
 runner = Runner(ThreatResponse())
 await runner.run(blackboard)

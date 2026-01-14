@@ -23,8 +23,8 @@ def SequenceNoParens():
 
     @bt.root
     @bt.sequence
-    def root(N):
-        yield N.increment
+    def root():
+        yield increment
 
 
 # Test @bt.sequence() with parens but no args
@@ -37,8 +37,8 @@ def SequenceWithEmptyParens():
 
     @bt.root
     @bt.sequence()
-    def root(N):
-        yield N.increment
+    def root():
+        yield increment
 
 
 # Test @bt.sequence(memory=False) with args
@@ -51,8 +51,8 @@ def SequenceWithArgs():
 
     @bt.root
     @bt.sequence(memory=False)
-    def root(N):
-        yield N.increment
+    def root():
+        yield increment
 
 
 # Test @bt.selector without parens
@@ -68,9 +68,9 @@ def SelectorNoParens():
 
     @bt.root
     @bt.selector
-    def root(N):
-        yield N.failing_action
-        yield N.success_action
+    def root():
+        yield failing_action
+        yield success_action
 
 
 # Test @bt.selector() with parens but no args
@@ -86,9 +86,9 @@ def SelectorWithEmptyParens():
 
     @bt.root
     @bt.selector()
-    def root(N):
-        yield N.failing_action
-        yield N.success_action
+    def root():
+        yield failing_action
+        yield success_action
 
 
 # Test @bt.selector(reactive=True) with args
@@ -104,9 +104,9 @@ def SelectorWithArgs():
 
     @bt.root
     @bt.selector(reactive=True)
-    def root(N):
-        yield N.failing_action
-        yield N.success_action
+    def root():
+        yield failing_action
+        yield success_action
 
 
 @pytest.mark.asyncio

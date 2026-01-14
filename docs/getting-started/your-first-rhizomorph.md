@@ -69,22 +69,22 @@ class RobotAI:
 
     @bt.root
     @bt.selector
-    def root(N):
+    def root():
         """Try battery check first, if that fails, do tasks."""
-        yield N.check_battery
-        yield N.has_tasks
-        yield N.idle
+        yield check_battery
+        yield has_tasks
+        yield idle
 
     @bt.sequence
-    def charging_sequence(N):
+    def charging_sequence():
         """Sequence for charging: go_charge then done."""
-        yield N.go_charge
+        yield go_charge
 
     @bt.sequence
-    def task_sequence(N):
+    def task_sequence():
         """Sequence for doing tasks."""
-        yield N.has_tasks
-        yield N.do_task
+        yield has_tasks
+        yield do_task
 ```
 
 ## Step 4: Visualize Your Behavior Tree (Before Running!)

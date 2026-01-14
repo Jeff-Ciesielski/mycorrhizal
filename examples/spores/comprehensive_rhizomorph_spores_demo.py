@@ -174,11 +174,11 @@ def SampleProcessingTree():
 
     @bt.root
     @bt.sequence
-    def root(N):
-        yield N.has_samples
-        yield N.has_battery
-        yield N.analyze_sample
-        yield N.consume_battery
+    def root():
+        yield has_samples
+        yield has_battery
+        yield analyze_sample
+        yield consume_battery
 
 
 # ============================================================================

@@ -8,7 +8,7 @@ Rhizomorph Behavior Trees provide:
 
 - **Decorator-based syntax** - Define trees, nodes, and composites with decorators
 - **Async-first design** - Native asyncio support throughout
-- **Type-safe references** - Owner-aware composition with `N.member` syntax
+- **Type-safe references** - Owner-aware composition with direct name references
 - **Modular subtrees** - Reusable tree components with `bt.subtree()` and `bt.bind()`
 - **Rich composites** - Sequence, selector, parallel, and more
 
@@ -49,17 +49,17 @@ class RobotAI:
 
     @bt.root
     @bt.selector
-    def root(N):
+    def root():
         """Try battery check, fall through to tasks, then idle."""
-        yield N.has_battery
-        yield N.do_task
-        yield N.idle
+        yield has_battery
+        yield do_task
+        yield idle
 
     @bt.sequence
-    def charging_sequence(N):
+    def charging_sequence():
         """Battery must be low AND recharge succeeds."""
-        yield N.has_battery  # Actually: check if LOW battery (negated)
-        yield N.recharge
+        yield has_battery  # Actually: check if LOW battery (negated)
+        yield recharge
 ```
 
 ## Key Concepts
@@ -120,11 +120,11 @@ Execute children in order, fail fast:
 
 ```python
 @bt.sequence
-def my_sequence(N):
+def my_sequence():
     """All children must succeed."""
-    yield N.step_1  # Runs first
-    yield N.step_2  # Runs only if step_1 succeeds
-    yield N.step_3  # Runs only if step_2 succeeds
+    yield step_1  # Runs first
+    yield step_2  # Runs only if step_1 succeeds
+    yield step_3  # Runs only if step_2 succeeds
 ```
 
 #### Selector
@@ -133,11 +133,11 @@ Execute children in order, succeed fast:
 
 ```python
 @bt.selector
-def my_selector(N):
+def my_selector():
     """Try each until one succeeds."""
-    yield N.option_a  # Runs first
-    yield N.option_b  # Runs only if option_a fails
-    yield N.option_c  # Runs only if option_b fails
+    yield option_a  # Runs first
+    yield option_b  # Runs only if option_a fails
+    yield option_c  # Runs only if option_b fails
 ```
 
 #### Parallel
@@ -146,11 +146,11 @@ Execute all children simultaneously:
 
 ```python
 @bt.parallel
-def my_parallel(N):
+def my_parallel():
     """All children run concurrently."""
-    yield N.task_a  # All run in parallel
-    yield N.task_b
-    yield N.task_c
+    yield task_a  # All run in parallel
+    yield task_b
+    yield task_c
 ```
 
 ### Root Node
@@ -160,11 +160,11 @@ Every tree must have a root:
 ```python
 @bt.root
 @bt.sequence
-def root(N):
+def root():
     """Entry point for the tree."""
-    yield N.initialize
-    yield N.process
-    yield N.cleanup
+    yield initialize
+    yield process
+    yield cleanup
 ```
 
 ## Status Values
@@ -195,18 +195,18 @@ class NavigationSubtree:
 
     @bt.root
     @bt.sequence
-    def root(N):
-        yield N.avoid_obstacles
-        yield N.move_to_target
+    def root():
+        yield avoid_obstacles
+        yield move_to_target
 
 # Use in main tree
 @bt.tree
 class MainRobotAI:
     @bt.root
     @bt.sequence
-    def root(N):
+    def root():
         nav = bt.subtree("navigation")  # Subtree placeholder
-        yield N.check_battery
+        yield check_battery
         yield nav.move_to_target  # Reference subtree node
 ```
 
