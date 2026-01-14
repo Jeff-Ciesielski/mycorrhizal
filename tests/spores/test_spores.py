@@ -14,13 +14,14 @@ from mycorrhizal.spores import (
     configure, get_config, get_object_cache, spore,
     Event, Object, LogRecord, Relationship,
     EventAttributeValue, ObjectAttributeValue,
-    ObjectRef, ObjectScope, EventAttr,
+    ObjectRef, ObjectScope, EventAttr, SporesAttr,
     generate_event_id, generate_object_id,
     attribute_value_from_python, object_attribute_from_python,
     ObjectLRUCache,
+    get_spore_async, get_spore_sync,
 )
 from mycorrhizal.spores.encoder import JSONEncoder
-from mycorrhizal.spores.transport import Transport
+from mycorrhizal.spores.transport import Transport, SyncTransport
 
 
 # ============================================================================
@@ -28,7 +29,7 @@ from mycorrhizal.spores.transport import Transport
 # ============================================================================
 
 class MockTransport(Transport):
-    """Mock transport for testing."""
+    """Mock async transport for testing."""
 
     def __init__(self):
         self.records = []
@@ -42,14 +43,36 @@ class MockTransport(Transport):
     def is_async(self) -> bool:
         return False
 
+    async def close(self) -> None:
+        pass
+
+
+class MockSyncTransport(SyncTransport):
+    """Mock sync transport for testing."""
+
+    def __init__(self):
+        self.records = []
+
+    def send(self, data: bytes, content_type: str) -> None:
+        """Store records instead of sending."""
+        import json
+        record = json.loads(data.decode('utf-8'))
+        self.records.append(record)
+
     def close(self) -> None:
         pass
 
 
 @pytest.fixture
 def mock_transport():
-    """Create a mock transport."""
+    """Create a mock async transport."""
     return MockTransport()
+
+
+@pytest.fixture
+def mock_sync_transport():
+    """Create a mock sync transport."""
+    return MockSyncTransport()
 
 
 @pytest.fixture
@@ -81,7 +104,7 @@ def test_event_creation():
         attributes={"priority": EventAttributeValue(
             name="priority",
             value="high",
-            time=datetime.now()
+            type="string"
         )},
         relationships={"input": Relationship(
             object_id="obj-1",
@@ -103,6 +126,7 @@ def test_object_creation():
         attributes={"status": ObjectAttributeValue(
             name="status",
             value="pending",
+            type="string",
             time=datetime.now()
         )}
     )
@@ -137,26 +161,24 @@ def test_log_record_validation():
 
 def test_attribute_value_conversion():
     """Test converting Python values to attribute values."""
-    timestamp = datetime.now()
-
     # String
-    attr = attribute_value_from_python("test", timestamp)
+    attr = attribute_value_from_python("test")
     assert attr.value == "test"
 
     # Integer
-    attr = attribute_value_from_python(42, timestamp)
+    attr = attribute_value_from_python(42)
     assert attr.value == "42"
 
     # Float
-    attr = attribute_value_from_python(3.14, timestamp)
+    attr = attribute_value_from_python(3.14)
     assert attr.value == "3.14"
 
     # Boolean
-    attr = attribute_value_from_python(True, timestamp)
+    attr = attribute_value_from_python(True)
     assert attr.value == "true"
 
     # None
-    attr = attribute_value_from_python(None, timestamp)
+    attr = attribute_value_from_python(None)
     assert attr.value == "null"
 
 
@@ -250,7 +272,7 @@ def test_json_encoder_event():
             "priority": EventAttributeValue(
                 name="priority",
                 value="high",
-                time=datetime.now()
+                type="string"
             )
         },
         relationships={
@@ -265,8 +287,10 @@ def test_json_encoder_event():
     import json
     parsed = json.loads(data)
     assert "event" in parsed
+    assert "object" in parsed
     assert parsed["event"]["id"] == "evt-1"
     assert parsed["event"]["type"] == "test_event"
+    assert parsed["object"] is None  # Union record: object field null for events
 
 
 def test_json_encoder_object():
@@ -280,6 +304,7 @@ def test_json_encoder_object():
             "status": ObjectAttributeValue(
                 name="status",
                 value="pending",
+                type="string",
                 time=datetime.now()
             )
         }
@@ -291,7 +316,9 @@ def test_json_encoder_object():
     # Should be valid JSON
     import json
     parsed = json.loads(data)
+    assert "event" in parsed
     assert "object" in parsed
+    assert parsed["event"] is None  # Union record: event field null for objects
     assert parsed["object"]["id"] == "obj-1"
     assert parsed["object"]["type"] == "TestObject"
 
@@ -478,12 +505,288 @@ async def test_end_to_end_logging(mock_transport):
     assert len(mock_transport.records) >= 2  # At least event + object
 
     # Check event was logged
-    event_records = [r for r in mock_transport.records if "event" in r]
+    event_records = [r for r in mock_transport.records if r.get("event") is not None]
     assert len(event_records) >= 1
 
     # Check object was logged
     object_records = [r for r in mock_transport.records if "object" in r]
     assert len(object_records) >= 1
+
+
+# ============================================================================
+# Relationships Parameter Tests
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_relationships_with_return_value(mock_transport):
+    """Test @spore.log_event with relationships to return value."""
+
+    configure(enabled=True, transport=mock_transport)
+
+    class Order(BaseModel):
+        id: str
+        total: Annotated[float, SporesAttr]
+        status: Annotated[str, SporesAttr]
+
+    spore = get_spore_async(__name__)
+
+    @spore.log_event(
+        event_type="OrderCreated",
+        relationships={
+            "order": ("return", "Order"),  # Auto-detect SporesAttr
+        }
+    )
+    async def create_order(total: float) -> Order:
+        return Order(id="ord-123", total=total, status="created")
+
+    result = await create_order(99.99)
+    await asyncio.sleep(0.01)  # Wait for async logging
+
+    assert result.id == "ord-123"
+
+    # Should have logged event and object
+    assert len(mock_transport.records) == 2
+
+    # Check object has SporesAttr fields
+    obj_record = [r for r in mock_transport.records if r.get("object") is not None][0]
+    assert obj_record["object"]["id"] == "ord-123"
+    # Attributes are stored as a list of dicts
+    attr_names = [a["name"] for a in obj_record["object"]["attributes"]]
+    assert "total" in attr_names
+    assert "status" in attr_names
+
+
+@pytest.mark.asyncio
+async def test_relationships_with_multiple_objects(mock_transport):
+    """Test @spore.log_event with multiple relationships."""
+
+    configure(enabled=True, transport=mock_transport)
+
+    class Customer(BaseModel):
+        id: str
+        name: Annotated[str, SporesAttr]
+        email: Annotated[str, SporesAttr]
+
+    class Order(BaseModel):
+        id: str
+        customer_id: Annotated[str, SporesAttr]
+        total: Annotated[float, SporesAttr]
+
+    spore = get_spore_async(__name__)
+
+    @spore.log_event(
+        event_type="OrderCreated",
+        relationships={
+            "order": ("return", "Order"),
+            "customer": ("customer", "Customer"),
+        }
+    )
+    async def create_order(customer: Customer, total: float) -> Order:
+        return Order(
+            id=f"ord-{customer.id}",
+            customer_id=customer.id,
+            total=total
+        )
+
+    customer = Customer(id="cust-1", name="Alice", email="alice@example.com")
+    result = await create_order(customer, 99.99)
+    await asyncio.sleep(0.01)
+
+    # Should have logged event + 2 objects
+    assert len(mock_transport.records) == 3
+
+    # Check event has both relationships
+    event_record = [r for r in mock_transport.records if r.get("event") is not None][0]
+    # Relationships are stored as a list of dicts with qualifier
+    relationship_qualifiers = [r["qualifier"] for r in event_record["event"]["relationships"]]
+    assert len(relationship_qualifiers) == 2
+    assert "order" in relationship_qualifiers
+    assert "customer" in relationship_qualifiers
+
+
+@pytest.mark.asyncio
+async def test_relationships_with_explicit_attributes(mock_transport):
+    """Test relationships with explicit attribute list (3-tuple format)."""
+
+    configure(enabled=True, transport=mock_transport)
+
+    class Order(BaseModel):
+        id: str
+        total: float
+        status: str
+        items: list
+
+    spore = get_spore_async(__name__)
+
+    @spore.log_event(
+        event_type="OrderCreated",
+        relationships={
+            "order": ("return", "Order", ["status", "total"]),  # Explicit attrs
+        }
+    )
+    async def create_order() -> Order:
+        return Order(id="ord-123", total=99.99, status="created", items=[])
+
+    await create_order()
+    await asyncio.sleep(0.01)
+
+    obj_record = [r for r in mock_transport.records if r.get("object") is not None][0]
+    # Should only have specified attributes
+    assert len(obj_record["object"]["attributes"]) == 2
+    attr_names = [a["name"] for a in obj_record["object"]["attributes"]]
+    assert "status" in attr_names
+    assert "total" in attr_names
+    assert "items" not in attr_names
+
+
+@pytest.mark.asyncio
+async def test_relationships_with_callable_attributes(mock_transport):
+    """Test relationships with callable attribute expressions."""
+
+    configure(enabled=True, transport=mock_transport)
+
+    class Order(BaseModel):
+        id: str
+        total: float
+
+    spore = get_spore_async(__name__)
+
+    @spore.log_event(
+        event_type="OrderCreated",
+        relationships={
+            "order": ("return", "Order", {
+                "total_with_tax": lambda order: order.total * 1.1,
+                "id_upper": lambda order: order.id.upper(),
+            })
+        }
+    )
+    async def create_order() -> Order:
+        return Order(id="ord-123", total=100.0)
+
+    await create_order()
+    await asyncio.sleep(0.01)
+
+    obj_record = [r for r in mock_transport.records if r.get("object") is not None][0]
+    # Attributes are stored as a list of dicts
+    attrs = {a["name"]: a for a in obj_record["object"]["attributes"]}
+    # Use approximate comparison for floating point
+    assert float(attrs["total_with_tax"]["value"]) == pytest.approx(110.0)
+    assert attrs["id_upper"]["value"] == "ORD-123"
+
+
+@pytest.mark.asyncio
+async def test_event_attributes_with_callables(mock_transport):
+    """Test event attributes with callable expressions."""
+
+    configure(enabled=True, transport=mock_transport)
+
+    class Order(BaseModel):
+        id: str
+        total: float
+
+    spore = get_spore_async(__name__)
+
+    @spore.log_event(
+        event_type="OrderCreated",
+        relationships={
+            "order": ("return", "Order", ["total"]),
+        },
+        attributes={
+            "item_count": lambda items: len(items),
+            "total_with_discount": lambda ret, discount: ret.total * discount,
+            "source": "web",
+        }
+    )
+    async def create_order(items: list, discount: float) -> Order:
+        return Order(id="ord-123", total=sum(items))
+
+    result = await create_order([10, 20, 30], 0.9)
+    await asyncio.sleep(0.01)
+
+    event_record = [r for r in mock_transport.records if r.get("event") is not None][0]
+    # Attributes are stored as a list of dicts
+    attrs = {a["name"]: a for a in event_record["event"]["attributes"]}
+    assert attrs["item_count"]["value"] == "3"
+    assert attrs["total_with_discount"]["value"] == "54.0"
+    assert attrs["source"]["value"] == "web"
+
+
+@pytest.mark.asyncio
+async def test_relationships_with_self_parameter(mock_transport):
+    """Test relationships with 'self' parameter (methods)."""
+
+    configure(enabled=True, transport=mock_transport)
+
+    class Processor(BaseModel):
+        id: str
+        processed_count: Annotated[int, SporesAttr] = 0
+
+    class Order(BaseModel):
+        id: str
+        status: Annotated[str, SporesAttr]
+
+    spore = get_spore_async(__name__)
+
+    class OrderProcessor:
+        def __init__(self):
+            self.processor = Processor(id="proc-1")
+
+        @spore.log_event(
+            event_type="OrderProcessed",
+            relationships={
+                "processor": ("self", "Processor"),
+                "order": ("return", "Order"),
+            }
+        )
+        async def process(self, order_id: str) -> Order:
+            self.processor.processed_count += 1
+            return Order(id=order_id, status="processed")
+
+    processor = OrderProcessor()
+    result = await processor.process("ord-123")
+    await asyncio.sleep(0.01)
+
+    # Should have event + 2 objects (processor and order)
+    assert len(mock_transport.records) == 3
+
+    event_record = [r for r in mock_transport.records if r.get("event") is not None][0]
+    # Check relationships by qualifier
+    relationship_qualifiers = [r["qualifier"] for r in event_record["event"]["relationships"]]
+    assert len(relationship_qualifiers) == 2
+
+
+def test_sync_relationships_with_return_value(mock_sync_transport):
+    """Test sync version of @spore.log_event with relationships."""
+
+    configure(enabled=True, transport=mock_sync_transport)
+
+    class Order(BaseModel):
+        id: str
+        total: Annotated[float, SporesAttr]
+        status: Annotated[str, SporesAttr]
+
+    spore = get_spore_sync(__name__)
+
+    @spore.log_event(
+        event_type="OrderCreated",
+        relationships={
+            "order": ("return", "Order"),
+        }
+    )
+    def create_order(total: float) -> Order:
+        return Order(id="ord-456", total=total, status="created")
+
+    result = create_order(149.99)
+    import time
+    time.sleep(0.01)  # Wait for daemon thread logging
+
+    assert result.id == "ord-456"
+
+    # Should have logged event and object
+    assert len(mock_sync_transport.records) == 2
+
+    obj_record = [r for r in mock_sync_transport.records if "object" in r][0]
+    assert obj_record["object"]["id"] == "ord-456"
 
 
 if __name__ == "__main__":

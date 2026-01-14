@@ -237,18 +237,10 @@ async def _log_transition_event(
         event_attrs = {}
 
         # Add token count
-        event_attrs["token_count"] = EventAttributeValue(
-            name="token_count",
-            value=str(len(consumed)),
-            time=timestamp
-        )
+        event_attrs["token_count"] = attribute_value_from_python(len(consumed))
 
         # Add transition name
-        event_attrs["transition_name"] = EventAttributeValue(
-            name="transition_name",
-            value=func.__name__,
-            time=timestamp
-        )
+        event_attrs["transition_name"] = attribute_value_from_python(func.__name__)
 
         # Extract from blackboard
         bb_attrs = extract_attributes_from_blackboard(bb, timestamp)
@@ -358,11 +350,7 @@ async def _log_place_event(
 
         # Build event attributes
         event_attrs = {
-            "place_name": EventAttributeValue(
-                name="place_name",
-                value=func.__name__,
-                time=timestamp
-            )
+            "place_name": attribute_value_from_python(func.__name__)
         }
 
         # Extract from blackboard

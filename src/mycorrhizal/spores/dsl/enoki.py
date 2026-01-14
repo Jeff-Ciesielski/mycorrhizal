@@ -22,6 +22,7 @@ from ...spores import (
     Relationship,
     EventAttributeValue,
     generate_event_id,
+    attribute_value_from_python,
 )
 from ...spores.extraction import (
     extract_attributes_from_blackboard,
@@ -214,19 +215,11 @@ async def _log_state_event(
             if hasattr(ctx, 'current_state') and ctx.current_state:
                 state_name = getattr(ctx.current_state, 'name', state_name)
 
-            event_attrs["state_name"] = EventAttributeValue(
-                name="state_name",
-                value=state_name,
-                time=timestamp
-            )
+            event_attrs["state_name"] = attribute_value_from_python(state_name)
 
         # Add transition result if requested
         if log_transition and isinstance(result, TransitionType):
-            event_attrs["transition"] = EventAttributeValue(
-                name="transition",
-                value=result.name,
-                time=timestamp
-            )
+            event_attrs["transition"] = attribute_value_from_python(result.name)
 
         # Extract from ctx.common (blackboard)
         if hasattr(ctx, 'common') and ctx.common:
@@ -235,11 +228,7 @@ async def _log_state_event(
 
         # Add message if present
         if hasattr(ctx, 'msg') and ctx.msg is not None:
-            event_attrs["message_type"] = EventAttributeValue(
-                name="message_type",
-                value=type(ctx.msg).__name__,
-                time=timestamp
-            )
+            event_attrs["message_type"] = attribute_value_from_python(type(ctx.msg).__name__)
 
         # Extract objects from ctx.common
         relationships = {}
@@ -293,16 +282,8 @@ async def _log_lifecycle_event(
 
         # Build event attributes
         event_attrs = {
-            "lifecycle_method": EventAttributeValue(
-                name="lifecycle_method",
-                value=func.__name__,
-                time=timestamp
-            ),
-            "phase": EventAttributeValue(
-                name="phase",
-                value=phase,
-                time=timestamp
-            )
+            "lifecycle_method": attribute_value_from_python(func.__name__),
+            "phase": attribute_value_from_python(phase)
         }
 
         # Add state name
@@ -310,11 +291,7 @@ async def _log_lifecycle_event(
         if hasattr(ctx, 'current_state') and ctx.current_state:
             state_name = getattr(ctx.current_state, 'name', state_name)
 
-        event_attrs["state_name"] = EventAttributeValue(
-            name="state_name",
-            value=state_name,
-            time=timestamp
-        )
+        event_attrs["state_name"] = attribute_value_from_python(state_name)
 
         # Add static attributes
         if attributes:
@@ -322,17 +299,9 @@ async def _log_lifecycle_event(
                 if callable(value):
                     if hasattr(ctx, 'common') and ctx.common:
                         result = value(ctx.common)
-                        event_attrs[key] = EventAttributeValue(
-                            name=key,
-                            value=str(result),
-                            time=timestamp
-                        )
+                        event_attrs[key] = attribute_value_from_python(str(result))
                 else:
-                    event_attrs[key] = EventAttributeValue(
-                        name=key,
-                        value=str(value),
-                        time=timestamp
-                    )
+                    event_attrs[key] = attribute_value_from_python(str(value))
 
         # Extract from ctx.common
         if hasattr(ctx, 'common') and ctx.common:
@@ -435,26 +404,14 @@ async def _log_message_event(
 
         # Build event attributes
         event_attrs = {
-            "message_type": EventAttributeValue(
-                name="message_type",
-                value=type(ctx.msg).__name__,
-                time=timestamp
-            ),
-            "handler": EventAttributeValue(
-                name="handler",
-                value=func.__name__,
-                time=timestamp
-            )
+            "message_type": attribute_value_from_python(type(ctx.msg).__name__),
+            "handler": attribute_value_from_python(func.__name__)
         }
 
         # Add state name
         if hasattr(ctx, 'current_state') and ctx.current_state:
             state_name = getattr(ctx.current_state, 'name', 'unknown')
-            event_attrs["state_name"] = EventAttributeValue(
-                name="state_name",
-                value=state_name,
-                time=timestamp
-            )
+            event_attrs["state_name"] = attribute_value_from_python(state_name)
 
         # Add static attributes
         if attributes:
@@ -462,17 +419,9 @@ async def _log_message_event(
                 if callable(value):
                     if hasattr(ctx, 'common') and ctx.common:
                         result = value(ctx.common)
-                        event_attrs[key] = EventAttributeValue(
-                            name=key,
-                            value=str(result),
-                            time=timestamp
-                        )
+                        event_attrs[key] = attribute_value_from_python(str(result))
                 else:
-                    event_attrs[key] = EventAttributeValue(
-                        name=key,
-                        value=str(value),
-                        time=timestamp
-                    )
+                    event_attrs[key] = attribute_value_from_python(str(value))
 
         # Extract from ctx.common
         if hasattr(ctx, 'common') and ctx.common:

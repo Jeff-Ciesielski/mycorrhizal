@@ -41,7 +41,7 @@ def extract_attributes_from_params(
         func: The decorated function
         args: Positional arguments passed to function
         kwargs: Keyword arguments passed to function
-        timestamp: Event timestamp for attribute values
+        timestamp: Event timestamp (not used for attribute timestamps)
 
     Returns:
         Dictionary of attribute name -> EventAttributeValue
@@ -60,8 +60,8 @@ def extract_attributes_from_params(
             if param_name in ('self', 'cls', 'bb', 'ctx', 'timebase', 'consumed'):
                 continue
 
-            # Extract attribute value
-            attr = attribute_value_from_python(param_value, timestamp)
+            # Extract attribute value (time=None for event attributes)
+            attr = attribute_value_from_python(param_value)
             attributes[param_name] = attr
 
     except Exception as e:
@@ -79,7 +79,7 @@ def extract_attributes_from_dict(
 
     Args:
         data: Dictionary with attribute values
-        timestamp: Event timestamp for attribute values
+        timestamp: Event timestamp (not used for attribute timestamps)
 
     Returns:
         Dictionary of attribute name -> EventAttributeValue
@@ -87,7 +87,7 @@ def extract_attributes_from_dict(
     attributes = {}
 
     for key, value in data.items():
-        attr = attribute_value_from_python(value, timestamp)
+        attr = attribute_value_from_python(value)
         attributes[key] = attr
 
     return attributes
@@ -102,7 +102,7 @@ def extract_attributes_from_blackboard(
 
     Args:
         bb: Blackboard object
-        timestamp: Event timestamp for attribute values
+        timestamp: Event timestamp (not used for attribute timestamps)
 
     Returns:
         Dictionary of attribute name -> EventAttributeValue
@@ -136,7 +136,7 @@ def extract_attributes_from_blackboard(
                                     attr_name = metadata.name or field_name
                                 else:
                                     attr_name = field_name
-                                attr = attribute_value_from_python(value, timestamp)
+                                attr = attribute_value_from_python(value)
                                 attributes[attr_name] = attr
 
     except Exception as e:
@@ -168,13 +168,13 @@ def evaluate_computed_attributes(
             # Call the function with blackboard
             try:
                 result = value(bb)
-                attr = attribute_value_from_python(result, timestamp)
+                attr = attribute_value_from_python(result)
                 attributes[key] = attr
             except Exception as e:
                 logger.error(f"Failed to compute attribute {key}: {e}")
         else:
             # Static value
-            attr = attribute_value_from_python(value, timestamp)
+            attr = attribute_value_from_python(value)
             attributes[key] = attr
 
     return attributes
@@ -289,6 +289,7 @@ def convert_to_ocel_object(
                     attr = attr.__class__(
                         name=key,
                         value=attr.value,
+                        type=attr.type,
                         time=attr.time
                     )
                     attributes[key] = attr
@@ -302,6 +303,7 @@ def convert_to_ocel_object(
                 attr = attr.__class__(
                     name=key,
                     value=attr.value,
+                    type=attr.type,
                     time=attr.time
                 )
                 attributes[key] = attr
@@ -359,6 +361,7 @@ def extract_objects_from_spec(
                         attr = attr.__class__(
                             name=key,
                             value=attr.value,
+                            type=attr.type,
                             time=attr.time
                         )
                         attributes[key] = attr

@@ -20,7 +20,7 @@ from ...spores import (
     Event,
     LogRecord,
     Relationship,
-    EventAttributeValue,
+    attribute_value_from_python,
     generate_event_id,
 )
 from ...spores.extraction import (
@@ -167,19 +167,11 @@ async def _log_node_event(
         event_attrs = {}
 
         # Add node name
-        event_attrs["node_name"] = EventAttributeValue(
-            name="node_name",
-            value=func.__name__,
-            time=timestamp
-        )
+        event_attrs["node_name"] = attribute_value_from_python(func.__name__)
 
         # Add status if requested and result is a Status
         if log_status and isinstance(result, Status):
-            event_attrs["status"] = EventAttributeValue(
-                name="status",
-                value=result.name,
-                time=timestamp
-            )
+            event_attrs["status"] = attribute_value_from_python(result.name)
 
         # Extract from blackboard
         bb_attrs = extract_attributes_from_blackboard(bb, timestamp)

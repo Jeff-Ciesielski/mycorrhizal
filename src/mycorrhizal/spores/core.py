@@ -266,11 +266,7 @@ class AsyncEventLogger(EventLogger):
 
         attr_values = {}
         for key, value in kwargs.items():
-            attr_values[key] = EventAttributeValue(
-                name=key,
-                value=str(value),
-                time=timestamp
-            )
+            attr_values[key] = attribute_value_from_python(value)
 
         event = Event(
             id=generate_event_id(),
@@ -293,11 +289,7 @@ class AsyncEventLogger(EventLogger):
 
         attr_values = {}
         for key, value in kwargs.items():
-            attr_values[key] = ObjectAttributeValue(
-                name=key,
-                value=str(value),
-                time=timestamp
-            )
+            attr_values[key] = object_attribute_from_python(value, time=timestamp)
 
         obj = Object(
             id=obj_id,
@@ -346,7 +338,7 @@ class AsyncEventLogger(EventLogger):
                             source, obj_type, attrs = rel_spec
 
                         # Resolve object from source
-                        obj = self._resolve_source(source, context)
+                        obj = self._resolve_source(source, context, obj_type)
                         if obj is None:
                             continue
 
@@ -392,14 +384,84 @@ class AsyncEventLogger(EventLogger):
 
         return context
 
-    def _resolve_source(self, source: str, context: Dict[str, Any]) -> Any:
-        """Resolve source for async version."""
+    def _resolve_source(self, source: str, context: Dict[str, Any], obj_type: str | None = None) -> Any:
+        """Resolve source for async version.
+
+        If source is "bb" (blackboard) and obj_type is provided, extract the field
+        of that type from the blackboard instead of returning the entire blackboard.
+        """
         if source == "return" or source == "ret":
             return context.get("return")
         elif source == "self":
             return context.get("self")
         else:
-            return context.get(source)
+            obj = context.get(source)
+
+            # If source is blackboard and we need a specific type, extract that field
+            if obj_type and source == "bb" and hasattr(obj, '__annotations__'):
+                return self._find_object_by_type(obj, obj_type)
+
+            return obj
+
+    def _find_object_by_type(self, blackboard: Any, obj_type: str) -> Any:
+        """Find a field in the blackboard that matches the requested object type.
+
+        Scans the blackboard's fields and returns the first field whose type
+        annotation matches obj_type.
+        """
+        # Get the class to check annotations
+        obj_class = blackboard if isinstance(blackboard, type) else type(blackboard)
+
+        if not hasattr(obj_class, '__annotations__'):
+            return blackboard
+
+        # Check each field's type annotation
+        for field_name, field_type in obj_class.__annotations__.items():
+            # Handle Annotated types
+            if get_origin(field_type) is Annotated:
+                args = get_args(field_type)
+                if args:
+                    actual_type = args[0]
+                    # Check if type name matches (handle both str and type)
+                    type_name = actual_type if isinstance(actual_type, str) else actual_type.__name__
+                    if type_name == obj_type:
+                        field_value = getattr(blackboard, field_name, None)
+                        # Return the actual value, not None
+                        if field_value is not None:
+                            return field_value
+            # Handle Union types (e.g., Sample | None)
+            elif get_origin(field_type) is Union:
+                args = get_args(field_type)
+                for arg in args:
+                    # Skip None
+                    if arg is type(None):
+                        continue
+                    # Check if this arg matches our target type
+                    if get_origin(arg) is Annotated:
+                        annotated_args = get_args(arg)
+                        if annotated_args:
+                            actual_type = annotated_args[0]
+                            type_name = actual_type if isinstance(actual_type, str) else actual_type.__name__
+                            if type_name == obj_type:
+                                field_value = getattr(blackboard, field_name, None)
+                                if field_value is not None:
+                                    return field_value
+                    else:
+                        type_name = arg if isinstance(arg, str) else arg.__name__
+                        if type_name == obj_type:
+                            field_value = getattr(blackboard, field_name, None)
+                            if field_value is not None:
+                                return field_value
+            else:
+                # Check if type name matches
+                type_name = field_type if isinstance(field_type, str) else field_type.__name__
+                if type_name == obj_type:
+                    field_value = getattr(blackboard, field_name, None)
+                    if field_value is not None:
+                        return field_value
+
+        # Fallback: return blackboard if no matching field found
+        return blackboard
 
     def _get_object_id(self, obj: Any) -> str | None:
         """Extract object ID for async version."""
@@ -518,11 +580,7 @@ class SyncEventLogger(EventLogger):
 
             attr_values = {}
             for key, value in kwargs.items():
-                attr_values[key] = EventAttributeValue(
-                    name=key,
-                    value=str(value),
-                    time=timestamp
-                )
+                attr_values[key] = attribute_value_from_python(value)
 
             event = Event(
                 id=generate_event_id(),
@@ -550,11 +608,7 @@ class SyncEventLogger(EventLogger):
 
             attr_values = {}
             for key, value in kwargs.items():
-                attr_values[key] = ObjectAttributeValue(
-                    name=key,
-                    value=str(value),
-                    time=timestamp
-                )
+                attr_values[key] = object_attribute_from_python(value, time=timestamp)
 
             obj = Object(
                 id=obj_id,
@@ -624,7 +678,7 @@ class SyncEventLogger(EventLogger):
                             source, obj_type, attrs = rel_spec
 
                         # Resolve object from source
-                        obj = self._resolve_source(source, context)
+                        obj = self._resolve_source(source, context, obj_type)
                         if obj is None:
                             continue
 
@@ -678,7 +732,7 @@ class SyncEventLogger(EventLogger):
 
         return context
 
-    def _resolve_source(self, source: str, context: Dict[str, Any]) -> Any:
+    def _resolve_source(self, source: str, context: Dict[str, Any], obj_type: str | None = None) -> Any:
         """
         Resolve an object from a source expression.
 
@@ -686,13 +740,80 @@ class SyncEventLogger(EventLogger):
             - "return" or "ret": Return value
             - "self": For methods
             - Any other string: Parameter name from context
+            - If source is "bb" (blackboard) and obj_type is provided, extract the field of that type
         """
         if source == "return" or source == "ret":
             return context.get("return")
         elif source == "self":
             return context.get("self")
         else:
-            return context.get(source)
+            obj = context.get(source)
+
+            # If source is blackboard and we need a specific type, extract that field
+            if obj_type and source == "bb" and hasattr(obj, '__annotations__'):
+                return self._find_object_by_type(obj, obj_type)
+
+            return obj
+
+    def _find_object_by_type(self, blackboard: Any, obj_type: str) -> Any:
+        """Find a field in the blackboard that matches the requested object type.
+
+        Scans the blackboard's fields and returns the first field whose type
+        annotation matches obj_type.
+        """
+        # Get the class to check annotations
+        obj_class = blackboard if isinstance(blackboard, type) else type(blackboard)
+
+        if not hasattr(obj_class, '__annotations__'):
+            return blackboard
+
+        # Check each field's type annotation
+        for field_name, field_type in obj_class.__annotations__.items():
+            # Handle Annotated types
+            if get_origin(field_type) is Annotated:
+                args = get_args(field_type)
+                if args:
+                    actual_type = args[0]
+                    # Check if type name matches (handle both str and type)
+                    type_name = actual_type if isinstance(actual_type, str) else actual_type.__name__
+                    if type_name == obj_type:
+                        field_value = getattr(blackboard, field_name, None)
+                        # Return the actual value, not None
+                        if field_value is not None:
+                            return field_value
+            # Handle Union types (e.g., Sample | None)
+            elif get_origin(field_type) is Union:
+                args = get_args(field_type)
+                for arg in args:
+                    # Skip None
+                    if arg is type(None):
+                        continue
+                    # Check if this arg matches our target type
+                    if get_origin(arg) is Annotated:
+                        annotated_args = get_args(arg)
+                        if annotated_args:
+                            actual_type = annotated_args[0]
+                            type_name = actual_type if isinstance(actual_type, str) else actual_type.__name__
+                            if type_name == obj_type:
+                                field_value = getattr(blackboard, field_name, None)
+                                if field_value is not None:
+                                    return field_value
+                    else:
+                        type_name = arg if isinstance(arg, str) else arg.__name__
+                        if type_name == obj_type:
+                            field_value = getattr(blackboard, field_name, None)
+                            if field_value is not None:
+                                return field_value
+            else:
+                # Check if type name matches
+                type_name = field_type if isinstance(field_type, str) else field_type.__name__
+                if type_name == obj_type:
+                    field_value = getattr(blackboard, field_name, None)
+                    if field_value is not None:
+                        return field_value
+
+        # Fallback: return blackboard if no matching field found
+        return blackboard
 
     def _get_object_id(self, obj: Any) -> str | None:
         """
@@ -1031,7 +1152,7 @@ class SporeDecorator:
                 type=event_type,
                 time=timestamp,
                 attributes={
-                    k: EventAttributeValue(name=k, value=str(v), time=timestamp)
+                    k: attribute_value_from_python(v)
                     for k, v in event_attrs.items()
                 },
                 relationships={

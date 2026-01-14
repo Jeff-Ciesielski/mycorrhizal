@@ -35,16 +35,16 @@ class EventAttributeValue:
     """
     An attribute value for an event.
 
-    OCEL attributes include timestamps for versioning.
+    Event attributes don't have timestamps because the event time itself is sufficient.
 
     Attributes:
         name: The attribute name
         value: The string representation of the value
-        time: When this attribute value was set
+        type: The data type ("string", "integer", "float", "boolean", "timestamp")
     """
     name: str
     value: str
-    time: datetime
+    type: str
 
 
 @dataclass(frozen=True)
@@ -57,11 +57,13 @@ class ObjectAttributeValue:
     Attributes:
         name: The attribute name
         value: The string representation of the value
+        type: The data type ("string", "integer", "float", "boolean", "timestamp")
         time: When this attribute value was set
     """
     name: str
     value: str
-    time: datetime
+    type: str
+    time: Optional[datetime] = None
 
 
 @dataclass
@@ -71,14 +73,16 @@ class Event:
 
     Attributes:
         id: Unique event identifier
-        type: Event type/category
+        type: Event type/category (event class)
+        activity: Optional semantic activity label (defaults to type if null)
         time: When the event occurred
         attributes: Event attributes (name -> EventAttributeValue)
         relationships: Objects related to this event (qualifier -> Relationship)
     """
     id: str
     type: str
-    time: datetime
+    activity: Optional[str] = None
+    time: datetime = field(default_factory=datetime.now)
     attributes: Dict[str, EventAttributeValue] = field(default_factory=dict)
     relationships: Dict[str, Relationship] = field(default_factory=dict)
 
@@ -197,22 +201,48 @@ class SporesAttr:
 
 
 # ============================================================================
+# Type Inference
+# ============================================================================
+
+def infer_type(value: Any) -> str:
+    """
+    Infer the OCEL type for a Python value.
+
+    Args:
+        value: The Python value to infer type for
+
+    Returns:
+        One of: "string", "integer", "float", "boolean", "timestamp"
+    """
+    if isinstance(value, bool):
+        return "boolean"
+    elif isinstance(value, int):
+        return "integer"
+    elif isinstance(value, float):
+        return "float"
+    elif isinstance(value, datetime):
+        return "timestamp"
+    else:
+        return "string"
+
+
+# ============================================================================
 # Attribute Value Conversion
 # ============================================================================
 
-def attribute_value_from_python(value: Any, time: datetime) -> EventAttributeValue:
+def attribute_value_from_python(value: Any) -> EventAttributeValue:
     """
     Convert a Python value to an OCEL EventAttributeValue.
 
-    All values are converted to strings per OCEL specification.
-
     Args:
         value: The Python value to convert
-        time: The timestamp for this attribute value
 
     Returns:
-        An EventAttributeValue with string representation
+        An EventAttributeValue with type information
     """
+    # Infer type
+    attr_type = infer_type(value)
+
     # Handle None
     if value is None:
         str_value = "null"
@@ -240,30 +270,33 @@ def attribute_value_from_python(value: Any, time: datetime) -> EventAttributeVal
     return EventAttributeValue(
         name="",  # Name set by caller
         value=str_value,
-        time=time
+        type=attr_type
     )
 
 
-def object_attribute_from_python(value: Any, time: datetime) -> ObjectAttributeValue:
+def object_attribute_from_python(value: Any, time: Optional[datetime] = None) -> ObjectAttributeValue:
     """
     Convert a Python value to an OCEL ObjectAttributeValue.
 
-    Same conversion rules as attribute_value_from_python but for objects.
-
     Args:
         value: The Python value to convert
-        time: The timestamp for this attribute value
+        time: The timestamp for this attribute value (optional)
 
     Returns:
-        An ObjectAttributeValue with string representation
+        An ObjectAttributeValue with type information
     """
-    # Use same conversion logic
-    event_attr = attribute_value_from_python(value, time)
+    # Use same type inference logic
+    event_attr = attribute_value_from_python(value)
+
+    # Default to current time if not provided
+    if time is None:
+        time = datetime.now()
 
     return ObjectAttributeValue(
         name=event_attr.name,
         value=event_attr.value,
-        time=event_attr.time
+        type=event_attr.type,
+        time=time
     )
 
 

@@ -27,23 +27,26 @@ class JSONEncoder(Encoder):
           "event": {
             "id": "evt-123",
             "type": "process_item",
-            "time": "2025-01-11T12:34:56.789Z",
+            "activity": null,
+            "time": "2025-01-11T12:34:56.789000000Z",
             "attributes": [
-              {"name": "priority", "value": "high", "time": "2025-01-11T12:34:56.789Z"}
+              {"name": "priority", "value": "high", "type": "string", "time": null}
             ],
             "relationships": [
               {"objectId": "obj-456", "qualifier": "input"}
             ]
-          }
+          },
+          "object": null
         }
 
     Or for objects:
         {
+          "event": null,
           "object": {
             "id": "obj-456",
             "type": "WorkItem",
             "attributes": [
-              {"name": "status", "value": "pending", "time": "2025-01-11T12:34:56.789Z"}
+              {"name": "status", "value": "pending", "type": "string", "time": null}
             ],
             "relationships": []
           }
@@ -60,11 +63,11 @@ class JSONEncoder(Encoder):
         Returns:
             JSON-encoded bytes
         """
-        # Convert LogRecord to dict
+        # Convert LogRecord to dict with union structure (both fields, one null)
         if record.event is not None:
-            data = {"event": self._event_to_dict(record.event)}
+            data = {"event": self._event_to_dict(record.event), "object": None}
         else:
-            data = {"object": self._object_to_dict(record.object)}
+            data = {"event": None, "object": self._object_to_dict(record.object)}
 
         # Encode to JSON
         return json.dumps(data, separators=(',', ':')).encode('utf-8')
@@ -78,6 +81,7 @@ class JSONEncoder(Encoder):
         return {
             "id": event.id,
             "type": event.type,
+            "activity": event.activity,
             "time": self._format_datetime(event.time),
             "attributes": [
                 self._event_attr_to_dict(name, attr)
@@ -104,21 +108,26 @@ class JSONEncoder(Encoder):
             ]
         }
 
-    def _event_attr_to_dict(self, name: str, attr: EventAttributeValue) -> Dict[str, str]:
+    def _event_attr_to_dict(self, name: str, attr: EventAttributeValue) -> Dict[str, Any]:
         """Convert EventAttributeValue to dict."""
         return {
             "name": attr.name or name,
             "value": attr.value,
-            "time": self._format_datetime(attr.time)
+            "type": attr.type
         }
 
-    def _object_attr_to_dict(self, name: str, attr: ObjectAttributeValue) -> Dict[str, str]:
+    def _object_attr_to_dict(self, name: str, attr: ObjectAttributeValue) -> Dict[str, Any]:
         """Convert ObjectAttributeValue to dict."""
-        return {
+        result = {
             "name": attr.name or name,
             "value": attr.value,
-            "time": self._format_datetime(attr.time)
+            "type": attr.type
         }
+        if attr.time is not None:
+            result["time"] = self._format_datetime(attr.time)
+        else:
+            result["time"] = None
+        return result
 
     def _relationship_to_dict(self, qualifier: str, rel: Relationship) -> Dict[str, str]:
         """Convert Relationship to dict."""
