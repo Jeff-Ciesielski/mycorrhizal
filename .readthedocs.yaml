@@ -8,7 +8,7 @@ build:
     post_create_environment:
       - pip install uv
     post_install:
-      - uv pip install -e ".[dev]"
+      - uv pip install -e ".[docs]"
 
 python:
   install:

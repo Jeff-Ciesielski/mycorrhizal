@@ -33,7 +33,11 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=4.0.0",
     "pytest-timeout>=2.0.0",
-    # Documentation
+]
+
+[project.optional-dependencies]
+# Documentation dependencies for Read the Docs
+docs = [
     "mkdocs>=1.6.0",
     "mkdocs-material>=9.5.0",
     "mkdocstrings[python]>=0.25.0",
