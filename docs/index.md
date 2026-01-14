@@ -165,7 +165,7 @@ pip install mycorrhizal
 uv pip install mycorrhizal
 
 # Development installation
-git clone https://github.com/jeffciesielski/mycorrhizal
+git clone https://github.com/Jeff-Ciesielski/mycorrhizal
 cd mycorrhizal
 uv pip install -e ".[dev]"
 ```
@@ -184,12 +184,12 @@ New to Mycorrhizal? Start with our tutorials:
 
 ## Examples
 
-The [examples/](https://github.com/jeffciesielski/mycorrhizal/tree/main/examples) directory contains working examples for each DSL:
+The [examples/](https://github.com/Jeff-Ciesielski/mycorrhizal/tree/main/examples) directory contains working examples for each DSL:
 
-- [`examples/enoki/`](https://github.com/jeffciesielski/mycorrhizal/tree/main/examples/enoki) - FSM examples
-- [`examples/hypha/`](https://github.com/jeffciesielski/mycorrhizal/tree/main/examples/hypha) - Petri net examples
-- [`examples/rhizomorph/`](https://github.com/jeffciesielski/mycorrhizal/tree/main/examples/rhizomorph) - Behavior tree examples
-- [`examples/spores/`](https://github.com/jeffciesielski/mycorrhizal/tree/main/examples/spores) - Logging examples
+- [`examples/enoki/`](https://github.com/Jeff-Ciesielski/mycorrhizal/tree/main/examples/enoki) - FSM examples
+- [`examples/hypha/`](https://github.com/Jeff-Ciesielski/mycorrhizal/tree/main/examples/hypha) - Petri net examples
+- [`examples/rhizomorph/`](https://github.com/Jeff-Ciesielski/mycorrhizal/tree/main/examples/rhizomorph) - Behavior tree examples
+- [`examples/spores/`](https://github.com/Jeff-Ciesielski/mycorrhizal/tree/main/examples/spores) - Logging examples
 
 Run any example:
 ```bash

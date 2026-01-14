@@ -1,8 +1,8 @@
 site_name: Mycorrhizal
 site_description: Safe, structured, concurrent, event-driven systems in Python
 site_author: Jeff Ciesielski
-repo_url: https://github.com/jeffciesielski/mycorrhizal
-repo_name: jeffciesielski/mycorrhizal
+repo_url: https://github.com/Jeff-Ciesielski/mycorrhizal
+repo_name: Jeff-Ciesielski/mycorrhizal
 
 # Navigation structure
 nav:
@@ -126,7 +126,7 @@ markdown_extensions:
   - pymdownx.keys
   - pymdownx.magiclink:
       repo_url_shorthand: true
-      user: jeffciesielski
+      user: Jeff-Ciesielski
       repo: mycorrhizal
   - pymdownx.mark
   - pymdownx.smartsymbols
@@ -153,7 +153,7 @@ extra_javascript:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/jeffciesielski/mycorrhizal
+      link: https://github.com/Jeff-Ciesielski/mycorrhizal
 
 # Python environment for mkdocstrings
 watch:
