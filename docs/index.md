@@ -141,6 +141,7 @@ print(mermaid)  # Copy-paste into Mermaid Live Editor or docs
 ```
 
 This static analysis capability helps you:
+
 - Verify program structure without runtime execution
 - Document system architecture automatically
 - Review complex flows with diagrams

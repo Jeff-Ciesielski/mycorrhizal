@@ -99,6 +99,7 @@ graph TD
 ```
 
 This visualization helps you:
+
 - Verify token flow through the net
 - Check that places and transitions are properly connected
 - Identify potential bottlenecks or deadlocks

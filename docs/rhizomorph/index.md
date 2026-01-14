@@ -5,6 +5,7 @@ Rhizomorph is an async-first Behavior Tree DSL for decision-making and control l
 ## Overview
 
 Rhizomorph Behavior Trees provide:
+
 - **Decorator-based syntax** - Define trees, nodes, and composites with decorators
 - **Async-first design** - Native asyncio support throughout
 - **Type-safe references** - Owner-aware composition with `N.member` syntax

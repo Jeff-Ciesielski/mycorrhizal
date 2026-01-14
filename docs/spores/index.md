@@ -5,6 +5,7 @@ Spores provides structured event and object logging in OCEL (Object-Centric Even
 ## Overview
 
 Spores Logging provides:
+
 - **OCEL-compliant logs** - Standard Object-Centric Event Log format
 - **Automatic relationship tracking** - E2O (Event-to-Object) relationships
 - **Attribute logging** - Mark fields with `SporesAttr` for automatic extraction
@@ -293,6 +294,7 @@ Spores outputs OCEL (Object-Centric Event Log) JSONL format. Each line is a JSON
 ### Attribute Types
 
 Spores automatically infers types for attributes:
+
 - `"string"` - Text values
 - `"integer"` - Whole numbers
 - `"float"` - Floating point numbers

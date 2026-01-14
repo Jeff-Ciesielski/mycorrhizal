@@ -5,6 +5,7 @@ Enoki is a decorator-based Finite State Machine (FSM) DSL with asyncio support.
 ## Overview
 
 Enoki FSMs provide:
+
 - **Decorator-based syntax** - Define states as classes with decorators
 - **Enum-based transitions** - Type-safe, statically analyzable state transitions
 - **Asyncio-native** - Built-in timeout support and async/await throughout

@@ -1,5 +1,11 @@
 # Mycorrhizal
 
+[![Tests](https://github.com/Jeff-Ciesielski/mycorrhizal/actions/workflows/test.yml/badge.svg)](https://github.com/Jeff-Ciesielski/mycorrhizal/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/Jeff-Ciesielski/mycorrhizal/branch/main/graph/badge.svg)](https://codecov.io/gh/Jeff-Ciesielski/mycorrhizal)
+[![Documentation Status](https://readthedocs.org/projects/mycorrhizal/badge/?version=latest)](https://mycorrhizal.readthedocs.io/en/latest/?badge=latest)
+[![Python Version](https://img.shields.io/pypi/pyversions/mycorrhizal)](https://pypi.org/project/mycorrhizal/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A Python library for building safe, structured, concurrent, event-driven systems.
 
 ## Overview
@@ -155,7 +161,7 @@ See [examples/README.md](examples/README.md) for a complete guide.
 
 ## Documentation
 
-Full API documentation is available at [docs link here].
+Full documentation is available at [https://mycorrhizal.readthedocs.io](https://mycorrhizal.readthedocs.io)
 
 ## Development
 

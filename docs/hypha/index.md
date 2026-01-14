@@ -5,6 +5,7 @@ Hypha is a decorator-based Colored Petri Net DSL for modeling concurrent workflo
 ## Overview
 
 Hypha Petri Nets provide:
+
 - **Decorator-based syntax** - Define nets, places, and transitions with decorators
 - **Colored tokens** - Rich data objects as tokens, not just markers
 - **Multiple place types** - Queues, sets, and boolean flags

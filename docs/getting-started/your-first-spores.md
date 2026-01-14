@@ -106,6 +106,7 @@ print(f"Logged events to logs/orders.jsonl")
 ## Understanding the Output
 
 The OCEL log file (`logs/orders.jsonl`) will contain event logs with:
+
 - Event types and timestamps
 - Object relationships (which objects participated)
 - Object attributes (marked with `SporesAttr`)

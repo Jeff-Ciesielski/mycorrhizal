@@ -104,6 +104,7 @@ flowchart TD
 ```
 
 You can verify:
+
 - All states are reachable from the initial state
 - Transitions form a valid cycle
 - No states are orphaned or disconnected
