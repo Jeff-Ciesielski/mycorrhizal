@@ -1,0 +1,160 @@
+site_name: Mycorrhizal
+site_description: Safe, structured, concurrent, event-driven systems in Python
+site_author: Jeff Ciesielski
+repo_url: https://github.com/jeffciesielski/mycorrhizal
+repo_name: jeffciesielski/mycorrhizal
+
+# Navigation structure
+nav:
+  - Home: index.md
+  - Getting Started:
+    - getting-started/index.md
+    - Installation: getting-started/installation.md
+    - Your First Enoki FSM: getting-started/your-first-enoki.md
+    - Your First Hypha Petri Net: getting-started/your-first-hypha.md
+    - Your First Rhizomorph BT: getting-started/your-first-rhizomorph.md
+    - Your First Spores Logger: getting-started/your-first-spores.md
+  - Guides:
+    - guides/index.md
+    - Blackboards & Interfaces: guides/blackboards.md
+    - Timebases: guides/timebases.md
+    - Composition Patterns: guides/composition.md
+    - Programmatic Hypha Building: guides/programmatic-hypha.md
+    - Observability: guides/observability.md
+    - Best Practices: guides/best-practices.md
+  - Enoki FSM: enoki/index.md
+  - Hypha Petri Nets: hypha/index.md
+  - Rhizomorph BT: rhizomorph/index.md
+  - Spores Logging: spores/index.md
+  - API Reference:
+    - api/index.md
+    - Enoki: api/enoki.md
+    - Hypha: api/hypha.md
+    - Rhizomorph: api/rhizomorph.md
+    - Spores: api/spores.md
+    - Common: api/common.md
+
+# Theme configuration
+theme:
+  name: material
+  language: en
+  palette:
+    # Light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - toc.follow
+    - content.code.copy
+    - content.tabs.link
+  icon:
+    repo: fontawesome/brands/github
+
+# Plugins
+plugins:
+  - search
+  - mkdocstrings:
+      enabled: true
+      default_handler: python
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_root_members_full_path: false
+            show_object_full_path: false
+            show_signature: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+            separate_signature: true
+            members_order: source
+            group_by_category: true
+            show_if_no_docstring: false
+            filters: ["!^_^"]
+            inherited_members: false
+            merge_init_into_class: true
+  - section-index
+  - table-reader
+
+# Extensions
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.magiclink:
+      repo_url_shorthand: true
+      user: jeffciesielski
+      repo: mycorrhizal
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+# Extra CSS and JS
+extra_css:
+  - assets/stylesheets/extra.css
+
+extra_javascript:
+  - https://polyfill.io/v3/polyfill.min.js?features=es6,Array.prototype.includes,Array.prototype.find,Array.prototype.findIndex,Object.assign,Object.values
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+# Extra options
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/jeffciesielski/mycorrhizal
+
+# Python environment for mkdocstrings
+watch:
+  - src/mycorrhizal
