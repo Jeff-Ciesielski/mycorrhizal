@@ -39,6 +39,14 @@ from mycorrhizal.common.interface_builder import (
     FieldSpec,
 )
 
+# Import mermaid formatting utilities for easy access
+from mycorrhizal.common.mermaid import (
+    format_state_node,
+    format_transition,
+    format_subgraph,
+    format_comment,
+)
+
 __all__ = [
     # Interfaces
     "Readable",
@@ -65,4 +73,10 @@ __all__ = [
     # Interface Builder
     "blackboard_interface",
     "FieldSpec",
+
+    # Mermaid formatting
+    "format_state_node",
+    "format_transition",
+    "format_subgraph",
+    "format_comment",
 ]
