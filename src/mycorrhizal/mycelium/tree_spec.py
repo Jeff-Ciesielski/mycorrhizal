@@ -40,6 +40,23 @@ class BTIntegration:
 
 
 @dataclass
+class PNIntegration:
+    """Metadata about a BT integrated into a PN transition."""
+
+    bt_tree: Any  # BT namespace from bt.tree()
+    transition_name: str  # The transition that uses this BT
+    mode: str  # "token" or "batch"
+    output_places: List[Any]  # List of PlaceRef objects (output destinations)
+
+    def __post_init__(self):
+        """Validate PN integration."""
+        if not self.transition_name:
+            raise ValueError("Transition name cannot be empty")
+        if self.mode not in ("token", "batch"):
+            raise ValueError(f"Invalid mode: {self.mode}. Must be 'token' or 'batch'")
+
+
+@dataclass
 class NodeDefinition:
     """
     Metadata about a BT node defined in a tree.
@@ -79,6 +96,8 @@ class MyceliumTreeSpec:
     fsm_integrations: Dict[str, FSMIntegration] = field(default_factory=dict)
     # BT integrations keyed by state name (fully qualified)
     bt_integrations: Dict[str, BTIntegration] = field(default_factory=dict)
+    # PN integrations keyed by transition name (fully qualified)
+    pn_integrations: Dict[str, PNIntegration] = field(default_factory=dict)
 
     def get_action(self, name: str) -> Optional[NodeDefinition]:
         """Get action definition by name."""
@@ -95,6 +114,10 @@ class MyceliumTreeSpec:
     def get_bt_integration(self, state_name: str) -> Optional[BTIntegration]:
         """Get BT integration for a state."""
         return self.bt_integrations.get(state_name)
+
+    def get_pn_integration(self, transition_name: str) -> Optional["PNIntegration"]:
+        """Get PN integration for a transition."""
+        return self.pn_integrations.get(transition_name)
 
     def validate(self) -> List[str]:
         """

@@ -1620,7 +1620,7 @@ class _BT:
             name: node for name, node in created_nodes if hasattr(node, "node_spec")
         }
         namespace = SimpleNamespace(**nodes)
-        
+
         # Store the tree's name for use in subtree references
         namespace._tree_name = fn.__name__
 

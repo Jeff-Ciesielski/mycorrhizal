@@ -276,7 +276,7 @@ class TransitionRuntime:
         """Execute the transition with consumed tokens"""
         consumed_flat = []
         tokens_to_remove = {}
-        
+
         for i, (place_parts, arc) in enumerate(self.input_arcs):
             arc_tokens = consumed_combination[i]
             consumed_flat.extend(arc_tokens)
@@ -284,7 +284,8 @@ class TransitionRuntime:
             if place_parts not in tokens_to_remove:
                 tokens_to_remove[place_parts] = []
             tokens_to_remove[place_parts].extend(arc_tokens)
-        
+
+        # Remove tokens from input places
         for place_parts, tokens in tokens_to_remove.items():
             self.net.places[place_parts].remove_tokens(tokens)
 
@@ -310,7 +311,7 @@ class TransitionRuntime:
             result = await results
             if result is not None:
                 await self._process_yield(result)
-    
+
     def _resolve_place_ref(self, place_ref) -> Optional[Tuple[str, ...]]:
         """Resolve a PlaceRef to runtime place parts.
 

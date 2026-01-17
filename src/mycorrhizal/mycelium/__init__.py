@@ -114,6 +114,11 @@ from .exceptions import (
     FSMInstantiationError,
 )
 
+# BT-in-PN integration exports
+from .hypha_bridge import pn, pn_net, PNRunner
+from .pn_context import PNContext
+from ..hypha.core.specs import PlaceType
+
 __all__ = [
     # Core decorators
     "tree",
@@ -149,6 +154,13 @@ __all__ = [
     "MyceliumError",
     "TreeDefinitionError",
     "FSMInstantiationError",
+
+    # BT-in-PN integration
+    "pn",
+    "pn_net",
+    "PNRunner",
+    "PNContext",
+    "PlaceType",
 ]
 
 # Version info

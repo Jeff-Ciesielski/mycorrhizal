@@ -26,6 +26,15 @@ nav:
   - Hypha Petri Nets: hypha/index.md
   - Rhizomorph BT: rhizomorph/index.md
   - Spores Logging: spores/index.md
+  - Mycelium:
+    - mycelium/index.md
+    - Getting Started: getting-started/your-first-mycelium.md
+    - FSM-in-BT Pattern: mycelium/fsm-in-bt.md
+    - BT-in-FSM Pattern: mycelium/bt-in-fsm.md
+    - BT-in-PN Pattern: mycelium/bt-in-pn.md
+    - Advanced Patterns: mycelium/advanced-patterns.md
+    - Visualizations: mycelium/visualizations.md
+    - Spores Integration: mycelium/spores-integration.md
   - API Reference:
     - api/index.md
     - Enoki: api/enoki.md

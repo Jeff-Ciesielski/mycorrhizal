@@ -136,7 +136,17 @@ class NetBuilder:
         guard: Optional[GuardSpec] = None,
         state_factory: Optional[Callable] = None,
     ):
-        """Decorator for transition function"""
+        """Decorator for transition function.
+
+        Args:
+            guard: Optional guard specification
+            state_factory: Optional state factory for transition state
+
+        Usage:
+            @builder.transition()
+            async def my_transition(consumed, bb, timebase):
+                yield {output: token}
+        """
 
         def decorator(func: Callable) -> TransitionRef:
             name = func.__name__
