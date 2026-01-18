@@ -9,7 +9,7 @@ and execution of BT nodes.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from pydantic import BaseModel
 
 from ..septum.core import StateMachine, StateSpec
@@ -62,6 +62,38 @@ class FSMRunner:
         return await self.fsm.run(timeout=timeout)
 
 
+class FSMAccessor:
+    """
+    Provides convenient access to FSM runners.
+
+    Allows both attribute-style and dict-style access:
+        accessor.robot
+        accessor['robot']
+    """
+
+    def __init__(self, fsm_runners: Dict[str, "FSMRunner"]):
+        self._fsm_runners = fsm_runners
+
+    def __getattr__(self, name: str) -> "FSMRunner":
+        if name in self._fsm_runners:
+            return self._fsm_runners[name]
+        raise AttributeError(f"No FSM named '{name}'")
+
+    def __getitem__(self, name: str) -> "FSMRunner":
+        if name not in self._fsm_runners:
+            raise KeyError(f"No FSM named '{name}'")
+        return self._fsm_runners[name]
+
+    def __contains__(self, name: str) -> bool:
+        return name in self._fsm_runners
+
+    def __iter__(self):
+        return iter(self._fsm_runners)
+
+    def __len__(self) -> int:
+        return len(self._fsm_runners)
+
+
 class TreeInstance:
     """
     Runtime instance of a Mycelium tree.
@@ -91,6 +123,17 @@ class TreeInstance:
         # Instantiate FSMs for FSM-integrated actions
         self._instantiate_fsms()
 
+    @property
+    def fsms(self) -> Any:
+        """
+        Access FSM instances.
+
+        Provides attribute and dict-style access:
+            tree_instance.fsms.robot
+            tree_instance.fsms['robot']
+        """
+        return FSMAccessor(self._fsm_runners)
+
     def _instantiate_fsms(self) -> None:
         """Instantiate FSMs for all FSM-integrated actions."""
         for action_name, fsm_integration in self.spec.fsm_integrations.items():
@@ -106,7 +149,7 @@ class TreeInstance:
                 common_data = self.bb.model_dump() if hasattr(self.bb, 'model_dump') else dict(self.bb)
 
                 # Create FSM instance
-                fsm = StateMachine(initial_state=initial, common_data=common_data)
+                fsm = StateMachine(initial_state=initial, common_data=common_data)  # type: ignore[arg-type]
 
                 # Store FSM runner (will be initialized lazily)
                 runner = FSMRunner(
@@ -140,10 +183,12 @@ class TreeInstance:
         # Create BT runner if needed
         if self.bt_runner is None:
             from ..rhizomorph.core import Runner as BTRunner
+            if tree_namespace is None:
+                raise RuntimeError("BT namespace is None, cannot create BT runner")
             self.bt_runner = BTRunner(tree_namespace, bb=self.bb, tb=self.tb)
 
         # Inject tree instance onto blackboard for FSM-integrated actions
-        self.bb._mycelium_tree_instance = self
+        self.bb._mycelium_tree_instance = self  # type: ignore[attr-defined]
 
         try:
             # Run BT tree
@@ -226,7 +271,11 @@ class TreeInstance:
         try:
             # Use the BT's to_mermaid if available
             from ..rhizomorph.util import to_mermaid as bt_to_mermaid
-            diagram = bt_to_mermaid(self.spec.bt_namespace)
+            bt_namespace = self.spec.bt_namespace
+            if bt_namespace is None:
+                return "    Root[\"No BT namespace\"]"
+
+            diagram = bt_to_mermaid(bt_namespace)
 
             # Remove the ```mermaid wrapper if present
             if diagram.startswith("```"):
@@ -256,9 +305,9 @@ class TreeInstance:
         # Try to discover states by following transitions
         from ..septum.core import StateSpec
 
-        discovered = {}
-        to_visit = [initial]
-        visited = set()
+        discovered: Dict[str, StateSpec] = {}
+        to_visit: List[Any] = [initial]  # Can be StateSpec or callable returning StateSpec
+        visited: set[str] = set()
 
         while to_visit:
             state = to_visit.pop(0)
@@ -286,13 +335,15 @@ class TreeInstance:
                 for transition in transitions:
                     target_state = None
 
-                    if hasattr(transition, 'transition'):
-                        target_state = transition.transition
-                    elif hasattr(transition, 'name'):
-                        target_state = transition
-                    elif hasattr(transition, 'states'):
-                        target_state = transition
+                    if hasattr(transition, 'transition'):  # type: ignore[attr-defined]
+                        target_state = transition.transition  # type: ignore[attr-defined]
+                    elif hasattr(transition, 'states'):  # Push
+                        target_state = transition  # type: ignore[attr-defined]
                     else:
+                        continue
+
+                    # Skip if no target state
+                    if target_state is None:
                         continue
 
                     # Skip special transitions
@@ -302,14 +353,32 @@ class TreeInstance:
 
                     # Handle Push
                     if class_name == 'Push':
-                        for push_state in target_state.states:
-                            push_name = push_state.name if hasattr(push_state, 'name') else push_state.__name__
+                        for push_state in target_state.states:  # type: ignore[attr-defined]
+                            # Get the name to check if visited
+                            if hasattr(push_state, 'name'):
+                                push_name = push_state.name  # type: ignore[attr-defined]
+                            elif callable(push_state):
+                                # Will be resolved when popped from to_visit
+                                to_visit.append(push_state)
+                                continue
+                            else:
+                                continue
                             if push_name not in visited:
                                 to_visit.append(push_state)
                     else:
-                        target_name = target_state.name if hasattr(target_state, 'name') else target_state.__name__
-                        if target_name not in visited:
-                            to_visit.append(target_state)
+                        # Regular state transition - only add if it's a StateSpec or callable
+                        if isinstance(target_state, StateSpec) or callable(target_state):
+                            # Get the name to check if visited
+                            if hasattr(target_state, 'name'):
+                                target_name = target_state.name  # type: ignore[attr-defined]
+                            elif callable(target_state):
+                                # Will be resolved when popped from to_visit
+                                to_visit.append(target_state)
+                                continue
+                            else:
+                                continue
+                            if target_name not in visited:
+                                to_visit.append(target_state)
 
             except Exception:
                 pass
@@ -337,9 +406,9 @@ class TreeInstance:
                     label = ""
 
                     if hasattr(transition, 'transition'):
-                        target_state = transition.transition
+                        target_state = transition.transition  # type: ignore[attr-defined]
                         if hasattr(transition, 'label'):
-                            label = transition.label.name
+                            label = transition.label.name  # type: ignore[attr-defined]
                     elif hasattr(transition, 'name'):
                         target_state = transition
                         label = "transition"
@@ -354,13 +423,13 @@ class TreeInstance:
                         continue
 
                     if class_name == 'Push':
-                        for push_state in target_state.states:
+                        for push_state in target_state.states:  # type: ignore[attr-defined]
                             push_name = push_state.name if hasattr(push_state, 'name') else push_state.__name__
                             target_short = push_name.split(".")[-1]
                             target_id = f"{action_name}_{target_short}"
                             lines.append(format_transition(state_id, target_id, "Push"))
                     else:
-                        target_name = target_state.name if hasattr(target_state, 'name') else str(target_state)
+                        target_name = target_state.name if hasattr(target_state, 'name') else str(target_state)  # type: ignore[attr-defined]
                         target_short = target_name.split(".")[-1]
                         target_id = f"{action_name}_{target_short}"
                         lines.append(format_transition(state_id, target_id, label))

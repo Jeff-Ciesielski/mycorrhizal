@@ -2,22 +2,21 @@
 """
 Job Queue Processor - BT-in-PN Integration Example
 
-This example demonstrates a production-ready job queue system that uses
-Behavior Trees integrated with Petri Nets to intelligently route and process
-background jobs.
+Demonstrates a job queue system that uses Behavior Trees integrated with
+Petri Nets to route and process background jobs.
 
-Real-world use case:
+Use case:
 - Web servers submit background jobs (email sending, report generation, data processing)
 - Jobs have different priorities (CRITICAL: user-facing, HIGH: async operations, LOW: cleanup)
-- Jobs need validation before processing (e.g., check dependencies, resource availability)
+- Jobs need validation before processing (check dependencies, resource availability)
 - Failed jobs should be rejected and retried later
 - System must handle job enrichment (add metadata, timestamps, etc.)
 
-The BT-in-PN integration allows us to:
-1. Defer complex routing logic to Behavior Trees (easy to test and modify)
+BT-in-PN integration:
+1. Defer complex routing logic to Behavior Trees
 2. Validate and enrich jobs during routing
-3. Handle failures gracefully without losing jobs
-4. Keep the Petri Net structure simple and declarative
+3. Handle failures without losing jobs
+4. Keep Petri Net structure simple and declarative
 
 Architecture:
     Input Queue → Priority Router (BT) → [Critical|Fast|Slow] Queues
@@ -86,13 +85,11 @@ def PriorityRouter():
     """
     BT that routes jobs to appropriate priority queues.
 
-    This is where you'd implement complex routing logic:
+    Implement complex routing logic here:
     - Check system load before accepting CRITICAL jobs
     - Throttle LOW priority jobs during peak hours
     - Route specific job types to dedicated queues
     - Add dynamic priority adjustments based on SLA
-
-    The BT makes it easy to modify routing rules without touching the PN structure.
     """
 
     @bt.action
@@ -154,7 +151,7 @@ def JobValidator():
     """
     BT that validates jobs before final processing.
 
-    Real-world validation scenarios:
+    Validation scenarios:
     - Check if job dependencies are satisfied
     - Verify required resources are available
     - Validate job parameters and permissions
@@ -184,7 +181,7 @@ def JobValidator():
         # Enrich job with metadata
         job_enriched = job.model_copy()
         job_enriched.retry_count += 1
-        # In real code, you'd add: created_at, validation_id, checksum, etc.
+        # In production, add: created_at, validation_id, checksum, etc.
 
         logger.info(f"[Validator] Job {job.job_id} validated and enriched")
         pn_ctx.route_to(pn_ctx.places.validated_queue, token=job_enriched)
@@ -223,10 +220,10 @@ def JobQueueProcessor(builder):
     """
     Job queue processing system with BT-intelligent routing.
 
-    The PN structure is simple and declarative:
+    PN structure:
     - Jobs flow from input through router to validation and completion
-    - BTs handle all the complex decision logic at each transition
-    - Easy to extend: add new queues, validators, or processing stages
+    - BTs handle decision logic at each transition
+    - Extend by adding new queues, validators, or processing stages
     """
 
     # Places
@@ -241,7 +238,7 @@ def JobQueueProcessor(builder):
     @builder.transition(bt=PriorityRouter, bt_mode="token", outputs=[critical_pending, fast_pending, normal_pending])
     async def route_by_priority(consumed, bb, timebase):
         """Route jobs based on priority using BT decisions."""
-        # BT handles all routing logic - just pass through
+        # BT handles all routing logic
 
     # Transition 2: Critical path validator
     @builder.transition(bt=JobValidator, bt_mode="token", outputs=[validated_queue, rejected_queue])
@@ -316,12 +313,31 @@ async def main():
     timebase = MonotonicClock()
 
     runner = PNRunner(JobQueueProcessor, bb)
+
+    # Generate and display Mermaid diagram
+    print("\n" + "=" * 80)
+    print("Mermaid Diagram")
+    print("=" * 80)
+    mermaid = runner.to_mermaid()
+    print(mermaid)
+    print("=" * 80)
+    print()
+    print("BTs are embedded as subgraphs within transitions.")
+    print("Subgraphs show BT structure:")
+    print("  - PriorityRouter: Selector with 4 routing actions")
+    print("  - JobValidator: Selector with validation sequence and pass-through")
+    print()
+
     await runner.start(timebase)
 
     # Get runtime to access places
     runtime = runner.runtime
 
     # Find input queue
+    if runtime.places is None:
+        print("ERROR: Runtime places is None!")
+        return
+
     print(f"\nAvailable places: {list(runtime.places.keys())}")
     input_place = None
     for key, place in runtime.places.items():
@@ -364,6 +380,10 @@ async def main():
     print("Final state:")
 
     # Print queue states
+    if runtime.places is None:
+        print("ERROR: Runtime places is None!")
+        return
+
     for name_parts, place in runtime.places.items():
         place_name = name_parts[-1]
         if place.tokens:

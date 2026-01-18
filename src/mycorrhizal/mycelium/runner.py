@@ -8,7 +8,7 @@ for creating and running Mycelium trees.
 
 from __future__ import annotations
 
-from typing import Any, Union
+from typing import Any, Callable, Union
 from pydantic import BaseModel
 
 from ..rhizomorph.core import Status
@@ -16,14 +16,14 @@ from .tree_spec import MyceliumTreeSpec
 from .instance import TreeInstance
 
 
-def _get_spec(tree_input: Union[callable, MyceliumTreeSpec]) -> MyceliumTreeSpec:
+def _get_spec(tree_input: Union[Callable, MyceliumTreeSpec]) -> MyceliumTreeSpec:
     """Extract MyceliumTreeSpec from various input types."""
     if isinstance(tree_input, MyceliumTreeSpec):
         return tree_input
 
     # Assume it's a decorated tree function
     if hasattr(tree_input, '_mycelium_spec'):
-        return tree_input._mycelium_spec
+        return tree_input._mycelium_spec  # type: ignore[attr-defined]
 
     raise TypeError(
         f"Expected @tree decorated function or MyceliumTreeSpec, got {type(tree_input)}"
@@ -74,7 +74,7 @@ class TreeRunner:
 
     def __init__(
         self,
-        tree: Union[callable, MyceliumTreeSpec],
+        tree: Union[Callable, MyceliumTreeSpec],
         bb: BaseModel,
         tb: Any,
     ):

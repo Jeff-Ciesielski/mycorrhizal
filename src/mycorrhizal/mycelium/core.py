@@ -39,7 +39,7 @@ __all__ = [
 
 import inspect
 import functools
-from typing import Callable, Type, TYPE_CHECKING
+from typing import Callable, Type, TYPE_CHECKING, Optional
 from enum import Enum
 
 from .tree_spec import FSMIntegration, BTIntegration, NodeDefinition
@@ -124,12 +124,12 @@ def tree(func: Callable) -> Callable:
     spec.tree_func = func
 
     # Attach spec to the namespace
-    bt_namespace._mycelium_spec = spec
+    bt_namespace._mycelium_spec = spec  # type: ignore[attr-defined]
 
     # Also attach to original function for direct access
-    func._mycelium_spec = spec
+    func._mycelium_spec = spec  # type: ignore[attr-defined]
 
-    return bt_namespace
+    return bt_namespace  # type: ignore[return-value]
 
 
 # ======================================================================================
@@ -186,8 +186,10 @@ def Action(func=None, *, fsm=None):
         # Create FSM integration if needed
         fsm_integration = None
         if has_fsm:
+            if fsm is None:
+                raise ValueError(f"FSM integration requested but fsm parameter is None for action '{f.__name__}'")
             fsm_integration = FSMIntegration(
-                initial_state=fsm,
+                initial_state=fsm,  # type: ignore[arg-type]
                 action_name=f.__name__,
             )
             builder.add_fsm_integration(fsm_integration)
@@ -238,10 +240,10 @@ def Action(func=None, *, fsm=None):
         )
 
         # Store metadata for later
-        bt_action._mycelium_node_def = node_def
-        bt_action._original_func = f
-        bt_action._has_fsm_integration = has_fsm
-        f._bt_action = bt_action
+        bt_action._mycelium_node_def = node_def  # type: ignore[attr-defined]
+        bt_action._original_func = f  # type: ignore[attr-defined]
+        bt_action._has_fsm_integration = has_fsm  # type: ignore[attr-defined]
+        f._bt_action = bt_action  # type: ignore[attr-defined]
 
         # Register with builder
         builder.add_action(node_def)
@@ -300,9 +302,9 @@ def Condition(func: Callable) -> Callable:
     bt_condition = bt.condition(bt_condition)
 
     # Store metadata
-    bt_condition._mycelium_node_def = node_def
-    bt_condition._original_func = func
-    func._bt_condition = bt_condition
+    bt_condition._mycelium_node_def = node_def  # type: ignore[attr-defined]
+    bt_condition._original_func = func  # type: ignore[attr-defined]
+    func._bt_condition = bt_condition  # type: ignore[attr-defined]
 
     # Register with builder
     builder.add_condition(node_def)
@@ -333,13 +335,29 @@ def Selector(func: Callable) -> Callable:
     return bt.selector(func)
 
 
-def Parallel(func: Callable) -> Callable:
+def Parallel(func: Optional[Callable] = None, *, success_threshold: int = 1):
     """
     Decorator to define a parallel composite.
 
     All children are executed simultaneously.
+
+    Args:
+        func: The generator function (optional for decorator with args)
+        success_threshold: Minimum number of children that must succeed
+
+    Examples:
+        >>> @Parallel
+        >>> @Parallel(success_threshold=2)
     """
-    return bt.parallel(func)
+    def decorator(f: Callable) -> Callable:
+        return bt.parallel(success_threshold=success_threshold)(f)
+
+    if func is None:
+        # Called with arguments: @Parallel(success_threshold=2)
+        return decorator
+    else:
+        # Called without arguments: @Parallel
+        return decorator(func)
 
 
 # ======================================================================================
@@ -369,7 +387,7 @@ def root(func: Callable) -> Callable:
         )
 
     # Mark as root in the BT system
-    bt_root = bt.root(func)
+    bt_root = bt.root(func)  # type: ignore[call-arg]
 
     # Create node definition
     node_def = NodeDefinition(
@@ -380,7 +398,7 @@ def root(func: Callable) -> Callable:
     )
 
     # Store metadata
-    bt_root._mycelium_node_def = node_def
+    bt_root._mycelium_node_def = node_def  # type: ignore[attr-defined]
 
     # Register with builder
     builder.set_root(node_def)
@@ -459,7 +477,7 @@ def state(bt=None, **kwargs):
             _state_bt_integrations[func.__qualname__] = integration
 
         # Apply septum.state decorator with additional kwargs
-        return _septum.state(**kwargs)(func)
+        return _septum.state(**kwargs)(func)  # type: ignore[return-value]
 
     return decorator
 
@@ -481,7 +499,7 @@ def events(cls: Type[Enum]) -> Type[Enum]:
 
 # Make on_state work without bt parameter for standard usage
 # It will check for BT integration from the @state decorator
-def on_state(func: Callable = None, *, bt_tree=None) -> Callable:
+def on_state(func: Optional[Callable] = None, *, bt_tree=None) -> Callable:
     """
     Decorator for state handlers (mirrors @septum.on_state).
 
@@ -557,7 +575,7 @@ def on_state(func: Callable = None, *, bt_tree=None) -> Callable:
                 return await f(ctx, bt_result, *args, **kwargs)
 
             # Mark as septum on_state for validation (use func itself, not True)
-            wrapped._septum_on_state = wrapped
+            wrapped._septum_on_state = wrapped  # type: ignore[attr-defined]
 
             # Add to tracking stack if available
             if _septum._tracking_stack:

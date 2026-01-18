@@ -167,11 +167,15 @@ class PlaceRuntime:
 
         async def io_input_loop():
             try:
-                sig = inspect.signature(self.spec.handler)
+                handler = self.spec.handler
+                if handler is None:
+                    return
+
+                sig = inspect.signature(handler)
                 if len(sig.parameters) == 2:
-                    gen = self.spec.handler(bb_to_pass, self.timebase)
+                    gen = handler(bb_to_pass, self.timebase)
                 else:
-                    gen = self.spec.handler()
+                    gen = handler()  # type: ignore[call-arg]
 
                 async for token in gen:
                     self.add_token(token)
@@ -581,12 +585,18 @@ class NetRuntime:
     def _find_place_spec(self, fqn: str) -> PlaceSpec:
         """Find place spec by FQN using hierarchy"""
         parts = fqn.split('.')
-        return self._find_in_spec(self.spec, parts, is_place=True)
-    
+        result = self._find_in_spec(self.spec, parts, is_place=True)
+        if not isinstance(result, PlaceSpec):
+            raise TypeError(f"Expected PlaceSpec, got {type(result)}")
+        return result
+
     def _find_transition_spec(self, fqn: str) -> TransitionSpec:
         """Find transition spec by FQN using hierarchy"""
         parts = fqn.split('.')
-        return self._find_in_spec(self.spec, parts, is_place=False)
+        result = self._find_in_spec(self.spec, parts, is_place=False)
+        if not isinstance(result, TransitionSpec):
+            raise TypeError(f"Expected TransitionSpec, got {type(result)}")
+        return result
     
     def _find_in_spec(self, spec: NetSpec, parts: List[str], is_place: bool):
         """Recursively find place or transition in spec hierarchy"""
@@ -642,11 +652,17 @@ class NetRuntime:
 
     def _find_place_spec_by_parts(self, parts: Tuple[str, ...]) -> PlaceSpec:
         """Find a PlaceSpec using a tuple of path parts."""
-        return self._find_in_spec(self.spec, list(parts), is_place=True)
+        result = self._find_in_spec(self.spec, list(parts), is_place=True)
+        if not isinstance(result, PlaceSpec):
+            raise TypeError(f"Expected PlaceSpec, got {type(result)}")
+        return result
 
     def _find_transition_spec_by_parts(self, parts: Tuple[str, ...]) -> TransitionSpec:
         """Find a TransitionSpec using a tuple of path parts."""
-        return self._find_in_spec(self.spec, list(parts), is_place=False)
+        result = self._find_in_spec(self.spec, list(parts), is_place=False)
+        if not isinstance(result, TransitionSpec):
+            raise TypeError(f"Expected TransitionSpec, got {type(result)}")
+        return result
     
     async def start(self):
         """Start the Petri net execution"""

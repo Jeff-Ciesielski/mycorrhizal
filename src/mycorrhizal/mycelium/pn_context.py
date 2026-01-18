@@ -67,7 +67,7 @@ class PNContext:
         output_places: List[Any],
         tokens: List[Any],
         timebase: Any,
-        token_origins: dict = None,
+        token_origins: Optional[dict] = None,
     ):
         """
         Initialize PNContext.

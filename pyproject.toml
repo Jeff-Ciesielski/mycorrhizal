@@ -10,6 +10,34 @@ dependencies = [
     "pydantic>=2.11.7",
 ]
 
+[tool.pyright]
+# Python version to target
+pythonVersion = "3.10"
+pythonPlatform = "Linux"
+
+# Type checking mode
+typeCheckingMode = "standard"
+
+# Ignore specific error types that are by design in our DSL
+# The decorator pattern adds attributes to functions at runtime
+ignore = [
+    "examples/",
+]
+
+# Specific error suppressions for DSL patterns
+reportFunctionMemberAccess = "warning"
+reportOptionalMemberAccess = "warning"
+reportAttributeAccessIssue = "warning"
+
+# Exclude directories from type checking
+exclude = [
+    "examples/",
+    "tests/",
+    ".claude_todo/",
+    ".claude_work/",
+    "docs/",
+]
+
 
 [tool.hatch.build]
 exclude = ["examples/*", "tests/*"]

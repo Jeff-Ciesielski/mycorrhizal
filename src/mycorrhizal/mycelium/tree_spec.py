@@ -41,19 +41,65 @@ class BTIntegration:
 
 @dataclass
 class PNIntegration:
-    """Metadata about a BT integrated into a PN transition."""
+    """Metadata about a BT or FSM integrated into a PN transition."""
 
-    bt_tree: Any  # BT namespace from bt.tree()
-    transition_name: str  # The transition that uses this BT
-    mode: str  # "token" or "batch"
-    output_places: List[Any]  # List of PlaceRef objects (output destinations)
+    transition_name: str  # The transition that uses this integration
+    integration_type: str = "bt"  # "bt" or "fsm"
+    mode: str = "token"  # "token" or "batch" (BT only)
+
+    # BT integration fields
+    bt_tree: Any = None  # BT namespace from bt.tree()
+
+    # FSM integration fields
+    initial_state: Any = None  # Initial state for FSM (StateSpec or callable)
+
+    # Output destinations
+    output_places: Optional[List[Any]] = None  # List of PlaceRef objects (output destinations)
 
     def __post_init__(self):
         """Validate PN integration."""
         if not self.transition_name:
             raise ValueError("Transition name cannot be empty")
-        if self.mode not in ("token", "batch"):
-            raise ValueError(f"Invalid mode: {self.mode}. Must be 'token' or 'batch'")
+
+        # Validate integration type
+        if self.integration_type not in ("bt", "fsm"):
+            raise ValueError(f"Invalid integration_type: {self.integration_type}. Must be 'bt' or 'fsm'")
+
+        # Validate BT-specific fields
+        if self.integration_type == "bt":
+            if self.bt_tree is None:
+                raise ValueError("BT integration requires bt_tree parameter")
+            if self.mode not in ("token", "batch"):
+                raise ValueError(f"Invalid mode: {self.mode}. Must be 'token' or 'batch'")
+
+        # Validate FSM-specific fields
+        if self.integration_type == "fsm":
+            if self.initial_state is None:
+                raise ValueError("FSM integration requires initial_state parameter")
+
+        # Initialize output_places if None
+        if self.output_places is None:
+            self.output_places = []
+
+    @property
+    def fsm_state_name(self) -> str:
+        """Get the name of the FSM initial state for display purposes."""
+        if self.initial_state is None:
+            return "Unknown"
+
+        # If it's a StateSpec, extract the name
+        if hasattr(self.initial_state, 'name'):
+            name = self.initial_state.name
+            # Extract just the simple name (last component after dot)
+            if '.' in name:
+                return name.split('.')[-1]
+            return name
+
+        # Try to get the name from the state
+        if hasattr(self.initial_state, '__name__'):
+            return self.initial_state.__name__
+
+        return str(self.initial_state)
 
 
 @dataclass
@@ -98,6 +144,16 @@ class MyceliumTreeSpec:
     bt_integrations: Dict[str, BTIntegration] = field(default_factory=dict)
     # PN integrations keyed by transition name (fully qualified)
     pn_integrations: Dict[str, PNIntegration] = field(default_factory=dict)
+
+    @property
+    def fsms(self) -> Dict[str, FSMIntegration]:
+        """
+        Access FSM integrations (alias for fsm_integrations).
+
+        This provides convenient access like:
+            spec.fsms['robot']
+        """
+        return self.fsm_integrations
 
     def get_action(self, name: str) -> Optional[NodeDefinition]:
         """Get action definition by name."""
