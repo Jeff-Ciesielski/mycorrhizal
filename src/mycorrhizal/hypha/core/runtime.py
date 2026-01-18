@@ -486,17 +486,28 @@ class TransitionRuntime:
                 # Debug: indicate transition woke
                 logger.debug("[trans] %s woke; checking inputs", self.fqn)
 
-                for place_fqn, arc in self.input_arcs:
-                    place = self.net.places[place_fqn]
-                    place.token_added_event.clear()
-                
                 combinations = self._generate_token_combinations()
                 logger.debug("[trans] %s combinations=%d", self.fqn, len(combinations))
-                
+
                 if combinations:
                     to_consume = await self._check_guard(combinations)
                     if to_consume:
                         await self._fire_transition(to_consume)
+
+                        # Check if there are still tokens to process after firing
+                        remaining_combinations = self._generate_token_combinations()
+                        if not remaining_combinations:
+                            # No more tokens, clear the event and wait for new tokens
+                            for place_fqn, arc in self.input_arcs:
+                                place = self.net.places[place_fqn]
+                                place.token_added_event.clear()
+                            # else: there are still tokens, loop again immediately
+                else:
+                    # No combinations available (event was set spuriously or tokens consumed by another transition)
+                    # Clear the event and go back to waiting
+                    for place_fqn, arc in self.input_arcs:
+                        place = self.net.places[place_fqn]
+                        place.token_added_event.clear()
         
         except asyncio.CancelledError:
             pass
