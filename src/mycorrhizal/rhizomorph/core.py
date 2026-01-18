@@ -1335,41 +1335,74 @@ class _BT:
             self._tracking_stack[-1].append((fn.__name__, fn))
         return fn
 
-    @overload
-    def sequence(self, func: F, *, memory: bool = True) -> F: ...
-
-    @overload
-    def sequence(self, func: Literal[None] = None, *, memory: bool = True) -> Callable[[F], F]: ...
-
     def sequence(
-        self, func: Optional[F] = None, *, memory: bool = True
-    ) -> Union[F, Callable[[F], F]]:
+        self, *args: Union[F, NodeSpec, Callable[[Any], Any]], memory: bool = True
+    ) -> Union[F, Callable[[F], F], NodeSpec]:
         """Decorator to mark a generator function as a sequence composite.
 
-        Can be used with or without parentheses:
-            @bt.sequence
-            def root():
-                ...
+        Can be used in three ways:
+            1. Decorator without parentheses:
+                @bt.sequence
+                def root():
+                    ...
 
-            @bt.sequence(memory=False)
-            def root():
-                ...
+            2. Decorator with parameters:
+                @bt.sequence(memory=False)
+                def root():
+                    ...
+
+            3. Direct call with child nodes:
+                bt.sequence(action1, action2, action3)
         """
-        # Case 1: Used as @bt.sequence (no parens)
-        if callable(func):
-            # Apply decorator directly with defaults
+        # Case 3: Direct call with children - bt.sequence(node1, node2, ...)
+        # This is detected when we have multiple args, or a single arg that's not a generator function
+        if len(args) == 0:
+            # Case 2a: bt.sequence() with no arguments - return decorator
+            return self._sequence_impl(memory=memory)
+
+        if len(args) > 1:
+            # Multiple children - create sequence directly
+            return self._sequence_from_children(args, memory)
+
+        # Single argument - check if it's a generator function (decorator case) or a node (direct call)
+        single_arg = args[0]
+
+        # Check if it's a generator function (decorator form)
+        if inspect.isfunction(single_arg) and inspect.isgeneratorfunction(single_arg):
+            # Case 1: @bt.sequence def root(): ...
             spec = NodeSpec(
                 kind=NodeSpecKind.SEQUENCE,
-                name=_name_of(func),
-                payload={"factory": func, "memory": memory},
+                name=_name_of(single_arg),
+                payload={"factory": single_arg, "memory": memory},
             )
-            func.node_spec = spec  # type: ignore
+            single_arg.node_spec = spec  # type: ignore
             if self._tracking_stack:
-                self._tracking_stack[-1].append((func.__name__, func))
-            return func
+                self._tracking_stack[-1].append((single_arg.__name__, single_arg))
+            return single_arg
 
-        # Case 2: Used as @bt.sequence() or @bt.sequence(memory=False)
-        return self._sequence_impl(memory=memory)
+        # Case 3b: Single child node - bt.sequence(action1)
+        return self._sequence_from_children(args, memory)
+
+    def _sequence_from_children(self, children: Tuple[Any, ...], memory: bool) -> NodeSpec:
+        """Create a sequence NodeSpec from child nodes."""
+        # Create a uniquely named factory to avoid false recursion detection
+        child_names = ', '.join(_name_of(c) for c in children)
+
+        def _sequence_factory_direct() -> Generator[Any, None, None]:
+            for child in children:
+                yield child
+
+        # Set a unique name for the factory function
+        _sequence_factory_direct.__name__ = f"_sequence_factory_direct_{id(children)}"
+        _sequence_factory_direct.__qualname__ = f"_sequence_factory_direct_{id(children)}"
+
+        name = f"Sequence({child_names})" if children else "Sequence"
+
+        return NodeSpec(
+            kind=NodeSpecKind.SEQUENCE,
+            name=name,
+            payload={"factory": _sequence_factory_direct, "memory": memory},
+        )
 
     def _sequence_impl(self, memory: bool) -> Callable[[F], F]:
         """Implementation of sequence decorator."""
@@ -1386,45 +1419,74 @@ class _BT:
 
         return deco
 
-    @overload
-    def selector(self, func: F, *, memory: bool = True, reactive: bool = False) -> F: ...
-
-    @overload
-    def selector(self, func: Literal[None] = None, *, memory: bool = True, reactive: bool = False) -> Callable[[F], F]: ...
-
     def selector(
-        self, func: Optional[F] = None, *, memory: bool = True, reactive: bool = False
-    ) -> Union[F, Callable[[F], F]]:
+        self, *args: Union[F, NodeSpec, Callable[[Any], Any]], memory: bool = True, reactive: bool = False
+    ) -> Union[F, Callable[[F], F], NodeSpec]:
         """Decorator to mark a generator function as a selector composite.
 
-        Can be used with or without parentheses:
-            @bt.selector
-            def root():
-                ...
+        Can be used in three ways:
+            1. Decorator without parentheses:
+                @bt.selector
+                def root():
+                    ...
 
-            @bt.selector(memory=False)
-            def root():
-                ...
+            2. Decorator with parameters:
+                @bt.selector(memory=False)
+                def root():
+                    ...
 
-            @bt.selector(reactive=True)
-            def root():
-                ...
+            3. Direct call with child nodes:
+                bt.selector(option1, option2, option3)
         """
-        # Case 1: Used as @bt.selector (no parens)
-        if callable(func):
-            # Apply decorator directly with defaults
+        # Case 3: Direct call with children - bt.selector(node1, node2, ...)
+        # This is detected when we have multiple args, or a single arg that's not a generator function
+        if len(args) == 0:
+            # Case 2a: bt.selector() with no arguments - return decorator
+            return self._selector_impl(memory=memory, reactive=reactive)
+
+        if len(args) > 1:
+            # Multiple children - create selector directly
+            return self._selector_from_children(args, memory, reactive)
+
+        # Single argument - check if it's a generator function (decorator case) or a node (direct call)
+        single_arg = args[0]
+
+        # Check if it's a generator function (decorator form)
+        if inspect.isfunction(single_arg) and inspect.isgeneratorfunction(single_arg):
+            # Case 1: @bt.selector def root(): ...
             spec = NodeSpec(
                 kind=NodeSpecKind.SELECTOR,
-                name=_name_of(func),
-                payload={"factory": func, "memory": memory, "reactive": reactive},
+                name=_name_of(single_arg),
+                payload={"factory": single_arg, "memory": memory, "reactive": reactive},
             )
-            func.node_spec = spec  # type: ignore
+            single_arg.node_spec = spec  # type: ignore
             if self._tracking_stack:
-                self._tracking_stack[-1].append((func.__name__, func))
-            return func
+                self._tracking_stack[-1].append((single_arg.__name__, single_arg))
+            return single_arg
 
-        # Case 2: Used as @bt.selector() or @bt.selector(memory=False)
-        return self._selector_impl(memory=memory, reactive=reactive)
+        # Case 3b: Single child node - bt.selector(action1)
+        return self._selector_from_children(args, memory, reactive)
+
+    def _selector_from_children(self, children: Tuple[Any, ...], memory: bool, reactive: bool) -> NodeSpec:
+        """Create a selector NodeSpec from child nodes."""
+        # Create a uniquely named factory to avoid false recursion detection
+        child_names = ', '.join(_name_of(c) for c in children)
+
+        def _selector_factory_direct() -> Generator[Any, None, None]:
+            for child in children:
+                yield child
+
+        # Set a unique name for the factory function
+        _selector_factory_direct.__name__ = f"_selector_factory_direct_{id(children)}"
+        _selector_factory_direct.__qualname__ = f"_selector_factory_direct_{id(children)}"
+
+        name = f"Selector({child_names})" if children else "Selector"
+
+        return NodeSpec(
+            kind=NodeSpecKind.SELECTOR,
+            name=name,
+            payload={"factory": _selector_factory_direct, "memory": memory, "reactive": reactive},
+        )
 
     def _selector_impl(self, memory: bool, reactive: bool) -> Callable[[F], F]:
         """Implementation of selector decorator."""
