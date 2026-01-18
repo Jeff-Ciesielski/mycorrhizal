@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Basic Enoki Decorator Example
+Basic Septum Decorator Example
 
 This example demonstrates the simplest possible state machine using
-the decorator-based Enoki API.
+the decorator-based Septum API.
 """
 
 import asyncio
-from mycorrhizal.enoki.core import (
-    enoki,
+from mycorrhizal.septum.core import (
+    septum,
     StateMachine,
     StateConfiguration,
     SharedContext,
@@ -23,7 +23,7 @@ from enum import Enum, auto
 # Define States using Decorators
 # ============================================================================
 
-@enoki.state(config=StateConfiguration(can_dwell=True))
+@septum.state(config=StateConfiguration(can_dwell=True))
 def IdleState():
     """Initial idle state waiting for work"""
 
@@ -31,7 +31,7 @@ def IdleState():
         START = auto()
         QUIT = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         msg = ctx.msg
         if msg == "start":
@@ -42,7 +42,7 @@ def IdleState():
             return Events.QUIT
         return None  # Wait for message
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.START, ProcessingState),
@@ -50,41 +50,41 @@ def IdleState():
         ]
 
 
-@enoki.state()
+@septum.state()
 def ProcessingState():
     """Process data and return to idle when done"""
 
     class Events(Enum):
         DONE = auto()
 
-    @enoki.on_enter
+    @septum.on_enter
     async def on_enter(ctx: SharedContext):
         print("Processing: Starting work")
         ctx.common["process_count"] = ctx.common.get("process_count", 0) + 1
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         print("Processing: Doing work...")
         await asyncio.sleep(0.1)  # Simulate work
         print("Processing: Work complete")
         return Events.DONE
 
-    @enoki.on_leave
+    @septum.on_leave
     async def on_leave(ctx: SharedContext):
         print("Processing: Cleaning up")
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.DONE, IdleState),
         ]
 
 
-@enoki.state(config=StateConfiguration(terminal=True))
+@septum.state(config=StateConfiguration(terminal=True))
 def DoneState():
     """Terminal state - FSM will exit when reaching this state"""
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         print(f"Done: Processed {ctx.common.get('process_count', 0)} items")
         print("Done: State machine complete")
@@ -95,7 +95,7 @@ def DoneState():
 # ============================================================================
 
 async def main():
-    print("=== Basic Enoki Decorator Example ===\n")
+    print("=== Basic Septum Decorator Example ===\n")
 
     # Create state machine
     fsm = StateMachine(

@@ -8,7 +8,7 @@ import asyncio
 from enum import Enum, auto
 from pydantic import BaseModel
 
-from mycorrhizal.enoki.core import enoki, LabeledTransition, StateConfiguration
+from mycorrhizal.septum.core import septum, LabeledTransition, StateConfiguration
 from mycorrhizal.mycelium import tree, fsm, Action, Sequence, Selector, root, TreeRunner
 from mycorrhizal.rhizomorph.core import bt, Status, Runner
 from mycorrhizal.common.timebase import MonotonicClock
@@ -29,19 +29,19 @@ def SubTreeTask():
 
 
 # Define states
-@enoki.state(config=StateConfiguration(can_dwell=True))
+@septum.state(config=StateConfiguration(can_dwell=True))
 def IdleState():
-    @enoki.events
+    @septum.events
     class Events(Enum):
         START = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         if ctx.common.get("start", False):
             return Events.START
         return None
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [LabeledTransition(Events.START, IdleState)]
 

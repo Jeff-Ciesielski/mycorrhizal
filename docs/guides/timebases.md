@@ -107,13 +107,13 @@ clock = MonotonicClock()
 runner = PNRunner(net=net, blackboard=bb, timebase=clock)
 ```
 
-### Enoki (State Machines)
+### Septum (State Machines)
 
 ```python
-from mycorrhizal.enoki.core import StateMachine, StateConfiguration
+from mycorrhizal.septum.core import StateMachine, StateConfiguration
 from mycorrhizal.common.timebase import WallClock
 
-@enoki.state(config=StateConfiguration(timeout=5.0))
+@septum.state(config=StateConfiguration(timeout=5.0))
 class MyState:
     # Timeout uses the timebase
     pass
@@ -148,9 +148,9 @@ from mycorrhizal.common.timebase import CycleClock
 async def test_timeout():
     clock = CycleClock(initial=0.0)
 
-    @enoki.state(config=StateConfiguration(timeout=5.0))
+    @septum.state(config=StateConfiguration(timeout=5.0))
     class TimeoutState:
-        @enoki.on_timeout
+        @septum.on_timeout
         async def on_timeout(ctx):
             ctx.timed_out = True
 

@@ -29,7 +29,7 @@ uv pip install -e ".[dev]"
 ## Verify Installation
 
 ```python
-from mycorrhizal.enoki import enoki
+from mycorrhizal.septum import septum
 from mycorrhizal.hypha import pn
 from mycorrhizal.rhizomorph import bt
 from mycorrhizal.spores import get_spore_sync
@@ -50,7 +50,7 @@ After installation, you can run the examples:
 
 ```bash
 # From the repository root
-python examples/enoki_decorator_basic.py
+python examples/septum_decorator_basic.py
 python examples/hypha_demo.py
 python examples/rhizomorph_example.py
 python examples/blended_demo.py

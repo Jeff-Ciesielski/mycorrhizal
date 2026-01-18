@@ -10,7 +10,7 @@ nav:
   - Getting Started:
     - getting-started/index.md
     - Installation: getting-started/installation.md
-    - Your First Enoki FSM: getting-started/your-first-enoki.md
+    - Your First Septum FSM: getting-started/your-first-septum.md
     - Your First Hypha Petri Net: getting-started/your-first-hypha.md
     - Your First Rhizomorph BT: getting-started/your-first-rhizomorph.md
     - Your First Spores Logger: getting-started/your-first-spores.md
@@ -22,7 +22,7 @@ nav:
     - Programmatic Hypha Building: guides/programmatic-hypha.md
     - Observability: guides/observability.md
     - Best Practices: guides/best-practices.md
-  - Enoki FSM: enoki/index.md
+  - Septum FSM: septum/index.md
   - Hypha Petri Nets: hypha/index.md
   - Rhizomorph BT: rhizomorph/index.md
   - Spores Logging: spores/index.md
@@ -37,7 +37,7 @@ nav:
     - Spores Integration: mycelium/spores-integration.md
   - API Reference:
     - api/index.md
-    - Enoki: api/enoki.md
+    - Septum: api/septum.md
     - Hypha: api/hypha.md
     - Rhizomorph: api/rhizomorph.md
     - Spores: api/spores.md

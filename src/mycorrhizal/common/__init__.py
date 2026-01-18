@@ -4,7 +4,7 @@ Common utilities and interfaces for Mycorrhizal.
 This module provides shared components used across all three DSL systems:
 - Hypha (Petri Nets)
 - Rhizomorph (Behavior Trees)
-- Enoki (State Machines)
+- Septum (State Machines)
 """
 
 # Import interfaces for easy access

@@ -5,11 +5,11 @@ Spores DSL Adapters
 DSL-specific adapters for integrating spores logging with:
 - Hypha (Petri nets)
 - Rhizomorph (Behavior trees)
-- Enoki (State machines)
+- Septum (State machines)
 
 Usage:
     ```python
-    from mycorrhizal.spores.dsl import HyphaAdapter, RhizomorphAdapter, EnokiAdapter
+    from mycorrhizal.spores.dsl import HyphaAdapter, RhizomorphAdapter, SeptumAdapter
 
     # For Hypha (Petri nets)
     hypha_adapter = HyphaAdapter()
@@ -27,11 +27,11 @@ Usage:
     async def check(bb: Blackboard) -> Status:
         return Status.SUCCESS
 
-    # For Enoki (State machines)
-    enoki_adapter = EnokiAdapter()
+    # For Septum (State machines)
+    septum_adapter = SeptumAdapter()
 
-    @enoki.on_state
-    @enoki_adapter.log_state(event_type="state_execute")
+    @septum.on_state
+    @septum_adapter.log_state(event_type="state_execute")
     async def on_state(ctx: SharedContext):
         return Events.DONE
     ```
@@ -39,10 +39,10 @@ Usage:
 
 from .hypha import HyphaAdapter
 from .rhizomorph import RhizomorphAdapter
-from .enoki import EnokiAdapter
+from .septum import SeptumAdapter
 
 __all__ = [
     'HyphaAdapter',
     'RhizomorphAdapter',
-    'EnokiAdapter',
+    'SeptumAdapter',
 ]

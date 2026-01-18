@@ -27,10 +27,10 @@ Behavior Tree examples using the Rhizomorph DSL
 - **`rhizomorph_example.py`** - Comprehensive behavior tree with threat detection
 - **`rhizomorph_interface_demo.py`** - BT with interface-based access control
 
-### [`enoki/`](./enoki/)
-Finite State Machine examples using the Enoki DSL
-- **`enoki_decorator_basic.py`** - Basic decorator-based state machine
-- **`enoki_decorator_timeout.py`** - State machine with timeout handling
+### [`septum/`](./septum/)
+Finite State Machine examples using the Septum DSL
+- **`septum_decorator_basic.py`** - Basic decorator-based state machine
+- **`septum_decorator_timeout.py`** - State machine with timeout handling
 
 ### [`interfaces/`](./interfaces/)
 Interface system examples
@@ -40,7 +40,7 @@ Interface system examples
 Spores event and object logging examples
 - **`hypha_spores_example.py`** - Petri net with OCEL event logging for manufacturing workflow
 - **`rhizomorph_spores_example.py`** - Behavior tree with event logging for threat assessment
-- **`enoki_spores_example.py`** - State machine with lifecycle event logging for traffic light control
+- **`septum_spores_example.py`** - State machine with lifecycle event logging for traffic light control
 
 ## What to Learn From Each Example
 
@@ -48,14 +48,14 @@ Spores event and object logging examples
 |------------------------|---------------|
 | Basic behavior trees | `rhizomorph/rhizomorph_example.py` |
 | Basic Petri nets | `hypha/minimal_hypha_demo.py` |
-| Basic state machines | `enoki/enoki_decorator_basic.py` |
+| Basic state machines | `septum/septum_decorator_basic.py` |
 | Interface basics | `interfaces/interface_dsl_demo.py` |
 | Programmatic Petri nets | `hypha/programmatic_hypha_demo.py` |
 | BT with interfaces | `rhizomorph/rhizomorph_interface_demo.py` |
 | Full Petri net system | `hypha/hypha_demo.py` |
 | Event logging with Hypha | `spores/hypha_spores_example.py` |
 | Event logging with Rhizomorph | `spores/rhizomorph_spores_example.py` |
-| Event logging with Enoki | `spores/enoki_spores_example.py` |
+| Event logging with Septum | `spores/septum_spores_example.py` |
 
 ## Running All Examples
 
@@ -73,8 +73,8 @@ for demo in examples/rhizomorph/*.py; do
     uv run python "$demo"
 done
 
-# Enoki examples
-for demo in examples/enoki/*.py; do
+# Septum examples
+for demo in examples/septum/*.py; do
     echo "Testing $demo"
     uv run python "$demo"
 done

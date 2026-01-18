@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Enoki State Machine with Spores Logging Example
+Septum State Machine with Spores Logging Example
 
-Demonstrates how to use the Spores EnokiAdapter to log events from a state machine.
+Demonstrates how to use the Spores SeptumAdapter to log events from a state machine.
 Shows state execution, lifecycle events, and transition logging.
 """
 
@@ -14,13 +14,13 @@ from pydantic import BaseModel
 from typing import Annotated, Optional
 from enum import Enum, auto
 
-from mycorrhizal.enoki.core import (
-    enoki, StateMachine, StateConfiguration,
+from mycorrhizal.septum.core import (
+    septum, StateMachine, StateConfiguration,
     SharedContext, Again, Unhandled, LabeledTransition,
 )
 from mycorrhizal.common.timebase import WallClock
 from mycorrhizal.spores import configure, spore, EventAttr, ObjectRef, ObjectScope
-from mycorrhizal.spores.dsl import EnokiAdapter
+from mycorrhizal.spores.dsl import SeptumAdapter
 from mycorrhizal.spores.transport import Transport
 
 
@@ -98,17 +98,17 @@ class ConsoleTransport(Transport):
 # State Machine Definition
 # ============================================================================
 
-def create_traffic_light_fsm(adapter: EnokiAdapter):
+def create_traffic_light_fsm(adapter: SeptumAdapter):
     """Create a traffic light state machine with spores logging."""
 
-    @enoki.state(config=StateConfiguration(can_dwell=True))
+    @septum.state(config=StateConfiguration(can_dwell=True))
     def RedState():
         """Red light state - stop all traffic."""
         class Events(Enum):
             ADVANCE = auto()
             EMERGENCY = auto()
 
-        @enoki.on_state
+        @septum.on_state
         @adapter.log_state(
             event_type="red_light_active",
             log_state_name=True,
@@ -135,27 +135,27 @@ def create_traffic_light_fsm(adapter: EnokiAdapter):
 
             return None
 
-        @enoki.on_enter
+        @septum.on_enter
         @adapter.log_state_lifecycle(event_type="state_enter")
         async def on_enter(ctx: SharedContext):
             """Called when entering red state."""
             print("  → Entering RED state")
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             return [
                 LabeledTransition(Events.ADVANCE, GreenState),
                 LabeledTransition(Events.EMERGENCY, GreenState),
             ]
 
-    @enoki.state(config=StateConfiguration(can_dwell=True))
+    @septum.state(config=StateConfiguration(can_dwell=True))
     def YellowState():
         """Yellow light state - prepare to stop."""
 
         class Events(Enum):
             ADVANCE = auto()
 
-        @enoki.on_state
+        @septum.on_state
         @adapter.log_state(event_type="yellow_light_active")
         async def on_state(ctx: SharedContext):
             """
@@ -172,19 +172,19 @@ def create_traffic_light_fsm(adapter: EnokiAdapter):
 
             return None
 
-        @enoki.on_enter
+        @septum.on_enter
         @adapter.log_state_lifecycle(event_type="state_enter")
         async def on_enter(ctx: SharedContext):
             """Called when entering yellow state."""
             print("  → Entering YELLOW state")
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             return [
                 LabeledTransition(Events.ADVANCE, RedState),
             ]
 
-    @enoki.state(config=StateConfiguration(can_dwell=True))
+    @septum.state(config=StateConfiguration(can_dwell=True))
     def GreenState():
         """Green light state - allow traffic flow."""
 
@@ -192,7 +192,7 @@ def create_traffic_light_fsm(adapter: EnokiAdapter):
             ADVANCE = auto()
             FORCE_RED = auto()
 
-        @enoki.on_state
+        @septum.on_state
         @adapter.log_state(event_type="green_light_active")
         async def on_state(ctx: SharedContext):
             """
@@ -214,24 +214,24 @@ def create_traffic_light_fsm(adapter: EnokiAdapter):
 
             return None
 
-        @enoki.on_enter
+        @septum.on_enter
         @adapter.log_state_lifecycle(event_type="state_enter")
         async def on_enter(ctx: SharedContext):
             """Called when entering green state."""
             print("  → Entering GREEN state")
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             return [
                 LabeledTransition(Events.ADVANCE, YellowState),
                 LabeledTransition(Events.FORCE_RED, RedState),
             ]
 
-    @enoki.state()
+    @septum.state()
     def ErrorState():
         """Error state - something went wrong."""
 
-        @enoki.on_state
+        @septum.on_state
         @adapter.log_state(event_type="error_state")
         async def on_state(ctx: SharedContext):
             """Error state handler."""
@@ -250,7 +250,7 @@ async def main():
 
     # Configure spores
     print("=" * 60)
-    print("Enoki State Machine with Spores Logging")
+    print("Septum State Machine with Spores Logging")
     print("=" * 60)
     print()
 
@@ -267,7 +267,7 @@ async def main():
         pass
 
     # Create adapter
-    adapter = EnokiAdapter()
+    adapter = SeptumAdapter()
 
     # Create intersection state
     intersection = Intersection(

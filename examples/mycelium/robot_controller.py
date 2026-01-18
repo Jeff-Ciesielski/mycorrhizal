@@ -19,7 +19,7 @@ import asyncio
 from enum import Enum, auto
 from pydantic import BaseModel
 
-from mycorrhizal.enoki.core import enoki, LabeledTransition, StateConfiguration
+from mycorrhizal.septum.core import septum, LabeledTransition, StateConfiguration
 from mycorrhizal.mycelium import (
     tree,
     Action,
@@ -37,15 +37,15 @@ from mycorrhizal.common.timebase import MonotonicClock
 # ======================================================================================
 
 
-@enoki.state(config=StateConfiguration(can_dwell=True))
+@septum.state(config=StateConfiguration(can_dwell=True))
 def IdleState():
     """Robot is idle, waiting for tasks."""
 
-    @enoki.events
+    @septum.events
     class Events(Enum):
         START = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         # Check if we have tasks and battery
         task_count = ctx.common.get("task_count", 0)
@@ -55,23 +55,23 @@ def IdleState():
             return Events.START
         return None
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.START, ProcessingState),
         ]
 
 
-@enoki.state()
+@septum.state()
 def ProcessingState():
     """Robot is actively processing a task."""
 
-    @enoki.events
+    @septum.events
     class Events(Enum):
         COMPLETE = auto()
         LOW_BATTERY = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         # Check battery BEFORE processing
         battery = ctx.common.get("battery", 100)
@@ -91,7 +91,7 @@ def ProcessingState():
 
         return Events.COMPLETE
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.COMPLETE, IdleState),
@@ -99,15 +99,15 @@ def ProcessingState():
         ]
 
 
-@enoki.state(config=StateConfiguration(can_dwell=True))
+@septum.state(config=StateConfiguration(can_dwell=True))
 def ChargingState():
     """Robot is charging battery."""
 
-    @enoki.events
+    @septum.events
     class Events(Enum):
         CHARGED = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         battery = ctx.common.get("battery", 0)
 
@@ -119,7 +119,7 @@ def ChargingState():
         ctx.common["battery"] = min(100, battery + 30)
         return None
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.CHARGED, IdleState),

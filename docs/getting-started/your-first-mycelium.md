@@ -22,7 +22,7 @@ This demonstrates the core Mycelium pattern: BT provides the decision-making log
 
 ## Step 1: Define Your FSM
 
-First, define the FSM states using Mycelium's mirrored Enoki API. Import from `mycorrhizal.mycelium` for a unified experience:
+First, define the FSM states using Mycelium's mirrored Septum API. Import from `mycorrhizal.mycelium` for a unified experience:
 
 ```python
 from mycorrhizal.mycelium import state, events, on_state, transitions, LabeledTransition

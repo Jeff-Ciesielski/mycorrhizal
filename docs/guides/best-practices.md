@@ -115,14 +115,14 @@ async def consume_item(bb) -> Status:
     return Status.SUCCESS
 ```
 
-## Enoki Best Practices
+## Septum Best Practices
 
 ### Use Timeouts Appropriately
 
 ```python
-@enoki.state(config=StateConfiguration(timeout=30.0))
+@septum.state(config=StateConfiguration(timeout=30.0))
 class WaitingForResponse:
-    @enoki.on_timeout
+    @septum.on_timeout
     async def on_timeout(ctx):
         # Handle timeout gracefully
         ctx.timeout_occurred = True
@@ -134,7 +134,7 @@ class WaitingForResponse:
 **Good**: Explicit transition mapping
 
 ```python
-@enoki.transitions
+@septum.transitions
 def transitions():
     return [
         LabeledTransition(Events.SUCCESS, CompletedState),
@@ -146,14 +146,14 @@ def transitions():
 ### Use on_enter/on_exit for Setup/Teardown
 
 ```python
-@enoki.state
+@septum.state
 class ProcessingState:
-    @enoki.on_enter
+    @septum.on_enter
     async def on_enter(ctx):
         ctx.start_time = time.time()
         ctx.processing = True
 
-    @enoki.on_exit
+    @septum.on_exit
     async def on_exit(ctx):
         ctx.processing = False
         ctx.elapsed = time.time() - ctx.start_time
@@ -289,9 +289,9 @@ class SessionContext(BaseModel):
 **Bad**: State machine doing HTTP and DB
 
 ```python
-@enoki.state
+@septum.state
 class MixedConcernsState:
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         # HTTP call
         response = await http_get(url)
@@ -305,9 +305,9 @@ class MixedConcernsState:
 
 ```python
 # State machine orchestrates
-@enoki.state
+@septum.state
 class OrchestratorState:
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         # Delegates to services
         data = await data_service.fetch(ctx.params)

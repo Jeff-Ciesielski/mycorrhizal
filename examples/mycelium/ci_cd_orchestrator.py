@@ -610,7 +610,7 @@ async def run_deployment(scenario_name: str, bb: DeploymentBlackboard):
     bb.needs_rollback = False
 
     # Create FSM
-    from mycorrhizal.enoki.core import StateMachine
+    from mycorrhizal.septum.core import StateMachine
     from mycorrhizal.rhizomorph.core import Runner as BTRunner
 
     fsm = StateMachine(initial_state=BuildingState, common_data=bb)  # type: ignore[arg-type]

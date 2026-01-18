@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Enoki Testing Utilities
+Septum Testing Utilities
 
-Testing infrastructure for the class-method-based Enoki architecture.
+Testing infrastructure for the class-method-based Septum architecture.
 """
 
 import unittest
@@ -13,8 +13,8 @@ import gevent
 from gevent import sleep
 import traceback
 
-# Import the Enoki modules
-from mycorrhizal.enoki import (
+# Import the Septum modules
+from mycorrhizal.septum import (
     State,
     StateMachine,
     StateConfiguration,
@@ -151,8 +151,8 @@ def simulate_state_lifecycle(
     return results
 
 
-class EnokiTestCase(unittest.TestCase):
-    """Base test case class with assertion methods for Enoki FSM testing."""
+class SeptumTestCase(unittest.TestCase):
+    """Base test case class with assertion methods for Septum FSM testing."""
 
     def assertStateTransition(
         self, state_class, expected_transition, context=None, **context_kwargs
@@ -328,7 +328,7 @@ class EnokiTestCase(unittest.TestCase):
         self.assertIsNotNone(timeout_result, "on_timeout should return a transition")
 
 
-class StateMachineTestCase(EnokiTestCase):
+class StateMachineTestCase(SeptumTestCase):
     """Extended test case for testing full StateMachine behavior."""
 
     def assertFSMTransition(

@@ -15,4 +15,4 @@ This section covers advanced topics and best practices for using Mycorrhizal.
 
 ## DSL-Specific Guides
 
-See the [Enoki](../enoki/), [Hypha](../hypha/), [Rhizomorph](../rhizomorph/), and [Spores](../spores/) sections for DSL-specific documentation.
+See the [Septum](../septum/), [Hypha](../hypha/), [Rhizomorph](../rhizomorph/), and [Spores](../spores/) sections for DSL-specific documentation.

@@ -61,7 +61,7 @@ Usage (DSL Adapters):
 DSL Adapters:
     HyphaAdapter - Log Petri net transitions with token relationships
     RhizomorphAdapter - Log behavior tree node execution with status
-    EnokiAdapter - Log state machine execution and lifecycle events
+    SeptumAdapter - Log state machine execution and lifecycle events
 
 Annotation Types:
     EventAttr - Mark blackboard fields for automatic event attribute extraction (DSL adapters)
@@ -117,7 +117,7 @@ from .transport import SyncTransport, AsyncTransport, Transport, SyncFileTranspo
 from .dsl import (
     HyphaAdapter,
     RhizomorphAdapter,
-    EnokiAdapter,
+    SeptumAdapter,
 )
 
 
@@ -173,5 +173,5 @@ __all__ = [
     # DSL Adapters
     'HyphaAdapter',
     'RhizomorphAdapter',
-    'EnokiAdapter',
+    'SeptumAdapter',
 ]

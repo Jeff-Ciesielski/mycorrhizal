@@ -14,7 +14,7 @@ Mycorrhizal provides four domain-specific languages (DSLs) for modeling and impl
 
 * **Hypha** - Colored Petri nets for workflow modeling and orchestration
 * **Rhizomorph** - Behavior trees for decision-making and control logic
-* **Enoki** - Finite state machines for stateful components
+* **Septum** - Finite state machines for stateful components
 * **Spores** - Event and object logging for observability and process mining
 
 Each DSL can be used independently or combined to build sophisticated systems. All modules share common infrastructure for state management (blackboards) and time abstraction, enabling seamless composition.
@@ -87,22 +87,22 @@ runner = Runner(ProcessingNet, bb=blackboard)
 await runner.start(timebase)
 ```
 
-### Finite State Machine (Enoki)
+### Finite State Machine (Septum)
 
 Build stateful components with FSMs:
 
 ```python
-from mycorrhizal.enoki.core import enoki, StateMachine, LabeledTransition
+from mycorrhizal.septum.core import septum, StateMachine, LabeledTransition
 
-@enoki.state()
+@septum.state()
 def IdleState():
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         if ctx.msg == "start":
             return Events.START
         return None
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.START, ProcessingState),
@@ -147,7 +147,7 @@ The repository contains comprehensive examples:
 
 * `examples/hypha/` - Petri net patterns
 * `examples/rhizomorph/` - Behavior tree patterns
-* `examples/enoki/` - State machine patterns
+* `examples/septum/` - State machine patterns
 * `examples/spores/` - Event logging integration
 * `examples/interfaces/` - Type-safe blackboard access
 

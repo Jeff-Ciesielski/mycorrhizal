@@ -2,18 +2,18 @@
 
 This directory contains examples demonstrating the Mycelium unified orchestration layer for Mycorrhizal.
 
-## Mirrored Enoki API
+## Mirrored Septum API
 
-Mycelium provides a mirrored Enoki API that allows you to import all FSM-related decorators from `mycorrhizal.mycelium` instead of `mycorrhizal.enoki.core`. This provides a unified import experience when working with FSM-BT integration.
+Mycelium provides a mirrored Septum API that allows you to import all FSM-related decorators from `mycorrhizal.mycelium` instead of `mycorrhizal.septum.core`. This provides a unified import experience when working with FSM-BT integration.
 
 **Imports from Mycelium:**
 ```python
 from mycorrhizal.mycelium import (
     # BT decorators
     tree, Action, Condition, Sequence, Selector, Parallel, root,
-    # Mirrored Enoki API
+    # Mirrored Septum API
     state, events, on_state, transitions,
-    # Enoki types
+    # Septum types
     LabeledTransition, StateConfiguration,
     # BT runners
     TreeRunner, TreeInstance,
@@ -23,7 +23,7 @@ from mycorrhizal.rhizomorph.core import bt, Status
 
 ## Unified API Pattern
 
-Mycorrhizal provides a unified API for integrating Enoki FSMs and Rhizomorph behavior trees in both directions:
+Mycorrhizal provides a unified API for integrating Septum FSMs and Rhizomorph behavior trees in both directions:
 
 ### FSM-in-BT: Actions with Integrated FSMs
 
@@ -32,7 +32,7 @@ from mycorrhizal.mycelium import tree, Action, Sequence, root, state, events, tr
 from mycorrhizal.rhizomorph.core import bt, Status
 from enum import Enum, auto
 
-# Define FSM states using mirrored Enoki API
+# Define FSM states using mirrored Septum API
 @state()
 def MyState():
     @events
@@ -149,7 +149,7 @@ uv run python examples/mycelium/ci_cd_orchestrator.py
 
 ## Key Benefits
 
-1. **Mirrored Enoki API** - Import all FSM decorators from `mycorrhizal.mycelium`
+1. **Mirrored Septum API** - Import all FSM decorators from `mycorrhizal.mycelium`
 2. **Bidirectional Integration** - FSM-in-BT and BT-in-FSM patterns both supported
 3. **Explicit Declaration** - Integration declared where it's used via decorator parameters
 4. **No Boilerplate** - No manual registry access or tree-level declarations
@@ -173,7 +173,7 @@ uv run python examples/mycelium/ci_cd_orchestrator.py
 
 ## Naming Conventions
 
-When using the mirrored Enoki API with BT-in-FSM integration, you'll need to import decorators with aliases to avoid naming conflicts:
+When using the mirrored Septum API with BT-in-FSM integration, you'll need to import decorators with aliases to avoid naming conflicts:
 
 ```python
 from mycorrhizal.mycelium import (

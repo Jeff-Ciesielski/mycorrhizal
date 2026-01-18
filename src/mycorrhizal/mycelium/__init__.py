@@ -2,12 +2,12 @@
 """
 Mycelium - Unified Orchestration Layer for Mycorrhizal
 
-Mycelium provides a unified API for composing Enoki FSMs and Rhizomorph behavior trees
+Mycelium provides a unified API for composing Septum FSMs and Rhizomorph behavior trees
 into coherent systems with bidirectional FSM-BT integration.
 
 Key Features:
     - Unified @tree decorator for composing FSMs and BTs
-    - Mirrored Enoki API: @state, @events, @on_state, @transitions (with optional BT integration)
+    - Mirrored Septum API: @state, @events, @on_state, @transitions (with optional BT integration)
     - FSM-integrated actions: @Action(fsm=SomeFSM) for BT-driven FSM control
     - BT-integrated states: @state(bt=SomeBT) for FSM-driven BT control
     - Unified mermaid diagrams showing full system
@@ -17,7 +17,7 @@ Example:
     >>> from mycorrhizal.mycelium import LabeledTransition
     >>> from mycorrhizal.rhizomorph.core import bt, Status
     >>>
-    >>> # Define states using mirrored Enoki API
+    >>> # Define states using mirrored Septum API
     >>> @state()
     >>> def Idle():
     >>>     @events
@@ -91,12 +91,12 @@ from .core import (
     Selector,
     Parallel,
     root,
-    # Mirrored Enoki API
+    # Mirrored Septum API
     state,
     events,
     on_state,
     transitions,
-    # Enoki types for re-export
+    # Septum types for re-export
     LabeledTransition,
     StateConfiguration,
     Push,
@@ -129,13 +129,13 @@ __all__ = [
     "Parallel",
     "root",
 
-    # Mirrored Enoki API
+    # Mirrored Septum API
     "state",
     "events",
     "on_state",
     "transitions",
 
-    # Enoki types
+    # Septum types
     "LabeledTransition",
     "StateConfiguration",
     "Push",

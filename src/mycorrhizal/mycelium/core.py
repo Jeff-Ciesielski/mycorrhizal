@@ -5,7 +5,7 @@ Core Mycelium decorators - @tree, @Action, @Condition, @on_state
 This module provides the main user-facing decorators for creating
 unified Mycelium trees with FSMs and BTs.
 
-It also mirrors the Enoki API (state, events, on_state, transitions) for
+It also mirrors the Septum API (state, events, on_state, transitions) for
 convenience and to support BT integration in FSM states.
 """
 
@@ -20,12 +20,12 @@ __all__ = [
     "Selector",
     "Parallel",
     "root",
-    # Mirrored Enoki API
+    # Mirrored Septum API
     "state",
     "events",
     "on_state",
     "transitions",
-    # Enoki types (re-exported)
+    # Septum types (re-exported)
     "LabeledTransition",
     "StateConfiguration",
     "Push",
@@ -49,14 +49,14 @@ from .exceptions import TreeDefinitionError
 # Re-export BT decorators for convenience
 from ..rhizomorph.core import bt, Status
 
-# Import Enoki decorators for mirroring
+# Import Septum decorators for mirroring
 if TYPE_CHECKING:
-    from ..enoki.core import _EnokiDecoratorAPI as EnokiDecoratorAPI
+    from ..septum.core import _SeptumDecoratorAPI as SeptumDecoratorAPI
 else:
-    from ..enoki.core import _EnokiDecoratorAPI as EnokiDecoratorAPI
+    from ..septum.core import _SeptumDecoratorAPI as SeptumDecoratorAPI
 
-# Import Enoki types for re-export
-from ..enoki.core import (
+# Import Septum types for re-export
+from ..septum.core import (
     LabeledTransition,
     StateConfiguration,
     Push,
@@ -68,8 +68,8 @@ from ..enoki.core import (
     Repeat,
 )
 
-# Create a singleton EnokiDecoratorAPI instance for accessing decorators
-_enoki = EnokiDecoratorAPI()
+# Create a singleton SeptumDecoratorAPI instance for accessing decorators
+_septum = SeptumDecoratorAPI()
 
 
 # ======================================================================================
@@ -389,7 +389,7 @@ def root(func: Callable) -> Callable:
 
 
 # ======================================================================================
-# Mirrored Enoki API - state, events, on_state, transitions
+# Mirrored Septum API - state, events, on_state, transitions
 # ======================================================================================
 
 
@@ -399,7 +399,7 @@ _state_bt_integrations: dict[str, BTIntegration] = {}
 
 def state(bt=None, **kwargs):
     """
-    Decorator to define a state (mirrors @enoki.state).
+    Decorator to define a state (mirrors @septum.state).
 
     Supports optional BT integration via the `bt` parameter.
     When `bt` is provided, the state's on_state handler will automatically
@@ -443,10 +443,10 @@ def state(bt=None, **kwargs):
 
     Args:
         bt: Optional BT tree to integrate into this state
-        **kwargs: Additional arguments passed to enoki.state() (e.g., config)
+        **kwargs: Additional arguments passed to septum.state() (e.g., config)
 
     Returns:
-        State function decorated with enoki.state()
+        State function decorated with septum.state()
     """
     def decorator(func: Callable) -> Callable:
         # Store BT integration metadata if provided
@@ -458,15 +458,15 @@ def state(bt=None, **kwargs):
             )
             _state_bt_integrations[func.__qualname__] = integration
 
-        # Apply enoki.state decorator with additional kwargs
-        return _enoki.state(**kwargs)(func)
+        # Apply septum.state decorator with additional kwargs
+        return _septum.state(**kwargs)(func)
 
     return decorator
 
 
 def events(cls: Type[Enum]) -> Type[Enum]:
     """
-    Decorator to define state events (mirrors @enoki.events).
+    Decorator to define state events (mirrors @septum.events).
 
     Example:
         >>> @state()
@@ -476,14 +476,14 @@ def events(cls: Type[Enum]) -> Type[Enum]:
         >>>         START = auto()
         >>>         STOP = auto()
     """
-    return _enoki.events(cls)
+    return _septum.events(cls)
 
 
 # Make on_state work without bt parameter for standard usage
 # It will check for BT integration from the @state decorator
 def on_state(func: Callable = None, *, bt_tree=None) -> Callable:
     """
-    Decorator for state handlers (mirrors @enoki.on_state).
+    Decorator for state handlers (mirrors @septum.on_state).
 
     When used with @state(bt=SomeBT), this decorator automatically
     wraps the handler to receive the BT result.
@@ -556,17 +556,17 @@ def on_state(func: Callable = None, *, bt_tree=None) -> Callable:
                 # Call the original function with BT result
                 return await f(ctx, bt_result, *args, **kwargs)
 
-            # Mark as enoki on_state for validation (use func itself, not True)
-            wrapped._enoki_on_state = wrapped
+            # Mark as septum on_state for validation (use func itself, not True)
+            wrapped._septum_on_state = wrapped
 
             # Add to tracking stack if available
-            if _enoki._tracking_stack:
-                _enoki._tracking_stack[-1].append((f.__name__, wrapped))
+            if _septum._tracking_stack:
+                _septum._tracking_stack[-1].append((f.__name__, wrapped))
 
             return wrapped
         else:
-            # No BT integration - just use enoki.on_state
-            return _enoki.on_state(f)
+            # No BT integration - just use septum.on_state
+            return _septum.on_state(f)
 
     # Support both @on_state and @on_state(bt_tree=...) syntax
     if func is None:
@@ -589,7 +589,7 @@ def on_state(func: Callable = None, *, bt_tree=None) -> Callable:
 
 def transitions(func: Callable) -> Callable:
     """
-    Decorator to define state transitions (mirrors @enoki.transitions).
+    Decorator to define state transitions (mirrors @septum.transitions).
 
     Example:
         >>> @state()
@@ -598,4 +598,4 @@ def transitions(func: Callable) -> Callable:
         >>>     def transitions():
         >>>         return [LabeledTransition(Events.DONE, OtherState)]
     """
-    return _enoki.transitions(func)
+    return _septum.transitions(func)

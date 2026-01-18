@@ -1,14 +1,14 @@
-# Enoki Transition Types - Complete Reference
+# Septum Transition Types - Complete Reference
 
-This document provides a comprehensive reference for all transition types in the Enoki FSM system.
+This document provides a comprehensive reference for all transition types in the Septum FSM system.
 
 ## Overview
 
-In Enoki, state transitions determine how the state machine moves between states. Each transition type has specific semantics for lifecycle methods (`on_enter`, `on_leave`, `on_state`) and return values that control execution flow.
+In Septum, state transitions determine how the state machine moves between states. Each transition type has specific semantics for lifecycle methods (`on_enter`, `on_leave`, `on_state`) and return values that control execution flow.
 
 ## Return Value Meaning
 
-In the original enoki implementation, `_process_transition` returns a boolean:
+In the original implementation, `_process_transition` returns a boolean:
 - **True**: Check the queue (continue the loop to wait for/process next message)
 - **False**: Don't check queue (stop the loop, return to caller)
 
@@ -226,16 +226,16 @@ return False
 ### Basic State Transition
 
 ```python
-@enoki.state
+@septum.state
 def StateA():
     class Events(Enum):
         GO_TO_B = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         return Events.GO_TO_B
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.GO_TO_B, StateB),
@@ -245,14 +245,14 @@ def StateA():
 ### Retry with Counter
 
 ```python
-@enoki.state(config=StateConfiguration(max_retries=3))
+@septum.state(config=StateConfiguration(max_retries=3))
 def AttemptOperation():
     class Events(Enum):
         SUCCESS = auto()
         RETRY = auto()
         FAIL = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         try:
             # Attempt operation
@@ -264,13 +264,13 @@ def AttemptOperation():
             else:
                 return Events.FAIL
 
-    @enoki.on_fail
+    @septum.on_fail
     async def on_fail(ctx):
         # Called when retries exceeded
         logger.error("Operation failed after retries")
         return StateShutdown
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.SUCCESS, NextState),
@@ -282,18 +282,18 @@ def AttemptOperation():
 ### Push/Pop for Sub-states
 
 ```python
-@enoki.state
+@septum.state
 def MainMenu():
     class Events(Enum):
         START_SETTINGS = auto()
         EXIT = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         # Push SettingsMenu state
         return Push(SettingsMenu)
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.START_SETTINGS, Push(SettingsMenu)),
@@ -314,22 +314,22 @@ def MainMenu():
 ### Pattern 1: Timeout with Retry
 
 ```python
-@enoki.state(config=StateConfiguration(timeout=5.0, max_retries=3))
+@septum.state(config=StateConfiguration(timeout=5.0, max_retries=3))
 def WaitForResponse():
     class Events(Enum):
         RECEIVED = auto()
         TIMEOUT = auto()
 
-    @enoki.on_timeout
+    @septum.on_timeout
     async def on_timeout(ctx):
         return Events.TIMEOUT
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         # Wait for response message
         return Events.RECEIVED
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.RECEIVED, ProcessResponse),
@@ -340,14 +340,14 @@ def WaitForResponse():
 ### Pattern 2: Hierarchical Menu
 
 ```python
-@enoki.state
+@septum.state
 def MainMenu():
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         # Show menu options
         return Events.SHOW_SETTINGS
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.SHOW_SETTINGS, Push(SettingsMenu)),
@@ -358,12 +358,12 @@ def MainMenu():
 ### Pattern 3: Error Recovery with Restart
 
 ```python
-@enoki.state
+@septum.state
 def ProcessingState():
     class Events(Enum):
         ERROR = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         try:
             await process()
@@ -371,7 +371,7 @@ def ProcessingState():
         except Exception:
             return Events.ERROR
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.ERROR, Restart),
@@ -380,6 +380,6 @@ def ProcessingState():
 
 ## References
 
-- Original Enoki library documentation
+- Septum library documentation
 - State machine design patterns
 - Asyncio best practices

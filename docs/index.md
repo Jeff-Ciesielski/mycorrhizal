@@ -16,18 +16,18 @@ uv pip install mycorrhizal
 
 ## The Four DSLs
 
-### 🔀 Enoki - Finite State Machines
+### 🔀 Septum - Finite State Machines
 
 Asyncio-friendly FSM framework with decorator-based state definitions, timeout handling, and hierarchical composition.
 
 **Best for**: State-driven systems, protocols, workflows with clear states
 
 ```python
-from mycorrhizal.enoki import enoki, StateMachine
+from mycorrhizal.septum import septum, StateMachine
 
-@enoki.state(config=StateConfiguration(timeout=5.0))
+@septum.state(config=StateConfiguration(timeout=5.0))
 def ProcessingState():
-    @enoki.on_state
+    @septum.on_state
     async def process(ctx):
         return ProcessingState.Events.COMPLETE
 
@@ -36,7 +36,7 @@ await fsm.initialize()
 await fsm.run()
 ```
 
-**[Learn more →](enoki/index.md)**
+**[Learn more →](septum/index.md)**
 
 ### 🔗 Hypha - Petri Nets
 
@@ -121,7 +121,7 @@ All four DSLs are built on common abstractions:
 
 | Need | Use This DSL |
 |------|---------------|
-| State machines with timeouts and transitions | **Enoki** |
+| State machines with timeouts and transitions | **Septum** |
 | Workflow orchestration with parallel tasks | **Hypha** |
 | Decision-making and reactive behavior | **Rhizomorph** |
 | Event logging and observability | **Spores** |
@@ -177,7 +177,7 @@ uv pip install -e ".[dev]"
 New to Mycorrhizal? Start with our tutorials:
 
 1. [Installation](getting-started/installation.md)
-2. [Your First Enoki FSM](getting-started/your-first-enoki.md)
+2. [Your First Septum FSM](getting-started/your-first-septum.md)
 3. [Your First Hypha Petri Net](getting-started/your-first-hypha.md)
 4. [Your First Rhizomorph BT](getting-started/your-first-rhizomorph.md)
 5. [Your First Spores Logger](getting-started/your-first-spores.md)
@@ -186,14 +186,14 @@ New to Mycorrhizal? Start with our tutorials:
 
 The [examples/](https://github.com/Jeff-Ciesielski/mycorrhizal/tree/main/examples) directory contains working examples for each DSL:
 
-- [`examples/enoki/`](https://github.com/Jeff-Ciesielski/mycorrhizal/tree/main/examples/enoki) - FSM examples
+- [`examples/septum/`](https://github.com/Jeff-Ciesielski/mycorrhizal/tree/main/examples/septum) - FSM examples
 - [`examples/hypha/`](https://github.com/Jeff-Ciesielski/mycorrhizal/tree/main/examples/hypha) - Petri net examples
 - [`examples/rhizomorph/`](https://github.com/Jeff-Ciesielski/mycorrhizal/tree/main/examples/rhizomorph) - Behavior tree examples
 - [`examples/spores/`](https://github.com/Jeff-Ciesielski/mycorrhizal/tree/main/examples/spores) - Logging examples
 
 Run any example:
 ```bash
-uv run python examples/enoki/enoki_decorator_basic.py
+uv run python examples/septum/septum_decorator_basic.py
 ```
 
 ## Documentation

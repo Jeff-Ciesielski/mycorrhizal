@@ -1,75 +1,75 @@
-# Your First Enoki FSM
+# Your First Septum FSM
 
-This tutorial will walk you through creating a simple Finite State Machine (FSM) using Enoki.
+This tutorial will walk you through creating a simple Finite State Machine (FSM) using Septum.
 
 ## What You'll Build
 
 You'll create a simple traffic light controller with three states: Red, Yellow, and Green.
 
-## Step 1: Import Enoki
+## Step 1: Import Septum
 
 ```python
-from mycorrhizal.enoki.core import enoki, StateMachine
+from mycorrhizal.septum.core import septum, StateMachine
 from enum import Enum, auto
 ```
 
 ## Step 2: Define Your States
 
 ```python
-@enoki.state
+@septum.state
 class RedState:
     class Events(Enum):
         TIMER = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         print("🔴 Red light - Stop!")
         await asyncio.sleep(2)  # Wait 2 seconds
         return RedState.Events.TIMER
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
-        from mycorrhizal.enoki.core import LabeledTransition
+        from mycorrhizal.septum.core import LabeledTransition
         return [
             LabeledTransition(RedState.Events.TIMER, GreenState),
         ]
 ```
 
 ```python
-@enoki.state
+@septum.state
 class GreenState:
     class Events(Enum):
         TIMER = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         print("🟢 Green light - Go!")
         await asyncio.sleep(2)
         return GreenState.Events.TIMER
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
-        from mycorrhizal.enoki.core import LabeledTransition
+        from mycorrhizal.septum.core import LabeledTransition
         return [
             LabeledTransition(GreenState.Events.TIMER, YellowState),
         ]
 ```
 
 ```python
-@enoki.state
+@septum.state
 class YellowState:
     class Events(Enum):
         TIMER = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         print("🟡 Yellow light - Caution!")
         await asyncio.sleep(1)
         return YellowState.Events.TIMER
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
-        from mycorrhizal.enoki.core import LabeledTransition
+        from mycorrhizal.septum.core import LabeledTransition
         return [
             LabeledTransition(YellowState.Events.TIMER, RedState),
         ]
@@ -77,7 +77,7 @@ class YellowState:
 
 ## Step 3: Visualize Your FSM (Before Running!)
 
-One of Enoki's powerful features is the ability to **visualize your state machine before execution**. This helps you verify the structure and catch errors early:
+One of Septum's powerful features is the ability to **visualize your state machine before execution**. This helps you verify the structure and catch errors early:
 
 ```python
 # Create the FSM
@@ -141,11 +141,11 @@ asyncio.run(main())
 
 See the full example in the repository:
 ```bash
-python examples/enoki_decorator_basic.py
+python examples/septum_decorator_basic.py
 ```
 
 ## Next Steps
 
-- Learn about [transitions](../../api/enoki.md) in the API reference
+- Learn about [transitions](../../api/septum.md) in the API reference
 - Understand [timebases](../guides/timebases.md) for timing control
 - Explore [state hierarchies](../guides/composition.md) with push/pop

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple tests for Enoki state machine interface integration
+Simple tests for Septum state machine interface integration
 """
 
 import sys
@@ -12,8 +12,8 @@ from enum import Enum, auto
 from typing import Annotated
 from pydantic import BaseModel
 
-from mycorrhizal.enoki.core import (
-    enoki,
+from mycorrhizal.septum.core import (
+    septum,
     StateMachine,
     StateConfiguration,
     SharedContext,
@@ -47,15 +47,15 @@ class TestInterface:
 # Tests
 # ============================================================================
 
-def test_enoki_interface_integration():
+def test_septum_interface_integration():
     """Test basic interface integration with state machine"""
-    @enoki.state()
+    @septum.state()
     def ProcessingState():
         class T(Enum):
             CONTINUE = auto()
             DONE = auto()
 
-        @enoki.on_state
+        @septum.on_state
         async def on_state(ctx: SharedContext[TestInterface]):
             # Can read readonly
             assert ctx.common.max_steps == 10
@@ -67,20 +67,20 @@ def test_enoki_interface_integration():
                 return T.DONE
             return T.CONTINUE
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             return [
                 LabeledTransition(T.CONTINUE, Again),
                 LabeledTransition(T.DONE, TerminalState),
             ]
 
-    @enoki.state(config=StateConfiguration(terminal=True))
+    @septum.state(config=StateConfiguration(terminal=True))
     def TerminalState():
-        @enoki.on_state
+        @septum.on_state
         async def on_state(ctx: SharedContext[TestInterface]):
             pass
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             return []
 
@@ -100,14 +100,14 @@ def test_enoki_interface_integration():
     assert bb.max_steps == 10
 
 
-def test_enoki_readonly_enforcement():
+def test_septum_readonly_enforcement():
     """Test that readonly fields are protected"""
-    @enoki.state()
+    @septum.state()
     def TestState():
         class T(Enum):
             DONE = auto()
 
-        @enoki.on_state
+        @septum.on_state
         async def on_state(ctx: SharedContext[TestInterface]):
             try:
                 ctx.common.max_steps = 999  # Should fail
@@ -116,17 +116,17 @@ def test_enoki_readonly_enforcement():
                 pass
             return T.DONE
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             return [LabeledTransition(T.DONE, TerminalState)]
 
-    @enoki.state(config=StateConfiguration(terminal=True))
+    @septum.state(config=StateConfiguration(terminal=True))
     def TerminalState():
-        @enoki.on_state
+        @septum.on_state
         async def on_state(ctx: SharedContext[TestInterface]):
             pass
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             return []
 
@@ -145,14 +145,14 @@ def test_enoki_readonly_enforcement():
     assert bb.max_steps == 10  # Unchanged
 
 
-def test_enoki_backward_compatibility():
+def test_septum_backward_compatibility():
     """Test that code without interfaces still works"""
-    @enoki.state()
+    @septum.state()
     def TestState():
         class T(Enum):
             DONE = auto()
 
-        @enoki.on_state
+        @septum.on_state
         async def on_state(ctx: SharedContext):
             # Full access without interface
             ctx.common.steps_taken = 5
@@ -160,17 +160,17 @@ def test_enoki_backward_compatibility():
             ctx.common.secret = "accessed"
             return T.DONE
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             return [LabeledTransition(T.DONE, TerminalState)]
 
-    @enoki.state(config=StateConfiguration(terminal=True))
+    @septum.state(config=StateConfiguration(terminal=True))
     def TerminalState():
-        @enoki.on_state
+        @septum.on_state
         async def on_state(ctx: SharedContext):
             pass
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             return []
 
@@ -191,14 +191,14 @@ def test_enoki_backward_compatibility():
     assert bb.secret == "accessed"
 
 
-def test_enoki_unspecified_field_inaccessible():
+def test_septum_unspecified_field_inaccessible():
     """Test that fields not in interface are inaccessible"""
-    @enoki.state()
+    @septum.state()
     def TestState():
         class T(Enum):
             DONE = auto()
 
-        @enoki.on_state
+        @septum.on_state
         async def on_state(ctx: SharedContext[TestInterface]):
             try:
                 _ = ctx.common.secret  # Should fail
@@ -207,17 +207,17 @@ def test_enoki_unspecified_field_inaccessible():
                 pass
             return T.DONE
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             return [LabeledTransition(T.DONE, TerminalState)]
 
-    @enoki.state(config=StateConfiguration(terminal=True))
+    @septum.state(config=StateConfiguration(terminal=True))
     def TerminalState():
-        @enoki.on_state
+        @septum.on_state
         async def on_state(ctx: SharedContext[TestInterface]):
             pass
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             return []
 
@@ -235,18 +235,18 @@ def test_enoki_unspecified_field_inaccessible():
 
 
 if __name__ == "__main__":
-    print("Testing Enoki interface integration...")
+    print("Testing Septum interface integration...")
 
-    test_enoki_interface_integration()
+    test_septum_interface_integration()
     print("✓ Interface integration test passed")
 
-    test_enoki_readonly_enforcement()
+    test_septum_readonly_enforcement()
     print("✓ Readonly enforcement test passed")
 
-    test_enoki_backward_compatibility()
+    test_septum_backward_compatibility()
     print("✓ Backward compatibility test passed")
 
-    test_enoki_unspecified_field_inaccessible()
+    test_septum_unspecified_field_inaccessible()
     print("✓ Unspecified field test passed")
 
     print("\nAll tests passed!")

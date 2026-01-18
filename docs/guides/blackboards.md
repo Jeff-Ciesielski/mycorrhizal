@@ -47,14 +47,14 @@ class GameAI:
         return Status.SUCCESS
 ```
 
-### Using in Enoki (State Machines)
+### Using in Septum (State Machines)
 
 ```python
-from mycorrhizal.enoki.core import enoki, StateMachine
+from mycorrhizal.septum.core import septum, StateMachine
 
-@enoki.state
+@septum.state
 class GameState:
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: GameContext):
         if ctx.player_health <= 0:
             print("Game Over")
@@ -331,7 +331,7 @@ is_valid = validate_implements(TaskBlackboard, TaskInterface)
 
 ## DSL Integration with Interfaces
 
-All three DSLs (Hypha, Rhizomorph, Enoki) support interfaces through their runners.
+All three DSLs (Hypha, Rhizomorph, Septum) support interfaces through their runners.
 
 ### Rhizomorph (Behavior Trees)
 
@@ -361,17 +361,17 @@ class GameAI:
 runner = BTRunner(tree=GameAI, blackboard=game_view)
 ```
 
-### Enoki (State Machines)
+### Septum (State Machines)
 
 ```python
-from mycorrhizal.enoki.core import StateMachine, enoki
+from mycorrhizal.septum.core import StateMachine, septum
 
 # Create view
 game_view = create_view_from_protocol(bb, GameInterface, {'max_health'})
 
-@enoki.state
+@septum.state
 class PlayingState:
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: GameInterface):  # Interface type hint
         if ctx.current_health <= 0:
             print("Game Over")

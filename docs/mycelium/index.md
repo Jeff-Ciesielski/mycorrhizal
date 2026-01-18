@@ -1,6 +1,6 @@
 # Mycelium
 
-Mycelium is the unified orchestration layer for Mycorrhizal that enables seamless interoperability between finite state machines (Enoki), behavior trees (Rhizomorph), and Petri nets (Hypha). With Mycelium, you can nest these systems arbitrarily to build sophisticated, event-driven architectures.
+Mycelium is the unified orchestration layer for Mycorrhizal that enables seamless interoperability between finite state machines (Septum), behavior trees (Rhizomorph), and Petri nets (Hypha). With Mycelium, you can nest these systems arbitrarily to build sophisticated, event-driven architectures.
 
 ## What is Mycelium?
 
@@ -14,13 +14,13 @@ Mycelium provides:
 
 ### The Leaf Node Concept
 
-Vanilla Enoki FSMs, Rhizomorph behavior trees, and Hypha Petri nets serve as "leaf nodes" in the Mycelium system. You maintain a library of interesting FSMs/BTs/PNs (a "model zoo"), then integrate them into Mycelium using wrapper patterns:
+Vanilla Septum FSMs, Rhizomorph behavior trees, and Hypha Petri nets serve as "leaf nodes" in the Mycelium system. You maintain a library of interesting FSMs/BTs/PNs (a "model zoo"), then integrate them into Mycelium using wrapper patterns:
 
 ```mermaid
 %%{init: {'theme':'base'}}%%
 flowchart LR
     subgraph Vanilla["Vanilla Modules (Leaf Nodes)"]
-        FSM[Enoki FSMs]
+        FSM[Septum FSMs]
         BT[Rhizomorph BTs]
         PN[Hypha Petri Nets]
     end
@@ -41,7 +41,7 @@ flowchart LR
     style Diagram fill:#fff3e0,stroke:#ff9800
 ```
 
-**Key principle:** Once you're inside the Mycelium layer, stay in Mycelium for further nesting. Don't wrap a Mycelium-integrated FSM back into vanilla Enoki - just add more Mycelium integration.
+**Key principle:** Once you're inside the Mycelium layer, stay in Mycelium for further nesting. Don't wrap a Mycelium-integrated FSM back into vanilla Septum - just add more Mycelium integration.
 
 ## Why Mycelium?
 
@@ -98,7 +98,7 @@ from mycorrhizal.rhizomorph.core import bt, Status
 from enum import Enum, auto
 from pydantic import BaseModel
 
-# Define FSM states using mirrored Enoki API
+# Define FSM states using mirrored Septum API
 @state()
 def IdleState():
     @events

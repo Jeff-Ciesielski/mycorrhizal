@@ -8,8 +8,8 @@ import asyncio
 from enum import Enum, auto
 import pytest
 
-from mycorrhizal.enoki.core import (
-    enoki,
+from mycorrhizal.septum.core import (
+    septum,
     StateConfiguration,
     SharedContext,
     Again,
@@ -28,28 +28,28 @@ from mycorrhizal.enoki.core import (
 # Test States
 # ============================================================================
 
-@enoki.state()
+@septum.state()
 def StartState():
     """Starting state"""
 
-    @enoki.events
+    @septum.events
     class Events(Enum):
         GO = auto()
         FINISH = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         return Events.GO
 
-    @enoki.on_enter
+    @septum.on_enter
     async def on_enter(ctx: SharedContext):
         ctx.common['enter_count'] = ctx.common.get('enter_count', 0) + 1
 
-    @enoki.on_leave
+    @septum.on_leave
     async def on_leave(ctx: SharedContext):
         ctx.common['leave_count'] = ctx.common.get('leave_count', 0) + 1
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.GO, MiddleState),
@@ -57,16 +57,16 @@ def StartState():
         ]
 
 
-@enoki.state()
+@septum.state()
 def MiddleState():
     """Middle state that can loop"""
 
-    @enoki.events
+    @septum.events
     class Events(Enum):
         CONTINUE = auto()
         END = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         # Continue based on common data
         count = ctx.common.get('count', 0)
@@ -75,7 +75,7 @@ def MiddleState():
             return Events.CONTINUE
         return Events.END
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.CONTINUE, Again),
@@ -83,15 +83,15 @@ def MiddleState():
         ]
 
 
-@enoki.state(config=StateConfiguration(terminal=True))
+@septum.state(config=StateConfiguration(terminal=True))
 def EndState():
     """Terminal state"""
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         pass
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return []
 
@@ -108,14 +108,14 @@ async def test_statemachine_basic_execution():
     fsm = StateMachine(initial_state=StartState, common_data=common)
 
     await fsm.initialize()
-    assert fsm.current_state.name == "tests.enoki.test_state_machine.StartState"
+    assert fsm.current_state.name == "tests.septum.test_state_machine.StartState"
 
     # Run to completion - should raise StateMachineComplete
     with pytest.raises(StateMachineComplete):
         await fsm.run(timeout=0.1)
 
     # Should be in terminal state
-    assert fsm.current_state.name == "tests.enoki.test_state_machine.EndState"
+    assert fsm.current_state.name == "tests.septum.test_state_machine.EndState"
     assert fsm.current_state.config.terminal is True
 
 
@@ -150,14 +150,14 @@ async def test_statemachine_tick_by_tick():
         await fsm.tick(timeout=0)
     except StateMachineComplete:
         pass
-    assert fsm.current_state.name == "tests.enoki.test_state_machine.MiddleState"
+    assert fsm.current_state.name == "tests.septum.test_state_machine.MiddleState"
 
     # Second tick: MiddleState loops with Again (count=0 -> 1)
     try:
         await fsm.tick(timeout=0)
     except StateMachineComplete:
         pass
-    assert fsm.current_state.name == "tests.enoki.test_state_machine.MiddleState"
+    assert fsm.current_state.name == "tests.septum.test_state_machine.MiddleState"
     assert common['count'] == 1
 
     # Third tick: MiddleState loops with Again (count=1 -> 2)
@@ -165,7 +165,7 @@ async def test_statemachine_tick_by_tick():
         await fsm.tick(timeout=0)
     except StateMachineComplete:
         pass
-    assert fsm.current_state.name == "tests.enoki.test_state_machine.MiddleState"
+    assert fsm.current_state.name == "tests.septum.test_state_machine.MiddleState"
     assert common['count'] == 2
 
     # Fourth tick: MiddleState -> EndState
@@ -173,7 +173,7 @@ async def test_statemachine_tick_by_tick():
         await fsm.tick(timeout=0)
     except StateMachineComplete:
         pass
-    assert fsm.current_state.name == "tests.enoki.test_state_machine.EndState"
+    assert fsm.current_state.name == "tests.septum.test_state_machine.EndState"
 
 
 # ============================================================================
@@ -181,15 +181,15 @@ async def test_statemachine_tick_by_tick():
 # ============================================================================
 
 
-@enoki.state()
+@septum.state()
 def AgainTestState():
     """Test state that returns Again"""
 
-    @enoki.events
+    @septum.events
     class Events(Enum):
         GO = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         count = ctx.common.get('again_count', 0)
         if count < 3:
@@ -198,7 +198,7 @@ def AgainTestState():
             return Events.GO
         return Events.GO
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.GO, Again),  # Loops back with Again
@@ -212,7 +212,7 @@ async def test_statemachine_again_transition():
     fsm = StateMachine(initial_state=AgainTestState, common_data=common)
 
     await fsm.initialize()
-    assert fsm.current_state.name == "tests.enoki.test_state_machine.AgainTestState"
+    assert fsm.current_state.name == "tests.septum.test_state_machine.AgainTestState"
 
     # Execute multiple ticks - should stay in same state until count reaches 3
     for i in range(5):
@@ -222,22 +222,22 @@ async def test_statemachine_again_transition():
             pass
 
         if common.get('again_count', 0) < 3:
-            assert fsm.current_state.name == "tests.enoki.test_state_machine.AgainTestState"
+            assert fsm.current_state.name == "tests.septum.test_state_machine.AgainTestState"
         else:
             # After 3 Again transitions, should have processed
             break
 
 
-@enoki.state()
+@septum.state()
 def RetryState():
     """State that tests retry logic"""
 
-    @enoki.events
+    @septum.events
     class Events(Enum):
         FAIL = auto()
         SUCCEED = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         count = ctx.common.get('retry_attempts', 0)
         if count < 2:
@@ -245,13 +245,13 @@ def RetryState():
             return Events.FAIL
         return Events.SUCCEED
 
-    @enoki.on_fail
+    @septum.on_fail
     async def on_fail(ctx: SharedContext):
         # on_fail is called when retries are exhausted
         ctx.common['failed'] = True
         return EndState
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.FAIL, RetryState),
@@ -278,7 +278,7 @@ async def test_statemachine_retry_logic():
         pass
 
     # Should have reached EndState
-    assert fsm.current_state.name == "tests.enoki.test_state_machine.EndState"
+    assert fsm.current_state.name == "tests.septum.test_state_machine.EndState"
     # Should have retried
     assert common.get('retry_attempts') == 2
 
@@ -288,38 +288,38 @@ async def test_statemachine_retry_logic():
 # ============================================================================
 
 
-@enoki.state()
+@septum.state()
 def PushTestState():
     """State that pushes other states"""
 
-    @enoki.events
+    @septum.events
     class Events(Enum):
         PUSH = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         return Events.PUSH
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.PUSH, Push(MiddleState, EndState)),
         ]
 
 
-@enoki.state()
+@septum.state()
 def PopTestState():
     """State that pops back to previous"""
 
-    @enoki.events
+    @septum.events
     class Events(Enum):
         POP = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         return Events.POP
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.POP, Pop),
@@ -343,8 +343,8 @@ async def test_statemachine_push_transition():
 
     # Should be in MiddleState or EndState
     assert fsm.current_state.name in [
-        "tests.enoki.test_state_machine.MiddleState",
-        "tests.enoki.test_state_machine.EndState"
+        "tests.septum.test_state_machine.MiddleState",
+        "tests.septum.test_state_machine.EndState"
     ]
 
 
@@ -352,17 +352,17 @@ async def test_statemachine_push_transition():
 async def test_statemachine_pop_transition():
     """Test Pop transition returns to stacked state"""
     # Use a sequence: Start -> Push -> Middle -> Pop -> End
-    @enoki.state()
+    @septum.state()
     def StartForPop():
-        @enoki.events
+        @septum.events
         class Events(Enum):
             GO = auto()
 
-        @enoki.on_state
+        @septum.on_state
         async def on_state(ctx: SharedContext):
             return Events.GO
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             return [
                 LabeledTransition(Events.GO, Push(MiddleState, EndState)),
@@ -378,7 +378,7 @@ async def test_statemachine_pop_transition():
         await fsm.tick(timeout=0)
     except StateMachineComplete:
         pass
-    assert fsm.current_state.name == "tests.enoki.test_state_machine.MiddleState"
+    assert fsm.current_state.name == "tests.septum.test_state_machine.MiddleState"
     assert len(fsm.state_stack) == 1
 
     # Second tick: MiddleState -> EndState (because count=2)
@@ -386,7 +386,7 @@ async def test_statemachine_pop_transition():
         await fsm.tick(timeout=0)
     except StateMachineComplete:
         pass
-    assert fsm.current_state.name == "tests.enoki.test_state_machine.EndState"
+    assert fsm.current_state.name == "tests.septum.test_state_machine.EndState"
 
 
 @pytest.mark.asyncio
@@ -407,15 +407,15 @@ async def test_statemachine_pop_from_empty_stack():
 # ============================================================================
 
 
-@enoki.state(config=StateConfiguration(timeout=0.1))
+@septum.state(config=StateConfiguration(timeout=0.1))
 def TimeoutTestState():
     """State with timeout"""
 
-    @enoki.events
+    @septum.events
     class Events(Enum):
         GO = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         # State has a timeout, so it waits for messages
         # If no message, return None to wait (timeout will trigger if no message arrives)
@@ -423,12 +423,12 @@ def TimeoutTestState():
             return None
         return Events.GO
 
-    @enoki.on_timeout
+    @septum.on_timeout
     async def on_timeout(ctx: SharedContext):
         ctx.common['timed_out'] = True
         return EndState
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.GO, EndState),
@@ -454,7 +454,7 @@ async def test_statemachine_timeout_handling():
 
     # Should have timed out and transitioned to EndState
     assert common.get('timed_out') is True
-    assert fsm.current_state.name == "tests.enoki.test_state_machine.EndState"
+    assert fsm.current_state.name == "tests.septum.test_state_machine.EndState"
 
 
 # ============================================================================
@@ -462,15 +462,15 @@ async def test_statemachine_timeout_handling():
 # ============================================================================
 
 
-@enoki.state()
+@septum.state()
 def ErrorState():
     """Error state"""
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         ctx.common['in_error_state'] = True
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return []
 
@@ -478,13 +478,13 @@ def ErrorState():
 @pytest.mark.asyncio
 async def test_statemachine_error_state():
     """Test that error state is used when exception occurs"""
-    @enoki.state()
+    @septum.state()
     def FailingState():
-        @enoki.on_state
+        @septum.on_state
         async def on_state(ctx: SharedContext):
             raise ValueError("Intentional error")
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             return []
 
@@ -506,8 +506,8 @@ async def test_statemachine_error_state():
 
     # Should be in error state or FailingState
     assert fsm.current_state.name in [
-        "tests.enoki.test_state_machine.ErrorState",
-        "tests.enoki.test_state_machine.FailingState"
+        "tests.septum.test_state_machine.ErrorState",
+        "tests.septum.test_state_machine.FailingState"
     ]
 
 
@@ -520,10 +520,10 @@ def test_statemachine_validates_on_construction():
     """Test that StateMachine validates states on construction"""
     # The decorator itself validates, so this test just confirms that behavior
     with pytest.raises(ValueError, match="must have an @on_state"):
-        @enoki.state()
+        @septum.state()
         def InvalidState():
             # Missing on_state - should fail at decoration time
-            @enoki.transitions
+            @septum.transitions
             def transitions():
                 return []
 
@@ -531,17 +531,17 @@ def test_statemachine_validates_on_construction():
 def test_statemachine_validates_transitions():
     """Test that StateMachine validates transitions"""
 
-    @enoki.state()
+    @septum.state()
     def InvalidTransitionState():
-        @enoki.events
+        @septum.events
         class Events(Enum):
             GO = auto()
 
-        @enoki.on_state
+        @septum.on_state
         async def on_state(ctx: SharedContext):
             return Events.GO
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             # Reference to non-existent state using StateRef
             return [
@@ -549,7 +549,7 @@ def test_statemachine_validates_transitions():
             ]
 
     # Should fail validation during StateMachine construction
-    from mycorrhizal.enoki.core import ValidationError
+    from mycorrhizal.septum.core import ValidationError
     with pytest.raises(ValidationError, match="not found in registry"):
         StateMachine(initial_state=InvalidTransitionState)
 
@@ -579,21 +579,21 @@ async def test_statemachine_complete_exception():
 # ============================================================================
 
 
-@enoki.state(config=StateConfiguration(can_dwell=True))
+@septum.state(config=StateConfiguration(can_dwell=True))
 def MessageTestState():
     """State that waits for messages"""
 
-    @enoki.events
+    @septum.events
     class Events(Enum):
         PROCESS = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         if ctx.msg == "finish":
             return Events.PROCESS
         # Return None to wait for message
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.PROCESS, EndState),
@@ -618,4 +618,4 @@ async def test_statemachine_message_passing():
         pass
 
     # Should have transitioned to EndState
-    assert fsm.current_state.name == "tests.enoki.test_state_machine.EndState"
+    assert fsm.current_state.name == "tests.septum.test_state_machine.EndState"

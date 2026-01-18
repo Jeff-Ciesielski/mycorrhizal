@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Enoki Timeout Example
+Septum Timeout Example
 
 This example demonstrates how to use timeouts with states.
 A state with a timeout will call on_timeout if no message is
@@ -8,8 +8,8 @@ received within the specified time period.
 """
 
 import asyncio
-from mycorrhizal.enoki.core import (
-    enoki,
+from mycorrhizal.septum.core import (
+    septum,
     StateMachine,
     StateConfiguration,
     SharedContext,
@@ -23,7 +23,7 @@ from enum import Enum, auto
 # Define States with Timeouts
 # ============================================================================
 
-@enoki.state(config=StateConfiguration(timeout=2.0))
+@septum.state(config=StateConfiguration(timeout=2.0))
 def AwaitingResponseState():
     """
     Wait for a response with a 2-second timeout.
@@ -34,11 +34,11 @@ def AwaitingResponseState():
         RESPONSE = auto()
         TIMEOUT = auto()
 
-    @enoki.on_enter
+    @septum.on_enter
     async def on_enter(ctx: SharedContext):
         print("AwaitingResponse: Request sent, waiting for response...")
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         # If we have a message, process it
         if ctx.msg is not None:
@@ -47,13 +47,13 @@ def AwaitingResponseState():
         # No message yet - return None to wait (timeout will trigger if no message)
         return None
 
-    @enoki.on_timeout
+    @septum.on_timeout
     async def on_timeout(ctx: SharedContext):
         print("AwaitingResponse: Timeout! No response received.")
         # Transition to retry state
         return Events.TIMEOUT
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.RESPONSE, SuccessState),
@@ -62,7 +62,7 @@ def AwaitingResponseState():
 
 
 
-@enoki.state()
+@septum.state()
 def RetryState():
     """Retry the request"""
 
@@ -70,7 +70,7 @@ def RetryState():
         RETRY = auto()
         GIVE_UP = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         retry_count = ctx.common.get("retry_count", 0)
         retry_count += 1
@@ -84,7 +84,7 @@ def RetryState():
             # Send another request by transitioning back to awaiting state
             return Events.RETRY
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.RETRY, AwaitingResponseState),
@@ -93,21 +93,21 @@ def RetryState():
 
 
 
-@enoki.state(config=StateConfiguration(terminal=True))
+@septum.state(config=StateConfiguration(terminal=True))
 def SuccessState():
     """Request succeeded"""
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         print("Success: Request completed successfully!")
 
 
 
-@enoki.state(config=StateConfiguration(terminal=True))
+@septum.state(config=StateConfiguration(terminal=True))
 def FailureState():
     """Request failed after retries"""
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         print("Failure: Request failed after max retries")
 
@@ -181,7 +181,7 @@ async def demo_max_retries():
 
 
 async def main():
-    print("=== Enoki Timeout Example ===")
+    print("=== Septum Timeout Example ===")
     print("States have timeouts to prevent infinite waiting\n")
 
     # Demo 1: Response arrives in time

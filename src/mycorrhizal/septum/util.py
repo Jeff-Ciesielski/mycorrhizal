@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Enoki State Machine Utilities
+Septum State Machine Utilities
 
 Utility functions for FSM operations like Mermaid diagram generation.
 """
@@ -24,15 +24,15 @@ def to_mermaid(fsm) -> str:
     including special handling for Push/Pop transitions.
 
     Args:
-        fsm: A StateMachine instance (from mycorrhizal.enoki.core)
+        fsm: A StateMachine instance (from mycorrhizal.septum.core)
 
     Returns:
         Mermaid diagram as a string
 
     Example:
         ```python
-        from mycorrhizal.enoki.core import StateMachine
-        from mycorrhizal.enoki.util import to_mermaid
+        from mycorrhizal.septum.core import StateMachine
+        from mycorrhizal.septum.util import to_mermaid
 
         fsm = StateMachine(initial_state=MyState)
         await fsm.initialize()
@@ -43,7 +43,7 @@ def to_mermaid(fsm) -> str:
         ```
     """
     # Import here to avoid circular imports
-    from mycorrhizal.enoki.core import (
+    from mycorrhizal.septum.core import (
         StateSpec,
         StateRef,
         LabeledTransition,

@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional, TYPE_CHECKING
 from pydantic import BaseModel
 
-from ..enoki.core import StateMachine, StateSpec
+from ..septum.core import StateMachine, StateSpec
 from ..rhizomorph.core import Status, Runner as BTRunner
 from .tree_spec import MyceliumTreeSpec, FSMIntegration
 from .exceptions import FSMInstantiationError
@@ -254,7 +254,7 @@ class TreeInstance:
             initial = initial()
 
         # Try to discover states by following transitions
-        from ..enoki.core import StateSpec
+        from ..septum.core import StateSpec
 
         discovered = {}
         to_visit = [initial]

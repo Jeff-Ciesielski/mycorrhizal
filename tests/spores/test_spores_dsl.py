@@ -12,10 +12,10 @@ from pydantic import BaseModel
 
 from mycorrhizal.spores import configure, get_config
 from mycorrhizal.spores.transport import Transport
-from mycorrhizal.spores.dsl import HyphaAdapter, RhizomorphAdapter, EnokiAdapter
+from mycorrhizal.spores.dsl import HyphaAdapter, RhizomorphAdapter, SeptumAdapter
 from mycorrhizal.spores.models import ObjectRef, ObjectScope, EventAttr
 from mycorrhizal.rhizomorph.core import Status
-from mycorrhizal.enoki.core import SharedContext
+from mycorrhizal.septum.core import SharedContext
 from mycorrhizal.common.timebase import WallClock
 
 
@@ -281,14 +281,14 @@ async def test_hypha_log_transition_with_tokens(spore_config, mock_transport):
 
 
 # ============================================================================
-# Enoki Adapter Tests
+# Septum Adapter Tests
 # ============================================================================
 
 @pytest.mark.asyncio
-async def test_enoki_log_state_basic(spore_config, mock_transport):
-    """Test basic state logging with Enoki adapter."""
+async def test_septum_log_state_basic(spore_config, mock_transport):
+    """Test basic state logging with Septum adapter."""
 
-    adapter = EnokiAdapter()
+    adapter = SeptumAdapter()
 
     # Create a simple shared context
     bb = MissionBlackboard(
@@ -326,10 +326,10 @@ async def test_enoki_log_state_basic(spore_config, mock_transport):
 
 
 @pytest.mark.asyncio
-async def test_enoki_log_state_with_message(spore_config, mock_transport):
+async def test_septum_log_state_with_message(spore_config, mock_transport):
     """Test state logging with message in context."""
 
-    adapter = EnokiAdapter()
+    adapter = SeptumAdapter()
 
     bb = MissionBlackboard(
         mission_id="mission-222",
@@ -369,10 +369,10 @@ async def test_enoki_log_state_with_message(spore_config, mock_transport):
 
 
 @pytest.mark.asyncio
-async def test_enoki_log_state_lifecycle(spore_config, mock_transport):
+async def test_septum_log_state_lifecycle(spore_config, mock_transport):
     """Test state lifecycle logging."""
 
-    adapter = EnokiAdapter()
+    adapter = SeptumAdapter()
 
     bb = MissionBlackboard(
         mission_id="mission-333",

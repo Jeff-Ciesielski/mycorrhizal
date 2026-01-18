@@ -65,10 +65,10 @@ class MissionAI:
 
 All DSLs support Mermaid diagram export for visualization.
 
-### Enoki State Machine Diagrams
+### Septum State Machine Diagrams
 
 ```python
-from mycorrhizal.enoki.core import StateMachine
+from mycorrhizal.septum.core import StateMachine
 
 fsm = StateMachine(initial_state=MyState)
 await fsm.initialize()
@@ -129,16 +129,16 @@ async def debug_transition(consumed, bb, timebase):
     return []
 ```
 
-### Enoki Debugging
+### Septum Debugging
 
 ```python
-@enoki.state
+@septum.state
 class DebugState:
-    @enoki.on_enter
+    @septum.on_enter
     async def on_enter(ctx):
         print(f"[DEBUG] Entering state, context: {ctx}")
 
-    @enoki.on_exit
+    @septum.on_exit
     async def on_exit(ctx):
         print(f"[DEBUG] Exiting state, context: {ctx}")
 ```
@@ -259,11 +259,11 @@ async def safe_action(bb):
 ### Retry Patterns
 
 ```python
-from mycorrhizal.enoki.core import Retry
+from mycorrhizal.septum.core import Retry
 
-@enoki.state
+@septum.state
 class RetryingState:
-    @enoki.on_timeout
+    @septum.on_timeout
     async def on_timeout(ctx):
         if ctx.retry_count < 3:
             print(f"Retry {ctx.retry_count + 1}")

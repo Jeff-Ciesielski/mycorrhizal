@@ -2,7 +2,7 @@
 Blackboard Interface System
 
 This module provides Protocol-based interfaces for type-safe, constrained access
-to blackboard state across Mycorrhizal's three DSL systems (Hypha, Rhizomorph, Enoki).
+to blackboard state across Mycorrhizal's three DSL systems (Hypha, Rhizomorph, Septum).
 
 Key concepts:
 - Protocols: Structural subtyping for interface definitions

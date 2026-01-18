@@ -3,7 +3,7 @@
 Shared Mermaid diagram formatting utilities.
 
 This module provides common formatting functions for generating Mermaid diagrams
-across Mycorrhizal systems (Enoki, Mycelium, etc.). Using these utilities ensures:
+across Mycorrhizal systems (Septum, Mycelium, etc.). Using these utilities ensures:
 - Consistent visual styling across all systems
 - Single source of truth for formatting logic
 - Bug fixes apply to all systems

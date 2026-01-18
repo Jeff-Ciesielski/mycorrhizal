@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Spores Adapter for Enoki (State Machines)
+Spores Adapter for Septum (State Machines)
 
-Provides logging integration for Enoki state machines.
+Provides logging integration for Septum state machines.
 Extracts context information and automatically creates event/object logs.
 """
 
@@ -29,15 +29,15 @@ from ...spores.extraction import (
     extract_objects_from_blackboard,
 )
 from ...spores.core import _send_log_record, get_object_cache
-from ...enoki.core import SharedContext, TransitionType
+from ...septum.core import SharedContext, TransitionType
 
 
 logger = logging.getLogger(__name__)
 
 
-class EnokiAdapter:
+class SeptumAdapter:
     """
-    Adapter for Enoki state machine logging.
+    Adapter for Septum state machine logging.
 
     Provides decorators and helpers for logging:
     - State entry/exit/timeout events
@@ -47,13 +47,13 @@ class EnokiAdapter:
 
     Usage:
         ```python
-        from mycorrhizal.spores.dsl import EnokiAdapter
+        from mycorrhizal.spores.dsl import SeptumAdapter
 
-        adapter = EnokiAdapter()
+        adapter = SeptumAdapter()
 
-        @enoki.state()
+        @septum.state()
         def MyState():
-            @enoki.on_state
+            @septum.on_state
             @adapter.log_state(event_type="state_execute")
             async def on_state(ctx: SharedContext):
                 # Event automatically logged with:
@@ -62,7 +62,7 @@ class EnokiAdapter:
                 # - relationships to objects (with ObjectRef annotations)
                 return Events.DONE
 
-            @enoki.on_enter
+            @septum.on_enter
             @adapter.log_state_lifecycle(event_type="state_enter")
             async def on_enter(ctx: SharedContext):
                 pass
@@ -70,7 +70,7 @@ class EnokiAdapter:
     """
 
     def __init__(self):
-        """Initialize the Enoki adapter."""
+        """Initialize the Septum adapter."""
         self._enabled = True
 
     def enable(self):
@@ -89,7 +89,7 @@ class EnokiAdapter:
         log_transition: bool = True,
     ) -> Callable:
         """
-        Decorator to log Enoki state execution.
+        Decorator to log Septum state execution.
 
         Automatically captures:
         - State name

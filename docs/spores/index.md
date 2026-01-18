@@ -9,7 +9,7 @@ Spores Logging provides:
 - **OCEL-compliant logs** - Standard Object-Centric Event Log format
 - **Automatic relationship tracking** - E2O (Event-to-Object) relationships
 - **Attribute logging** - Mark fields with `SporesAttr` for automatic extraction
-- **DSL adapters** - Seamless integration with Hypha, Rhizomorph, and Enoki
+- **DSL adapters** - Seamless integration with Hypha, Rhizomorph, and Septum
 - **Sync and async** - Both synchronous and asynchronous logging support
 
 ## Quick Example
@@ -93,7 +93,7 @@ def create_order() -> Order:
 
 ### Pattern 2: DSL Adapters
 
-For Hypha/Rhizomorph/Enoki integration:
+For Hypha/Rhizomorph/Septum integration:
 
 ```python
 from mycorrhizal.spores import spore
@@ -329,4 +329,4 @@ Spores automatically infers types for attributes:
 
 - [Observability Guide](../guides/observability.md) - Monitoring and debugging
 - [Blackboards](../guides/blackboards.md) - State management
-- [Enoki](../enoki/) | [Hypha](../hypha/) | [Rhizomorph](../rhizomorph/) - DSL integration
+- [Septum](../septum/) | [Hypha](../hypha/) | [Rhizomorph](../rhizomorph/) - DSL integration

@@ -303,5 +303,5 @@ View in [Mermaid Live Editor](https://mermaid.live/) to visualize your decision 
 
 ## See Also
 
-- [Enoki](../enoki/) - State Machines for stateful behavior
+- [Septum](../septum/) - State Machines for stateful behavior
 - [Hypha](../hypha/) - Petri Nets for workflow orchestration

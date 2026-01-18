@@ -7,8 +7,8 @@ sys.path.insert(0, "src")
 from enum import Enum, auto
 import pytest
 
-from mycorrhizal.enoki.core import (
-    enoki,
+from mycorrhizal.septum.core import (
+    septum,
     StateConfiguration,
     SharedContext,
     Again,
@@ -24,20 +24,20 @@ from mycorrhizal.enoki.core import (
 
 # Define test states
 
-@enoki.state()
+@septum.state()
 def StateA():
     """First state"""
 
-    @enoki.events
+    @septum.events
     class Events(Enum):
         GO_TO_B = auto()
         GO_TO_C = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         return Events.GO_TO_B
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.GO_TO_B, StateB),
@@ -45,20 +45,20 @@ def StateA():
         ]
 
 
-@enoki.state()
+@septum.state()
 def StateB():
     """Second state"""
 
-    @enoki.events
+    @septum.events
     class Events(Enum):
         BACK_TO_A = auto()
         AGAIN = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         return Events.AGAIN
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.BACK_TO_A, StateA),
@@ -66,15 +66,15 @@ def StateB():
         ]
 
 
-@enoki.state(config=StateConfiguration(terminal=True))
+@septum.state(config=StateConfiguration(terminal=True))
 def StateC():
     """Terminal state"""
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx: SharedContext):
         pass
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return []
 
@@ -96,12 +96,12 @@ def test_registry_resolve_state_ref():
     registry = StateRegistry()
 
     # Create a StateRef
-    state_ref = StateRef("tests.enoki.test_state_registry.StateB")
+    state_ref = StateRef("tests.septum.test_state_registry.StateB")
 
     # Should resolve from global registry
     resolved = registry.resolve_state(state_ref)
     assert resolved is not None
-    assert resolved.name == "tests.enoki.test_state_registry.StateB"
+    assert resolved.name == "tests.septum.test_state_registry.StateB"
 
 
 def test_registry_resolve_string():
@@ -109,9 +109,9 @@ def test_registry_resolve_string():
     registry = StateRegistry()
 
     # Resolve by string name
-    resolved = registry.resolve_state("tests.enoki.test_state_registry.StateC")
+    resolved = registry.resolve_state("tests.septum.test_state_registry.StateC")
     assert resolved is not None
-    assert resolved.name == "tests.enoki.test_state_registry.StateC"
+    assert resolved.name == "tests.septum.test_state_registry.StateC"
     assert resolved.config.terminal is True
 
 
@@ -167,9 +167,9 @@ def test_registry_validate_all_states():
 
     assert result.valid is True
     assert len(result.errors) == 0
-    assert "tests.enoki.test_state_registry.StateA" in result.discovered_states
-    assert "tests.enoki.test_state_registry.StateB" in result.discovered_states
-    assert "tests.enoki.test_state_registry.StateC" in result.discovered_states
+    assert "tests.septum.test_state_registry.StateA" in result.discovered_states
+    assert "tests.septum.test_state_registry.StateB" in result.discovered_states
+    assert "tests.septum.test_state_registry.StateC" in result.discovered_states
 
 
 def test_registry_validate_with_error_state():
@@ -179,7 +179,7 @@ def test_registry_validate_with_error_state():
     result = registry.validate_all_states(StateA, error_state=StateC)
 
     assert result.valid is True
-    assert "tests.enoki.test_state_registry.StateC" in result.discovered_states
+    assert "tests.septum.test_state_registry.StateC" in result.discovered_states
 
 
 def test_registry_validate_includes_continuations():
@@ -202,16 +202,16 @@ def test_registry_validate_includes_continuations():
 def test_registry_warns_about_unlabeled_transitions():
     """Test that unlabeled direct state transitions generate warnings"""
     # Create a state with unlabeled transition
-    @enoki.state()
+    @septum.state()
     def UnlabeledState():
-        @enoki.on_state
+        @septum.on_state
         async def on_state(ctx: SharedContext):
             return None
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             # Direct state reference without label
-            return [StateRef("tests.enoki.test_state_registry.StateA")]
+            return [StateRef("tests.septum.test_state_registry.StateA")]
 
         return {
             "on_state": on_state,
@@ -231,9 +231,9 @@ def test_registry_requires_on_state():
     """Test that states without on_state raise an error at decoration time"""
     # The decorator should catch missing on_state at decoration time
     with pytest.raises(ValueError, match="must have an @on_state decorated method"):
-        @enoki.state()
+        @septum.state()
         def InvalidState():
-            @enoki.transitions
+            @septum.transitions
             def transitions():
                 return []
 
@@ -245,13 +245,13 @@ def test_registry_requires_on_state():
 
 def test_registry_warns_about_timeout_without_handler():
     """Test that timeout without on_timeout generates a warning"""
-    @enoki.state(config=StateConfiguration(timeout=5.0))
+    @septum.state(config=StateConfiguration(timeout=5.0))
     def TimeoutWithoutHandler():
-        @enoki.on_state
+        @septum.on_state
         async def on_state(ctx: SharedContext):
             return None
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             return []
 
@@ -271,13 +271,13 @@ def test_registry_warns_about_timeout_without_handler():
 
 def test_registry_validates_invalid_timeout():
     """Test that invalid timeout values are caught"""
-    @enoki.state(config=StateConfiguration(timeout=-1.0))
+    @septum.state(config=StateConfiguration(timeout=-1.0))
     def InvalidTimeout():
-        @enoki.on_state
+        @septum.on_state
         async def on_state(ctx: SharedContext):
             return None
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             return []
 

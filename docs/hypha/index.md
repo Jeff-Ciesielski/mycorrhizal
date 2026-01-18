@@ -287,4 +287,4 @@ See [Programmatic Hypha Building](../guides/programmatic-hypha.md) for complete 
 
 - [Programmatic Building](../guides/programmatic-hypha.md) - NetBuilder API guide
 - [Rhizomorph](../rhizomorph/) - Behavior Trees for control logic
-- [Enoki](../enoki/) - State Machines for stateful behavior
+- [Septum](../septum/) - State Machines for stateful behavior

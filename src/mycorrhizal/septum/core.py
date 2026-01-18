@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
 """
-Enoki - Asyncio Finite State Machine Framework
+Septum - Asyncio Finite State Machine Framework
 
 A decorator-based DSL for defining and executing state machines with support for
 asyncio, timeouts, message passing, and hierarchical state composition.
 
 Usage:
-    from mycorrhizal.enoki.core import enoki, StateMachine, LabeledTransition
+    from mycorrhizal.septum.core import septum, StateMachine, LabeledTransition
     from enum import Enum, auto
 
-    @enoki.state()
+    @septum.state()
     def IdleState():
         class Events(Enum):
             START = auto()
             QUIT = auto()
 
-        @enoki.on_state
+        @septum.on_state
         async def on_state(ctx):
             if ctx.msg == "start":
                 return Events.START
             return None
 
-        @enoki.transitions
+        @septum.transitions
         def transitions():
             return [
                 LabeledTransition(Events.START, ProcessingState),
@@ -182,7 +182,7 @@ class StateConfiguration:
             transition (returning None from on_state is allowed).
 
     Example:
-        @enoki.state(config=StateConfiguration(timeout=5.0, retries=3))
+        @septum.state(config=StateConfiguration(timeout=5.0, retries=3))
         def MyState():
             # State with timeout and retry handling
             pass
@@ -210,7 +210,7 @@ class SharedContext(Generic[T]):
     Type parameter T represents the type of the 'common' field for type safety.
 
     Example:
-        @enoki.on_state
+        @septum.on_state
         async def on_state(ctx: SharedContext):
             # Access shared data
             counter = ctx.common.get("counter", 0)
@@ -778,13 +778,13 @@ class PrioritizedMessage:
 
 
 @dataclass
-class EnokiInternalMessage:
+class SeptumInternalMessage:
     """Base class for internal FSM messages"""
     pass
 
 
 @dataclass
-class TimeoutMessage(EnokiInternalMessage):
+class TimeoutMessage(SeptumInternalMessage):
     """Internal message for timeout events"""
     state_name: str
     timeout_id: int
@@ -823,7 +823,7 @@ class StateMachine:
     """Asyncio-native finite state machine for executing StateSpec-based states.
 
     The StateMachine manages state execution, transitions, message passing,
-    and lifecycle handling. States are defined using the @enoki.state decorator
+    and lifecycle handling. States are defined using the @septum.state decorator
     and should define on_state, on_enter, on_leave, on_timeout, or on_fail handlers.
 
     Args:
@@ -942,7 +942,7 @@ class StateMachine:
         """Internal message sending"""
 
         match message:
-            case _ if isinstance(message, EnokiInternalMessage):
+            case _ if isinstance(message, SeptumInternalMessage):
                 try:
                     self._message_queue.put_nowait(
                         PrioritizedMessage(
@@ -1324,7 +1324,7 @@ class StateMachine:
 # Decorators
 # ============================================================================
 
-class _EnokiDecoratorAPI:
+class _SeptumDecoratorAPI:
     """Decorator API for defining states"""
 
     def __init__(self):
@@ -1384,19 +1384,19 @@ class _EnokiDecoratorAPI:
             Events = None
 
             for item_name, item_fn in tracked_items:
-                if hasattr(item_fn, "_enoki_on_state"):
+                if hasattr(item_fn, "_septum_on_state"):
                     on_state = item_fn
-                elif hasattr(item_fn, "_enoki_on_enter"):
+                elif hasattr(item_fn, "_septum_on_enter"):
                     on_enter = item_fn
-                elif hasattr(item_fn, "_enoki_on_leave"):
+                elif hasattr(item_fn, "_septum_on_leave"):
                     on_leave = item_fn
-                elif hasattr(item_fn, "_enoki_on_timeout"):
+                elif hasattr(item_fn, "_septum_on_timeout"):
                     on_timeout = item_fn
-                elif hasattr(item_fn, "_enoki_on_fail"):
+                elif hasattr(item_fn, "_septum_on_fail"):
                     on_fail = item_fn
-                elif hasattr(item_fn, "_enoki_transitions"):
+                elif hasattr(item_fn, "_septum_transitions"):
                     transitions = item_fn
-                elif hasattr(item_fn, "_enoki_events"):
+                elif hasattr(item_fn, "_septum_events"):
                     Events = item_fn
 
             # Validate required methods
@@ -1428,42 +1428,42 @@ class _EnokiDecoratorAPI:
 
     def on_state(self, func: Callable) -> Callable:
         """Decorator for the main state logic method"""
-        func._enoki_on_state = func
+        func._septum_on_state = func
         if self._tracking_stack:
             self._tracking_stack[-1].append((func.__name__, func))
         return func
 
     def on_enter(self, func: Callable) -> Callable:
         """Decorator for on_enter lifecycle method"""
-        func._enoki_on_enter = func
+        func._septum_on_enter = func
         if self._tracking_stack:
             self._tracking_stack[-1].append((func.__name__, func))
         return func
 
     def on_leave(self, func: Callable) -> Callable:
         """Decorator for on_leave lifecycle method"""
-        func._enoki_on_leave = func
+        func._septum_on_leave = func
         if self._tracking_stack:
             self._tracking_stack[-1].append((func.__name__, func))
         return func
 
     def on_timeout(self, func: Callable) -> Callable:
         """Decorator for on_timeout lifecycle method"""
-        func._enoki_on_timeout = func
+        func._septum_on_timeout = func
         if self._tracking_stack:
             self._tracking_stack[-1].append((func.__name__, func))
         return func
 
     def on_fail(self, func: Callable) -> Callable:
         """Decorator for on_fail lifecycle method"""
-        func._enoki_on_fail = func
+        func._septum_on_fail = func
         if self._tracking_stack:
             self._tracking_stack[-1].append((func.__name__, func))
         return func
 
     def transitions(self, func: Callable) -> Callable:
         """Decorator for declaring transitions"""
-        func._enoki_transitions = func
+        func._septum_transitions = func
         if self._tracking_stack:
             self._tracking_stack[-1].append((func.__name__, func))
         return func
@@ -1486,40 +1486,40 @@ class _EnokiDecoratorAPI:
         - You don't need external access to the Events enum
 
         Example:
-            @enoki.state()
+            @septum.state()
             def MyState():
-                @enoki.events  # Optional - makes MyState.Events accessible
+                @septum.events  # Optional - makes MyState.Events accessible
                 class Events(Enum):
                     GO = auto()
 
-                @enoki.on_state
+                @septum.on_state
                 async def on_state(ctx):
-                    return Events.GO  # Works via closure even without @enoki.events
+                    return Events.GO  # Works via closure even without @septum.events
         """
-        events_class._enoki_events = events_class
+        events_class._septum_events = events_class
         if self._tracking_stack:
             self._tracking_stack[-1].append(("Events", events_class))
         return events_class
 
     def root(self, func: Callable) -> Callable:
         """Decorator to mark a state as the initial/root state"""
-        func._enoki_is_root = True
+        func._septum_is_root = True
         return func
 
 
 # Create the decorator API instance
-enoki = _EnokiDecoratorAPI()
+septum = _SeptumDecoratorAPI()
 
 # Export decorators for convenience
-state = enoki.state
-on_state = enoki.on_state
-on_enter = enoki.on_enter
-on_leave = enoki.on_leave
-on_timeout = enoki.on_timeout
-on_fail = enoki.on_fail
-transitions = enoki.transitions
-events = enoki.events
-root = enoki.root
+state = septum.state
+on_state = septum.on_state
+on_enter = septum.on_enter
+on_leave = septum.on_leave
+on_timeout = septum.on_timeout
+on_fail = septum.on_fail
+transitions = septum.transitions
+events = septum.events
+root = septum.root
 
 
 # ============================================================================
@@ -1528,7 +1528,7 @@ root = enoki.root
 
 __all__ = [
     # Decorators
-    "enoki",
+    "septum",
     "state",
     "on_state",
     "on_enter",
@@ -1570,6 +1570,6 @@ __all__ = [
     "NoStateToTick",
     # Messages
     "PrioritizedMessage",
-    "EnokiInternalMessage",
+    "SeptumInternalMessage",
     "TimeoutMessage",
 ]

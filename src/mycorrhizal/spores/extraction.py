@@ -450,12 +450,12 @@ def extract_from_rhizomorph_context(
     return attributes, objects
 
 
-def extract_from_enoki_context(
+def extract_from_septum_context(
     ctx: Any,
     timestamp: datetime
 ) -> tuple[Dict[str, EventAttributeValue], List[Object]]:
     """
-    Extract attributes and objects from Enoki state context.
+    Extract attributes and objects from Septum state context.
 
     Args:
         ctx: SharedContext

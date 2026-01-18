@@ -1,10 +1,10 @@
-# Enoki FSM
+# Septum FSM
 
-Enoki is a decorator-based Finite State Machine (FSM) DSL with asyncio support.
+Septum is a decorator-based Finite State Machine (FSM) DSL with asyncio support.
 
 ## Overview
 
-Enoki FSMs provide:
+Septum FSMs provide:
 
 - **Decorator-based syntax** - Define states as classes with decorators
 - **Enum-based transitions** - Type-safe, statically analyzable state transitions
@@ -15,40 +15,40 @@ Enoki FSMs provide:
 ## Quick Example
 
 ```python
-from mycorrhizal.enoki.core import enoki, StateMachine
+from mycorrhizal.septum.core import septum, StateMachine
 from enum import Enum, auto
 
-@enoki.state
+@septum.state
 class IdleState:
     class Events(Enum):
         START = auto()
         QUIT = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         print("Idling...")
         await asyncio.sleep(1)
         return IdleState.Events.START
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
-        from mycorrhizal.enoki.core import LabeledTransition
+        from mycorrhizal.septum.core import LabeledTransition
         return [
             LabeledTransition(IdleState.Events.START, WorkingState),
             LabeledTransition(IdleState.Events.QUIT, None),
         ]
 
-@enoki.state
+@septum.state
 class WorkingState:
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         print("Working...")
         await asyncio.sleep(2)
         return WorkingState.Events.DONE
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
-        from mycorrhizal.enoki.core import LabeledTransition
+        from mycorrhizal.septum.core import LabeledTransition
         return [
             LabeledTransition(WorkingState.Events.DONE, IdleState),
         ]
@@ -63,36 +63,36 @@ await fsm.run()
 
 ### States
 
-States are defined using the `@enoki.state` decorator:
+States are defined using the `@septum.state` decorator:
 
 ```python
-@enoki.state
+@septum.state
 class MyState:
     # Event enum for transitions
     class Events(Enum):
         NEXT = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         # Main state logic
         return MyState.Events.NEXT
 
-    @enoki.on_enter
+    @septum.on_enter
     async def on_enter(ctx):
         # Called when entering state
         pass
 
-    @enoki.on_exit
+    @septum.on_exit
     async def on_exit(ctx):
         # Called when exiting state
         pass
 
-    @enoki.on_timeout
+    @septum.on_timeout
     async def on_timeout(ctx):
         # Handle timeout if configured
         return Events.ERROR
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         # Define state transitions
         pass
@@ -103,9 +103,9 @@ class MyState:
 Transitions define how the FSM moves between states:
 
 ```python
-from mycorrhizal.enoki.core import LabeledTransition, Again, Unhandled, Retry, Restart, Repeat, Push, Pop
+from mycorrhizal.septum.core import LabeledTransition, Again, Unhandled, Retry, Restart, Repeat, Push, Pop
 
-@enoki.transitions
+@septum.transitions
 def transitions():
     return [
         LabeledTransition(Events.DONE, NextState),  # Go to NextState
@@ -123,11 +123,11 @@ def transitions():
 States can have timeouts:
 
 ```python
-from mycorrhizal.enoki.core import StateConfiguration
+from mycorrhizal.septum.core import StateConfiguration
 
-@enoki.state(config=StateConfiguration(timeout=5.0))
+@septum.state(config=StateConfiguration(timeout=5.0))
 class TimedState:
-    @enoki.on_timeout
+    @septum.on_timeout
     async def on_timeout(ctx):
         print("Timeout occurred!")
         return Events.ERROR
@@ -138,20 +138,20 @@ class TimedState:
 Use push/pop for nested state machines:
 
 ```python
-@enoki.state
+@septum.state
 class MainMenu:
-    @enoki.transitions
+    @septum.transitions
     def transitions():
-        from mycorrhizal.enoki.core import Push
+        from mycorrhizal.septum.core import Push
         return [
             LabeledTransition(Events.START_GAME, Push(GamePlay, PauseMenu)),
         ]
 
-@enoki.state
+@septum.state
 class GamePlay:
-    @enoki.transitions
+    @septum.transitions
     def transitions():
-        from mycorrhizal.enoki.core import Push, Pop
+        from mycorrhizal.septum.core import Push, Pop
         return [
             LabeledTransition(Events.PAUSE, Push(PauseMenu)),
             LabeledTransition(Events.QUIT, Pop),
@@ -160,21 +160,21 @@ class GamePlay:
 
 ## Examples
 
-- [Basic FSM](../../examples/enoki_decorator_basic.py) - Simple state machine
-- [Timeout Handling](../../examples/enoki_decorator_timeout.py) - Timeouts and retries
+- [Basic FSM](../../examples/septum_decorator_basic.py) - Simple state machine
+- [Timeout Handling](../../examples/septum_decorator_timeout.py) - Timeouts and retries
 - [Blended Demo](../../examples/blended_demo.py) - FSM with other DSLs
 
 ## Documentation
 
-- [API Reference](../api/enoki.md) - Complete API documentation
-- [Getting Started](../getting-started/your-first-enoki.md) - Tutorial
+- [API Reference](../api/septum.md) - Complete API documentation
+- [Getting Started](../getting-started/your-first-septum.md) - Tutorial
 - [Composition](../guides/composition.md) - Hierarchical state patterns
 
 ## Mermaid Export
 
 ### Visualize Before You Run
 
-A key feature of Enoki is the ability to **export your state machine to a Mermaid diagram before execution**. This enables static analysis and verification of your FSM structure:
+A key feature of Septum is the ability to **export your state machine to a Mermaid diagram before execution**. This enables static analysis and verification of your FSM structure:
 
 ```python
 fsm = StateMachine(initial_state=MyState)

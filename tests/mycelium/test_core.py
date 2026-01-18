@@ -9,7 +9,7 @@ import asyncio
 from enum import Enum, auto
 from pydantic import BaseModel
 
-from mycorrhizal.enoki.core import enoki, LabeledTransition, StateConfiguration
+from mycorrhizal.septum.core import septum, LabeledTransition, StateConfiguration
 from mycorrhizal.mycelium import (
     tree,
     Action,
@@ -32,23 +32,23 @@ from mycorrhizal.common.timebase import MonotonicClock
 # ======================================================================================
 
 
-@enoki.state(config=StateConfiguration(can_dwell=True))
+@septum.state(config=StateConfiguration(can_dwell=True))
 def IdleState():
     """Idle state for testing."""
 
-    @enoki.events
+    @septum.events
     class Events(Enum):
         START = auto()
         STOP = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         # Check if we should start
         if ctx.common.get("should_start", False):
             return Events.START
         return None
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.START, WorkingState),
@@ -56,21 +56,21 @@ def IdleState():
         ]
 
 
-@enoki.state()
+@septum.state()
 def WorkingState():
     """Working state for testing."""
 
-    @enoki.events
+    @septum.events
     class Events(Enum):
         DONE = auto()
         ERROR = auto()
 
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         # Just transition back to idle
         return Events.DONE
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(Events.DONE, IdleState),

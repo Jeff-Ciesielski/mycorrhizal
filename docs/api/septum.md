@@ -1,8 +1,8 @@
-# Enoki FSM API Reference
+# Septum FSM API Reference
 
 ## Core Module
 
-::: mycorrhizal.enoki.core
+::: mycorrhizal.septum.core
     options:
       show_root_heading: true
       show_root_members_full_path: false

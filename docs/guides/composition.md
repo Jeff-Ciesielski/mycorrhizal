@@ -4,7 +4,7 @@ Learn how to combine DSLs and build modular, reusable systems with Mycorrhizal.
 
 ## Combining Multiple DSLs
 
-Mycorrhizal's four DSLs (Enoki, Hypha, Rhizomorph, Spores) are designed to work together.
+Mycorrhizal's four DSLs (Septum, Hypha, Rhizomorph, Spores) are designed to work together.
 
 ### Hypha + Rhizomorph Integration
 
@@ -188,16 +188,16 @@ class ProcessingPipeline:
 Use `Push` and `Pop` for hierarchical state machines:
 
 ```python
-from mycorrhizal.enoki.core import Push, Pop
+from mycorrhizal.septum.core import Push, Pop
 
-@enoki.state
+@septum.state
 class MainMenu:
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         print("Main Menu")
         return MainMenu.Events.START_GAME
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(
@@ -206,27 +206,27 @@ class MainMenu:
             ),
         ]
 
-@enoki.state
+@septum.state
 class GamePlay:
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         print("Playing...")
         await asyncio.sleep(1)
         return GamePlay.Events.PAUSE
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(GamePlay.Events.PAUSE, Push(PauseMenu)),
         ]
 
-@enoki.state
+@septum.state
 class PauseMenu:
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         print("Paused")
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(PauseMenu.Events.RESUME, Pop),  # Return to GamePlay
@@ -347,15 +347,15 @@ class Supervisor:
 ### State Recovery Pattern
 
 ```python
-@enoki.state
+@septum.state
 class ErrorRecovery:
-    @enoki.on_state
+    @septum.on_state
     async def on_state(ctx):
         print("Attempting recovery...")
         await attempt_recovery(ctx)
         return ErrorRecovery.Events.RETRY
 
-    @enoki.transitions
+    @septum.transitions
     def transitions():
         return [
             LabeledTransition(ErrorRecovery.Events.RETRY, Retry(PreviousState)),
@@ -367,6 +367,6 @@ class ErrorRecovery:
 
 - [Blackboards](blackboards.md) - Shared state across components
 - [Timebases](timebases.md) - Time management for composed systems
-- [Enoki API](../api/enoki.md) - State machine push/pop
+- [Septum API](../api/septum.md) - State machine push/pop
 - [Rhizomorph API](../api/rhizomorph.md) - Subtree documentation
 - [Hypha API](../api/hypha.md) - Subnet documentation
