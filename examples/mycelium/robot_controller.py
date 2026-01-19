@@ -24,7 +24,6 @@ from mycorrhizal.mycelium import (
     tree,
     Action,
     Sequence,
-    Selector,
     root,
     TreeRunner,
 )

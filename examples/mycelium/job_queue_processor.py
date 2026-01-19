@@ -26,12 +26,10 @@ Architecture:
 
 import asyncio
 import logging
-import time
-from enum import Enum, auto
-from typing import Any, List, Optional
+from enum import Enum
 from pydantic import BaseModel, ConfigDict
 
-from mycorrhizal.mycelium import pn, PNRunner, PNContext, PlaceType
+from mycorrhizal.mycelium import pn, PNRunner, PlaceType
 from mycorrhizal.rhizomorph.core import bt, Status
 from mycorrhizal.common.timebase import MonotonicClock
 
@@ -391,7 +389,7 @@ async def main():
             for job in place.tokens:
                 print(f"  {job}")
 
-    print(f"\nSystem statistics:")
+    print("\nSystem statistics:")
     print(f"  Jobs processed: {bb.jobs_processed}")
     print(f"  Enrichment operations: {bb.enrichment_count}")
 

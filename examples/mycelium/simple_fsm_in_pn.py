@@ -20,7 +20,7 @@ from enum import Enum, auto
 from pydantic import BaseModel
 
 from mycorrhizal.mycelium import pn, PNRunner, PlaceType
-from mycorrhizal.septum.core import septum, LabeledTransition, StateConfiguration
+from mycorrhizal.septum.core import septum, LabeledTransition
 from mycorrhizal.common.timebase import MonotonicClock
 
 
@@ -317,7 +317,7 @@ async def main():
     for req in failure_place.tokens:
         print(f"  {req.request_id} (value={req.value})")
 
-    print(f"\nSystem statistics:")
+    print("\nSystem statistics:")
     print(f"  Requests processed: {bb.requests_processed}")
     print(f"  Failures: {bb.failures}")
 

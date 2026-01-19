@@ -35,14 +35,14 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, List, Optional
+from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
 from mycorrhizal.mycelium import (
-    pn, PNRunner, PNContext, PlaceType,
+    pn, PNRunner, PlaceType,
 )
 from mycorrhizal.septum.core import (
-    septum, StateMachine, LabeledTransition, StateConfiguration,
+    septum, LabeledTransition, StateConfiguration,
 )
 from mycorrhizal.common.timebase import MonotonicClock
 
@@ -151,13 +151,13 @@ def CircuitBreakerClosed():
             # Check if we should open the circuit
             if bb.failure_count >= bb.failure_threshold:
                 bb.last_failure_time = time.time()
-                logger.warning(f"[CircuitBreaker] FAILURE_THRESHOLD REACHED: Opening circuit")
+                logger.warning("[CircuitBreaker] FAILURE_THRESHOLD REACHED: Opening circuit")
                 return Events.OPEN_CIRCUIT
 
         elif ctx.msg == Events.SUCCESS:
             bb.failure_count = 0  # Reset failure count on success
             bb.requests_succeeded += 1
-            logger.info(f"[CircuitBreaker-CLOSED] Success, failures reset to 0")
+            logger.info("[CircuitBreaker-CLOSED] Success, failures reset to 0")
 
         return None  # Stay in CLOSED state
 
@@ -192,7 +192,7 @@ def CircuitBreakerOpen():
         # Access Events through the state function's nested class
         Events = CircuitBreakerOpen.Events
         if ctx.msg == Events.TEST_RECOVERY:
-            logger.info(f"[CircuitBreaker-OPEN] Testing recovery, moving to HALF_OPEN")
+            logger.info("[CircuitBreaker-OPEN] Testing recovery, moving to HALF_OPEN")
             return Events.TEST_RECOVERY
 
         return None
@@ -201,7 +201,7 @@ def CircuitBreakerOpen():
     async def on_timeout(ctx):
         """Timeout reached, test if service has recovered."""
         bb = ctx.common
-        logger.info(f"[CircuitBreaker-OPEN] Timeout reached, testing recovery")
+        logger.info("[CircuitBreaker-OPEN] Timeout reached, testing recovery")
         Events = CircuitBreakerOpen.Events
         return Events.TEST_RECOVERY
 
@@ -241,7 +241,7 @@ def CircuitBreakerHalfOpen():
         if ctx.msg == Events.FAILURE:
             bb.failure_count = 0
             bb.requests_failed += 1
-            logger.warning(f"[CircuitBreaker-HALF_OPEN] Test request FAILED, reopening circuit")
+            logger.warning("[CircuitBreaker-HALF_OPEN] Test request FAILED, reopening circuit")
             return Events.REOPEN_CIRCUIT
 
         elif ctx.msg == Events.SUCCESS:
@@ -251,7 +251,7 @@ def CircuitBreakerHalfOpen():
 
             # Check if we should close the circuit
             if bb.success_count >= bb.success_threshold:
-                logger.info(f"[CircuitBreaker] SUCCESS_THRESHOLD REACHED: Closing circuit")
+                logger.info("[CircuitBreaker] SUCCESS_THRESHOLD REACHED: Closing circuit")
                 return Events.CLOSE_CIRCUIT
 
         return None
@@ -396,7 +396,7 @@ def CircuitBreakerOrchestrator(builder):
                             # Success threshold reached, close circuit
                             bb.circuit_state = CircuitBreakerState.CLOSED
                             bb.success_count = 0
-                            logger.info(f"[CircuitBreaker] CLOSED: Circuit recovered!")
+                            logger.info("[CircuitBreaker] CLOSED: Circuit recovered!")
 
                     yield {success_responses: response}
                 else:
@@ -423,7 +423,7 @@ def CircuitBreakerOrchestrator(builder):
                         # In HALF_OPEN, any failure reopens circuit immediately
                         bb.circuit_state = CircuitBreakerState.OPEN
                         bb.failure_count = 0
-                        logger.error(f"[CircuitBreaker] OPEN: Half-open test failed!")
+                        logger.error("[CircuitBreaker] OPEN: Half-open test failed!")
 
                     yield {failed_requests: response}
 
@@ -618,7 +618,7 @@ async def main():
                 if len(token_list) > 5:
                     print(f"  ... and {len(token_list) - 5} more")
 
-    print(f"\nSystem statistics:")
+    print("\nSystem statistics:")
     print(f"  Requests processed: {bb.requests_processed}")
     print(f"  Requests succeeded: {bb.requests_succeeded}")
     print(f"  Requests failed: {bb.requests_failed}")
