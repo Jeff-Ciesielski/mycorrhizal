@@ -5,7 +5,7 @@ Asyncio-friendly **Behavior Trees** for Python, designed for clarity, composabil
 
 - **Fluent decorator chains**: `bt.failer().gate(condition).timeout(0.5)(action)`
 - **Owner-aware composites**: factories expand with the correct class owner, so large trees can be split across modules
-- **Cross-tree composition**: embed full subtrees with `bt.subtree()` or borrow composites with `bt.bind()`
+- **Cross-tree composition**: embed full subtrees with `bt.subtree()`
 - **Mermaid diagrams**: export static structure diagrams for documentation/debugging
 - **Timebases**: simulate or control time with pluggable clocks (wall/UTC/monotonic/cycle/dictated)
 
@@ -126,8 +126,7 @@ Inside diagramming and building, composites are expanded with the correct **owne
 
 ## Cross‑Tree Composition
 
-- `bt.subtree(OtherTree)` — mounts another tree’s `ROOT` as a child; for Mermaid export the `ROOT` spec is attached so it expands visually.  
-- `bt.bind(Owner, Owner.Composite)` — borrows a composite from another class and expands it using that **Owner** as the context.
+- `bt.subtree(OtherTree)` — mounts another tree's `ROOT` as a child; for Mermaid export the `ROOT` spec is attached so it expands visually.
 
 **Example**
 
@@ -158,14 +157,14 @@ def Telemetry():
     def telemetry_seq():
         yield bt.ratelimit(hz=2.0)(push)
 
-# Main tree
+# Main tree - compose both subtrees
 @bt.tree
 def Main():
     @bt.root
     @bt.selector(reactive=True, memory=True)
     def root():
         yield bt.subtree(Engage)
-        yield bt.bind(Telemetry, Telemetry.telemetry_seq)
+        yield bt.subtree(Telemetry)
 ```
 
 ---
@@ -210,7 +209,7 @@ Paste the output into the Mermaid Live Editor.
 
 - **Async‑first** — every node can be `async def`; scheduling is `asyncio`‑based.
 - **String‑free** — reference nodes directly by name (no magic strings).
-- **Composable** — split and recombine trees across modules with `subtree`/`bind`.
+- **Composable** — split and recombine trees across modules with `subtree`.
 - **Fluent‑only** — decorator chains read naturally left→right.
 
 ---

@@ -9,7 +9,7 @@ Rhizomorph Behavior Trees provide:
 - **Decorator-based syntax** - Define trees, nodes, and composites with decorators
 - **Async-first design** - Native asyncio support throughout
 - **Type-safe references** - Owner-aware composition with direct name references
-- **Modular subtrees** - Reusable tree components with `bt.subtree()` and `bt.bind()`
+- **Modular subtrees** - Reusable tree components with `bt.subtree()`
 - **Rich composites** - Sequence, selector, parallel, and more
 
 ## Quick Example
@@ -177,11 +177,12 @@ Nodes return one of three statuses:
 
 ## Subtrees
 
-Create reusable tree components:
+Create reusable tree components with `bt.subtree()`:
 
 ```python
+# Define a reusable subtree
 @bt.tree
-class NavigationSubtree:
+def NavigationSubtree():
     """Reusable navigation behavior."""
     @bt.action
     async def move_to_target(bb):
@@ -199,29 +200,23 @@ class NavigationSubtree:
         yield avoid_obstacles
         yield move_to_target
 
-# Use in main tree
+# Import and use the subtree in another tree
+from other_module import NavigationSubtree
+
 @bt.tree
-class MainRobotAI:
+def MainRobotAI():
+    @bt.action
+    async def check_battery(bb):
+        return Status.SUCCESS if bb.battery > 20 else Status.FAILURE
+
     @bt.root
     @bt.sequence
     def root():
-        nav = bt.subtree("navigation")  # Subtree placeholder
         yield check_battery
-        yield nav.move_to_target  # Reference subtree node
+        yield bt.subtree(NavigationSubtree)  # Embed entire subtree
 ```
 
-Bind subtrees at runtime:
-
-```python
-main_tree = MainRobotAI()
-nav_tree = NavigationSubtree()
-
-bound_tree = bt.bind(main_tree, {
-    "navigation": nav_tree
-})
-
-runner = BTRunner(tree=bound_tree, blackboard=bb)
-```
+The subtree is mounted directly into the parent tree's structure.
 
 ## Blackboard Integration
 

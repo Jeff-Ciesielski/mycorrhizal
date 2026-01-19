@@ -101,13 +101,16 @@ class NavigationSubtree:
         yield move_to_target
 ```
 
-### Binding Subtrees
+### Composing Subtrees
 
-Use `bt.subtree()` and `bt.bind()` to compose trees:
+Use `bt.subtree()` to embed entire trees as components:
 
 ```python
+# Import the subtree from another module
+from navigation import NavigationSubtree
+
 @bt.tree
-class MainRobotAI:
+def MainRobotAI():
     @bt.action
     async def patrol(bb):
         print("Patrolling")
@@ -116,19 +119,11 @@ class MainRobotAI:
     @bt.root
     @bt.sequence
     def root():
-        # Subtree placeholder
-        nav = bt.subtree("navigation")
         yield patrol
-        yield nav.move_to_target
-
-# Bind the subtree
-ai_tree = MainRobotAI()
-nav_tree = NavigationSubtree()
-
-bound_tree = bt.bind(ai_tree, {
-    "navigation": nav_tree
-})
+        yield bt.subtree(NavigationSubtree)  # Embed entire subtree
 ```
+
+The subtree's root is mounted directly into the parent tree. All nodes from `NavigationSubtree` become part of the main tree structure.
 
 ## Modular Design with Subnets
 
