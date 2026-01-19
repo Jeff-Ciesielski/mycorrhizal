@@ -12,33 +12,33 @@ This directory contains throughput and performance benchmarks for the three core
 
 ```bash
 # Run all benchmarks with pytest-benchmark
-pytest src/mycorrhizal/benchmarks/ -v
+pytest tests/benchmarks/ -v
 
 # Run with histogram generation (outputs to .benchmarks/)
-pytest src/mycorrhizal/benchmarks/ --benchmark-only
+pytest tests/benchmarks/ --benchmark-only
 
 # Run with comparison against previous run
-pytest src/mycorrhizal/benchmarks/ --benchmark-compare
+pytest tests/benchmarks/ --benchmark-compare
 ```
 
 ### Run Specific Library Benchmarks
 
 ```bash
 # Hypha benchmarks only
-pytest src/mycorrhizal/benchmarks/bench_hypha.py -v
+pytest tests/benchmarks/bench_hypha.py -v
 
 # Rhizomorph benchmarks only
-pytest src/mycorrhizal/benchmarks/bench_rhizomorph.py -v
+pytest tests/benchmarks/bench_rhizomorph.py -v
 
 # Septum benchmarks only
-pytest src/mycorrhizal/benchmarks/bench_septum.py -v
+pytest tests/benchmarks/bench_septum.py -v
 ```
 
 ### Run Specific Benchmarks
 
 ```bash
 # Run a specific benchmark
-pytest src/mycorrhizal/benchmarks/bench_hypha.py::test_simple_token_throughput -v
+pytest tests/benchmarks/bench_hypha.py::test_simple_token_throughput -v
 
 # Run with marker
 pytest -m hypha -v
@@ -103,7 +103,7 @@ Tests measure **state transitions per second** across different scenarios:
 ### Basic Benchmark Run
 
 ```bash
-$ pytest src/mycorrhizal/benchmarks/bench_hypha.py -v
+$ pytest tests/benchmarks/bench_hypha.py -v
 
 test_simple_token_throughput [...] PASSED [ 25%]
 test_complex_token_throughput [...] PASSED [ 50%]
@@ -122,12 +122,12 @@ complex_token_throughput  0.2345    0.2678   0.2456   0.0123
 
 ```bash
 # Generate HTML report
-pytest src/mycorrhizal/benchmarks/ \
+pytest tests/benchmarks/ \
   --benchmark-only \
   --benchmark-json=output.json
 
 # Compare against baseline
-pytest src/mycorrhizal/benchmarks/ \
+pytest tests/benchmarks/ \
   --benchmark-only \
   --benchmark-compare \
   --benchmark-autosave
@@ -165,7 +165,7 @@ Benchmarks can be integrated into CI for performance regression detection:
 # .github/workflows/benchmark.yml
 - name: Run benchmarks
   run: |
-    pytest src/mycorrhizal/benchmarks/ \
+    pytest tests/benchmarks/ \
       --benchmark-only \
       --benchmark-json=benchmark_output.json
 

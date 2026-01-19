@@ -35,7 +35,7 @@ def run_all_benchmarks(args):
     """Run all benchmarks"""
     cmd = [
         "pytest",
-        "src/mycorrhizal/benchmarks/",
+        "tests/benchmarks/",
         "-v",
         "--benchmark-only",
         "--benchmark-sort=name",
@@ -53,9 +53,9 @@ def run_all_benchmarks(args):
 def run_library_benchmarks(args, library):
     """Run benchmarks for a specific library"""
     benchmark_files = {
-        "hypha": "src/mycorrhizal/benchmarks/bench_hypha.py",
-        "rhizomorph": "src/mycorrhizal/benchmarks/bench_rhizomorph.py",
-        "septum": "src/mycorrhizal/benchmarks/bench_septum.py",
+        "hypha": "tests/benchmarks/bench_hypha.py",
+        "rhizomorph": "tests/benchmarks/bench_rhizomorph.py",
+        "septum": "tests/benchmarks/bench_septum.py",
     }
 
     if library not in benchmark_files:
@@ -84,7 +84,7 @@ def run_comparison(args):
     """Run benchmarks with comparison against previous run"""
     cmd = [
         "pytest",
-        "src/mycorrhizal/benchmarks/",
+        "tests/benchmarks/",
         "-v",
         "--benchmark-only",
         "--benchmark-compare",
@@ -161,7 +161,7 @@ Examples:
     args = parser.parse_args()
 
     # Verify we're in the right directory
-    if not Path("src/mycorrhizal/benchmarks").exists():
+    if not Path("tests/benchmarks").exists():
         print("Error: Must run from repository root directory")
         sys.exit(1)
 
