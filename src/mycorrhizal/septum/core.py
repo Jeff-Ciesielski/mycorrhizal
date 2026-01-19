@@ -75,6 +75,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Set,
     Union,
     Awaitable,
     TypeVar,
@@ -86,27 +87,30 @@ from typing import (
 from functools import cache
 
 from mycorrhizal.common.wrappers import create_view_from_protocol
+from mycorrhizal.common.compilation import (
+    _get_compiled_metadata,
+    _clear_compilation_cache,
+    CompiledMetadata,
+)
 
 
 T = TypeVar('T')
 
 
 # ============================================================================
-# Interface Integration Helper
+# Interface View Caching
 # ============================================================================
 
 # Cache for interface views to avoid repeated creation
 _interface_view_cache: Dict[Tuple[int, Type], Any] = {}
 
-# Cache for type inspection results to avoid repeated signature inspection
-_type_inspection_cache: Dict[int, Optional[Type]] = {}
-
 
 def _clear_interface_view_cache() -> None:
     """Clear the interface view cache. Useful for testing."""
-    global _interface_view_cache, _type_inspection_cache
+    global _interface_view_cache
     _interface_view_cache.clear()
-    _type_inspection_cache.clear()
+    # Also clear the compilation cache from common module
+    _clear_compilation_cache()
 
 
 def _create_interface_view_for_context(context: SharedContext, handler: Callable) -> SharedContext:
@@ -127,61 +131,35 @@ def _create_interface_view_for_context(context: SharedContext, handler: Callable
 
     Returns:
         Either the original context (mutated in-place) or the original context
+
+    Raises:
+        TypeError: If handler is not callable or type hints are malformed
+        AttributeError: If type hints reference undefined types
     """
-    try:
-        handler_id = id(handler)
+    # Get compiled metadata (uses EAFP pattern internally)
+    # Raises specific exceptions if compilation fails
+    metadata = _get_compiled_metadata(handler)
 
-        # EAFP: Try to get from cache, create if not present (faster for high cache hit rate)
+    # If handler has interface type hint, create constrained view
+    if metadata.has_interface and metadata.interface_type:
+        # EAFP: Try to get view from cache, create if not present
+        cache_key = (id(context.common), metadata.interface_type)
         try:
-            interface_type = _type_inspection_cache[handler_id]
+            constrained_common = _interface_view_cache[cache_key]
         except KeyError:
-            # Perform type inspection once and cache the result
-            sig = inspect.signature(handler)
-            params = list(sig.parameters.values())
+            # Create constrained view of common with pre-extracted interface metadata
+            constrained_common = create_view_from_protocol(
+                context.common,
+                metadata.interface_type,
+                readonly_fields=metadata.readonly_fields
+            )
 
-            interface_type = None
+            # Cache for reuse
+            _interface_view_cache[cache_key] = constrained_common
 
-            # Check first parameter (should be SharedContext)
-            if params and params[0].name == 'ctx':
-                ctx_type = get_type_hints(handler).get('ctx')
-
-                # If type hint exists and is a generic SharedContext with interface
-                if ctx_type and hasattr(ctx_type, '__args__'):
-                    # Extract the type argument from SharedContext[InterfaceType]
-                    extracted_type = ctx_type.__args__[0]
-
-                    # If it has interface metadata, use it
-                    if hasattr(extracted_type, '_readonly_fields'):
-                        interface_type = extracted_type
-
-            # Cache the inspection result
-            _type_inspection_cache[handler_id] = interface_type
-
-        # If handler has interface type hint, create constrained view
-        if interface_type:
-            # EAFP: Try to get view from cache, create if not present
-            cache_key = (id(context.common), interface_type)
-            try:
-                constrained_common = _interface_view_cache[cache_key]
-            except KeyError:
-                # Create constrained view of common with interface metadata
-                readonly_fields = getattr(interface_type, '_readonly_fields', set())
-                constrained_common = create_view_from_protocol(
-                    context.common,
-                    interface_type,
-                    readonly_fields=readonly_fields
-                )
-
-                # Cache for reuse
-                _interface_view_cache[cache_key] = constrained_common
-
-            # OPTIMIZATION: Mutate context in-place instead of using replace()
-            # SharedContext is NOT frozen, so this is safe and avoids copying all fields
-            context.common = constrained_common
-
-    except Exception:
-        # If anything goes wrong with type inspection, fall back to original context
-        pass
+        # OPTIMIZATION: Mutate context in-place instead of using replace()
+        # SharedContext is NOT frozen, so this is safe and avoids copying all fields
+        context.common = constrained_common
 
     return context
 

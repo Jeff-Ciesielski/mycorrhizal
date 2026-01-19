@@ -79,6 +79,11 @@ from typing import (
 from types import SimpleNamespace
 
 from mycorrhizal.common.wrappers import create_view_from_protocol
+from mycorrhizal.common.compilation import (
+    _get_compiled_metadata,
+    _clear_compilation_cache,
+    CompiledMetadata,
+)
 from mycorrhizal.common.timebase import *
 
 logger = logging.getLogger(__name__)
@@ -88,27 +93,25 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 
 # ======================================================================================
-# Interface Integration Helper
+# Interface View Caching
 # ======================================================================================
 
 # Cache for interface views to avoid repeated creation
 _interface_view_cache: Dict[Tuple[int, Type], Any] = {}
 
-# Cache for type inspection results to avoid repeated signature inspection
-_type_inspection_cache: Dict[int, Tuple[bool, Optional[Type]]] = {}
-
 
 def _clear_interface_view_cache() -> None:
     """Clear the interface view cache. Useful for testing."""
-    global _interface_view_cache, _type_inspection_cache
+    global _interface_view_cache
     _interface_view_cache.clear()
-    _type_inspection_cache.clear()
+    # Also clear the compilation cache from common module
+    _clear_compilation_cache()
 
 
 def _create_interface_view_if_needed(bb: Any, func: Callable) -> Any:
     """
     Create a constrained view if the function has an interface type hint on its
-    first parameter (typically named 'bb').
+    blackboard parameter.
 
     This enables type-safe, constrained access to blackboard state based on
     interface definitions created with @blackboard_interface.
@@ -124,50 +127,32 @@ def _create_interface_view_if_needed(bb: Any, func: Callable) -> Any:
 
     Returns:
         Either the original blackboard or a constrained view based on interface metadata
+
+    Raises:
+        TypeError: If func is not callable or type hints are malformed
+        AttributeError: If type hints reference undefined types
     """
-    try:
-        func_id = id(func)
+    # Get compiled metadata (uses EAFP pattern internally)
+    # Raises specific exceptions if compilation fails
+    metadata = _get_compiled_metadata(func)
 
-        # EAFP: Try to get from cache, create if not present (faster for high cache hit rate)
+    # If handler has interface type hint, create constrained view
+    if metadata.has_interface and metadata.interface_type:
+        # EAFP: Try to get view from cache, create if not present
+        cache_key = (id(bb), metadata.interface_type)
         try:
-            has_interface, bb_type = _type_inspection_cache[func_id]
+            return _interface_view_cache[cache_key]
         except KeyError:
-            # Perform type inspection once and cache the result
-            sig = inspect.signature(func)
-            params = list(sig.parameters.values())
+            # Create view with pre-extracted interface metadata
+            view = create_view_from_protocol(
+                bb,
+                metadata.interface_type,
+                readonly_fields=metadata.readonly_fields
+            )
 
-            # Check first parameter (usually 'bb')
-            has_interface = False
-            bb_type = None
-
-            if params and params[0].name == 'bb':
-                bb_type = get_type_hints(func).get('bb')
-                has_interface = bb_type and hasattr(bb_type, '_readonly_fields')
-
-            # Cache the inspection result
-            _type_inspection_cache[func_id] = (has_interface, bb_type)
-
-        # If handler has interface type hint, create constrained view
-        if has_interface and bb_type:
-            # EAFP: Try to get view from cache, create if not present
-            cache_key = (id(bb), bb_type)
-            try:
-                return _interface_view_cache[cache_key]
-            except KeyError:
-                # Create view with interface metadata
-                readonly_fields = getattr(bb_type, '_readonly_fields', set())
-                view = create_view_from_protocol(
-                    bb,
-                    bb_type,
-                    readonly_fields=readonly_fields
-                )
-
-                # Cache for reuse
-                _interface_view_cache[cache_key] = view
-                return view
-    except Exception:
-        # If anything goes wrong with type inspection, fall back to original bb
-        pass
+            # Cache for reuse
+            _interface_view_cache[cache_key] = view
+            return view
 
     return bb
 
