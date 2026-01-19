@@ -16,6 +16,24 @@ class _TransitionInfo:
     transition_type: str  # "normal", "push", "pop", "again", "retry", etc.
 
 
+def _short_state_name(state_name: str) -> str:
+    """
+    Extract short state name from full qualified name.
+
+    Converts 'examples.septum.network_protocol_fsm.IdleState' to 'IdleState'.
+    Handles edge cases like '<string>.IdleState' gracefully.
+
+    Args:
+        state_name: Full state name with module path
+
+    Returns:
+        Short state name (just the class name)
+    """
+    if "." in state_name:
+        return state_name.rsplit(".", 1)[-1]
+    return state_name
+
+
 def to_mermaid(fsm) -> str:
     """
     Generate Mermaid diagram from a StateMachine instance.
@@ -77,12 +95,12 @@ def to_mermaid(fsm) -> str:
 
     # Add initial state marker
     initial_name = fsm.initial_state.name if isinstance(fsm.initial_state, StateSpec) else str(fsm.initial_state)
-    lines.append(f"    start((start)) --> {nid(initial_name)}")
+    lines.append(f'    start((start)) --> {nid(initial_name)}')
 
     # Add error state if exists
     if fsm.error_state:
         error_name = fsm.error_state.name if isinstance(fsm.error_state, StateSpec) else str(fsm.error_state)
-        lines.append(f"    {nid(error_name)}(((ERROR)))")
+        lines.append(f'    {nid(error_name)}{{"ERROR"}}')
 
     # Collect all transitions
     transitions: Dict[str, List[_TransitionInfo]] = {}
@@ -135,8 +153,9 @@ def to_mermaid(fsm) -> str:
                             # Push transitions - show all states being pushed
                             for push_state in p.push_states:
                                 push_name = push_state.name if isinstance(push_state, StateSpec) else str(push_state)
+                                # Use -> instead of unicode arrow for better compatibility
                                 transitions[state_name].append(
-                                    _TransitionInfo(f"{label.name} → push", push_name, "push")
+                                    _TransitionInfo(f"{label.name}->push", push_name, "push")
                                 )
                         case StateSpec() as target_state:
                             transitions[state_name].append(
@@ -182,39 +201,43 @@ def to_mermaid(fsm) -> str:
             continue
 
         state_id = nid(state_name)
+        short_name = _short_state_name(state_name)
 
         # Determine node shape based on state properties
+        # All nodes use quotes to handle special characters
         if state.config.terminal:
-            shape = f'[{state_name} (**terminal**)]'
+            # Terminal state: use double parentheses and note terminal status
+            lines.append(f'    {state_id}[["{short_name}<br/>terminal"]]')
         elif state_name == initial_name:
-            shape = f'[{state_name}]'
+            # Initial state: normal shape
+            lines.append(f'    {state_id}["{short_name}"]')
         elif fsm.error_state and state_name == (fsm.error_state.name if isinstance(fsm.error_state, StateSpec) else str(fsm.error_state)):
-            shape = f'[{state_name}]'
+            # Error state: use rhombus shape
+            lines.append(f'    {state_id}{{"{short_name}"}}')
         else:
-            shape = f'[{state_name}]'
-
-        lines.append(f"    {state_id}{shape}")
+            # Normal state
+            lines.append(f'    {state_id}["{short_name}"]')
 
         # Add transitions
         for trans in transitions.get(state_name, []):
             if trans.transition_type in ("again", "retry", "repeat", "restart", "unhandled"):
-                # Self-loop
-                label = f'"{trans.transition_type}"' if trans.transition_type else ""
-                lines.append(f"    {state_id} -->|{label}| {state_id}")
+                # Self-loop with transition type
+                lines.append(f'    {state_id} -->|"{trans.transition_type}"| {state_id}')
             elif trans.transition_type == "pop":
                 # Pop goes to a special pop node
-                lines.append(f"    {state_id} -->|\"{trans.label or 'pop'}\"| pop((pop))")
+                label = trans.label if trans.label else "pop"
+                lines.append(f'    {state_id} -->|"{label}"| pop((pop))')
             elif trans.transition_type == "push":
                 # Push transition
                 target_id = nid(trans.target)
-                lines.append(f"    {state_id} -->|\"{trans.label}\"| {target_id}")
+                lines.append(f'    {state_id} -->|"{trans.label}"| {target_id}')
             else:
                 # Normal transition
                 target_id = nid(trans.target)
-                lines.append(f"    {state_id} -->|\"{trans.label}\"| {target_id}")
+                lines.append(f'    {state_id} -->|"{trans.label}"| {target_id}')
 
     # Add pop node if any pop transitions exist
     if any(t.transition_type == "pop" for transs in transitions.values() for t in transs):
-        lines.append("    pop((pop))")
+        lines.append('    pop((pop))')
 
     return "\n".join(lines)

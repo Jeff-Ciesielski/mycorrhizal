@@ -272,6 +272,68 @@ Paste into [Mermaid Live Editor](https://mermaid.live/) to visualize your workfl
 
 **Catch structural issues in your workflow before running any transitions!**
 
+### Example: Task Processing System
+
+This Petri net processes tasks through multiple stages with error handling and notification routing:
+
+```mermaid
+graph TD
+    subgraph TaskProcessingSystem.TaskGen
+        TaskProcessingSystem.TaskGen.source(("[INPUT]</br>TaskProcessingSystem.TaskGen.source"))
+    end
+    subgraph TaskProcessingSystem.TaskProc
+        TaskProcessingSystem.TaskProc.input(("TaskProcessingSystem.TaskProc.input"))
+        TaskProcessingSystem.TaskProc.processing(("TaskProcessingSystem.TaskProc.processing"))
+        TaskProcessingSystem.TaskProc.completed(("TaskProcessingSystem.TaskProc.completed"))
+        TaskProcessingSystem.TaskProc.failed(("TaskProcessingSystem.TaskProc.failed"))
+        TaskProcessingSystem.TaskProc.take_to_processing[TaskProcessingSystem.TaskProc.take_to_processing]
+        TaskProcessingSystem.TaskProc.do_processing[TaskProcessingSystem.TaskProc.do_processing]
+        TaskProcessingSystem.TaskProc.input --> TaskProcessingSystem.TaskProc.take_to_processing
+        TaskProcessingSystem.TaskProc.take_to_processing --> TaskProcessingSystem.TaskProc.processing
+        TaskProcessingSystem.TaskProc.processing --> TaskProcessingSystem.TaskProc.do_processing
+        TaskProcessingSystem.TaskProc.do_processing --> TaskProcessingSystem.TaskProc.completed
+        TaskProcessingSystem.TaskProc.do_processing --> TaskProcessingSystem.TaskProc.failed
+    end
+    subgraph TaskProcessingSystem.Notify
+        TaskProcessingSystem.Notify.input(("TaskProcessingSystem.Notify.input"))
+        TaskProcessingSystem.Notify.email_sink(("[OUTPUT]</br>TaskProcessingSystem.Notify.email_sink"))
+        TaskProcessingSystem.Notify.sms_sink(("[OUTPUT]</br>TaskProcessingSystem.Notify.sms_sink"))
+        TaskProcessingSystem.Notify.log_sink(("[OUTPUT]</br>TaskProcessingSystem.Notify.log_sink"))
+        TaskProcessingSystem.Notify.NotificationFork[TaskProcessingSystem.Notify.NotificationFork]
+        TaskProcessingSystem.Notify.input --> TaskProcessingSystem.Notify.NotificationFork
+        TaskProcessingSystem.Notify.NotificationFork --> TaskProcessingSystem.Notify.email_sink
+        TaskProcessingSystem.Notify.NotificationFork --> TaskProcessingSystem.Notify.sms_sink
+        TaskProcessingSystem.Notify.NotificationFork --> TaskProcessingSystem.Notify.log_sink
+    end
+    subgraph TaskProcessingSystem.ErrorHandle
+        TaskProcessingSystem.ErrorHandle.input(("TaskProcessingSystem.ErrorHandle.input"))
+        TaskProcessingSystem.ErrorHandle.error_log(("[OUTPUT]</br>TaskProcessingSystem.ErrorHandle.error_log"))
+        TaskProcessingSystem.ErrorHandle.ErrorForward[TaskProcessingSystem.ErrorHandle.ErrorForward]
+        TaskProcessingSystem.ErrorHandle.input --> TaskProcessingSystem.ErrorHandle.ErrorForward
+        TaskProcessingSystem.ErrorHandle.ErrorForward --> TaskProcessingSystem.ErrorHandle.error_log
+    end
+    TaskProcessingSystem.completion_tracker(("[OUTPUT]</br>TaskProcessingSystem.completion_tracker"))
+    TaskProcessingSystem.forward_source_to_input[TaskProcessingSystem.forward_source_to_input]
+    TaskProcessingSystem.CompletionFork[TaskProcessingSystem.CompletionFork]
+    TaskProcessingSystem.FailureFork[TaskProcessingSystem.FailureFork]
+    TaskProcessingSystem.TaskGen.source --> TaskProcessingSystem.forward_source_to_input
+    TaskProcessingSystem.forward_source_to_input --> TaskProcessingSystem.TaskProc.input
+    TaskProcessingSystem.TaskProc.completed --> TaskProcessingSystem.CompletionFork
+    TaskProcessingSystem.CompletionFork --> TaskProcessingSystem.Notify.input
+    TaskProcessingSystem.CompletionFork --> TaskProcessingSystem.completion_tracker
+    TaskProcessingSystem.TaskProc.failed --> TaskProcessingSystem.FailureFork
+    TaskProcessingSystem.FailureFork --> TaskProcessingSystem.ErrorHandle.input
+    TaskProcessingSystem.FailureFork --> TaskProcessingSystem.completion_tracker
+```
+
+**Key features shown:**
+- Task generation, processing, and completion tracking
+- Error handling with separate logging
+- Multi-channel notifications (email, SMS, log)
+- Fork/join patterns for parallel flows
+
+See the [Hypha Demo](../../examples/hypha/hypha_demo.py) for the complete executable example.
+
 ## Programmatic Net Building
 
 In addition to the decorator-based DSL, Hypha supports **programmatic net construction** using the `NetBuilder` API. This is useful for:

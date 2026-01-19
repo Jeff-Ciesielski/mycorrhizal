@@ -108,41 +108,6 @@ stateDiagram-v2
     YellowState --> RedState : TIMER
 ```
 
-## Debugging Tips
-
-### Rhizomorph Debugging
-
-```python
-@bt.action
-async def debug_action(bb):
-    print(f"[DEBUG] Blackboard state: {bb.model_dump()}")
-    return Status.SUCCESS
-```
-
-### Hypha Debugging
-
-```python
-@pn.transition()
-async def debug_transition(consumed, bb, timebase):
-    print(f"[DEBUG] Consumed: {[t.value for t in consumed]}")
-    print(f"[DEBUG] Blackboard: {bb.model_dump()}")
-    return []
-```
-
-### Septum Debugging
-
-```python
-@septum.state
-class DebugState:
-    @septum.on_enter
-    async def on_enter(ctx):
-        print(f"[DEBUG] Entering state, context: {ctx}")
-
-    @septum.on_exit
-    async def on_exit(ctx):
-        print(f"[DEBUG] Exiting state, context: {ctx}")
-```
-
 ## Structured Logging
 
 Use Python's logging module alongside Mycorrhizal:

@@ -177,10 +177,12 @@ class GamePlay:
 A key feature of Septum is the ability to **export your state machine to a Mermaid diagram before execution**. This enables static analysis and verification of your FSM structure:
 
 ```python
+from mycorrhizal.septum.util import to_mermaid
+
 fsm = StateMachine(initial_state=MyState)
 await fsm.initialize()
 
-mermaid = fsm.generate_mermaid_flowchart()
+mermaid = to_mermaid(fsm)
 print(mermaid)
 ```
 
@@ -192,6 +194,30 @@ Paste the output into the [Mermaid Live Editor](https://mermaid.live/) to visual
 - Validate transition logic and event flows
 - Document your state machine architecture automatically
 - Catch structural bugs **before runtime**
+
+### Example: Idle/Processing/Done Workflow
+
+This state machine shows a simple three-state workflow with idle, processing, and terminal states:
+
+```mermaid
+flowchart TD
+    start((start)) --> S1
+    S1[IdleState]
+    S1 -->|"START"| S2
+    S1 -->|"QUIT"| S3
+    S2[ProcessingState]
+    S2 -->|"DONE"| S1
+    S3[DoneState (**terminal**)]
+```
+
+**Key features shown:**
+- Initial state transitions to multiple destinations
+- Event-labeled transitions (START, QUIT, DONE)
+- Bidirectional state flow (idle <-> processing)
+- Terminal state marking workflow completion
+- Clean start node visualization
+
+See the [Septum Basic Example](../../examples/septum/septum_decorator_basic.py) for the complete executable example.
 
 ## See Also
 

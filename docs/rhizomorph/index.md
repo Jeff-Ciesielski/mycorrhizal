@@ -296,6 +296,59 @@ View in [Mermaid Live Editor](https://mermaid.live/) to visualize your decision 
 
 **Review and validate your decision trees before ticking them!**
 
+### Example: Threat Response System
+
+This behavior tree shows a threat response AI with patrol, engagement, and telemetry behaviors:
+
+```mermaid
+flowchart TD
+  N1["Selector<br/>root"]
+  N1 --> N2
+  N2["Subtree<br/>Engage"]
+  N2 --> N3
+  N3["Sequence<br/>engage_threat"]
+  N3 --> N4
+  N4((CONDITION<br/>threat_detected))
+  N3 --> N5
+  N5["Decor<br/>Failer(Gate(cond=battery_ok)(Timeout(0.12s)(engage)))"]
+  N5 --> N6
+  N6["Decor<br/>Gate(cond=battery_ok)(Timeout(0.12s)(engage))"]
+  N6 --> N7
+  N7["Decor<br/>Timeout(0.12s)(engage)"]
+  N7 --> N8
+  N8((ACTION<br/>engage))
+  N1 --> N9
+  N9["Sequence<br/>patrol"]
+  N9 --> N10
+  N10((CONDITION<br/>has_waypoints))
+  N9 --> N11
+  N11((ACTION<br/>go_to_next))
+  N9 --> N12
+  N12["Decor<br/>Succeeder(Retry(3)(Timeout(1.0s)(scan_area)))"]
+  N12 --> N13
+  N13["Decor<br/>Retry(3)(Timeout(1.0s)(scan_area))"]
+  N13 --> N14
+  N14["Decor<br/>Timeout(1.0s)(scan_area)"]
+  N14 --> N15
+  N15((ACTION<br/>scan_area))
+  N1 --> N16
+  N16["Decor<br/>Failer(RateLimit(0.200000s)(telemetry_push))"]
+  N16 --> N17
+  N17["Decor<br/>RateLimit(0.200000s)(telemetry_push)"]
+  N17 --> N18
+  N18((ACTION<br/>telemetry_push))
+```
+
+**Key features shown:**
+- Selector root for priority-based behavior selection
+- Subtree composition (Engage subtree)
+- Decorator pattern usage (Gate, Timeout, Retry, RateLimit, Failer, Succeeder)
+- Condition nodes for state checking
+- Action nodes for executing behaviors
+- Sequential and parallel flow control
+
+See the [Rhizomorph Example](../../examples/rhizomorph/rhizomorph_example.py) for the complete executable example.
+
 ## See Also
 
 - [Septum](../septum/) - State Machines for stateful behavior

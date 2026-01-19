@@ -16,46 +16,46 @@ uv run python examples/hypha/minimal_hypha_demo.py
 
 ## Directory Structure
 
-### [`hypha/`](./hypha/)
+### [`hypha/`](https://github.com/Jeff-Ciesielski/mycorrhizal/tree/main/examples/hypha/)
 Petri Net examples using the Hypha DSL
-- **`minimal_hypha_demo.py`** - Simple Petri net with basic concepts
-- **`hypha_demo.py`** - Full-featured Petri net with subnets, IO places, error handling
-- **`programmatic_hypha_demo.py`** - Building nets programmatically without decorators
+- **[`minimal_hypha_demo.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/hypha/minimal_hypha_demo.py)** - Simple Petri net with basic concepts
+- **[`hypha_demo.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/hypha/hypha_demo.py)** - Full-featured Petri net with subnets, IO places, error handling
+- **[`programmatic_hypha_demo.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/hypha/programmatic_hypha_demo.py)** - Building nets programmatically without decorators
 
-### [`rhizomorph/`](./rhizomorph/)
+### [`rhizomorph/`](https://github.com/Jeff-Ciesielski/mycorrhizal/tree/main/examples/rhizomorph/)
 Behavior Tree examples using the Rhizomorph DSL
-- **`rhizomorph_example.py`** - Comprehensive behavior tree with threat detection
-- **`rhizomorph_interface_demo.py`** - BT with interface-based access control
+- **[`rhizomorph_example.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/rhizomorph/rhizomorph_example.py)** - Comprehensive behavior tree with threat detection
+- **[`rhizomorph_interface_demo.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/rhizomorph/rhizomorph_interface_demo.py)** - BT with interface-based access control
 
-### [`septum/`](./septum/)
+### [`septum/`](https://github.com/Jeff-Ciesielski/mycorrhizal/tree/main/examples/septum/)
 Finite State Machine examples using the Septum DSL
-- **`septum_decorator_basic.py`** - Basic decorator-based state machine
-- **`septum_decorator_timeout.py`** - State machine with timeout handling
+- **[`septum_decorator_basic.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/septum/septum_decorator_basic.py)** - Basic decorator-based state machine
+- **[`septum_decorator_timeout.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/septum/septum_decorator_timeout.py)** - State machine with timeout handling
 
-### [`interfaces/`](./interfaces/)
+### [`interfaces/`](https://github.com/Jeff-Ciesielski/mycorrhizal/tree/main/examples/interfaces/)
 Interface system examples
-- **`interface_dsl_demo.py`** - Using the @blackboard_interface decorator system
+- **[`interface_dsl_demo.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/interfaces/interface_dsl_demo.py)** - Using the @blackboard_interface decorator system
 
-### [`spores/`](./spores/)
+### [`spores/`](https://github.com/Jeff-Ciesielski/mycorrhizal/tree/main/examples/spores/)
 Spores event and object logging examples
-- **`hypha_spores_example.py`** - Petri net with OCEL event logging for manufacturing workflow
-- **`rhizomorph_spores_example.py`** - Behavior tree with event logging for threat assessment
-- **`septum_spores_example.py`** - State machine with lifecycle event logging for traffic light control
+- **[`hypha_spores_example.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/spores/hypha_spores_example.py)** - Petri net with OCEL event logging for manufacturing workflow
+- **[`rhizomorph_spores_example.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/spores/rhizomorph_spores_example.py)** - Behavior tree with event logging for threat assessment
+- **[`septum_spores_example.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/spores/septum_spores_example.py)** - State machine with lifecycle event logging for traffic light control
 
 ## What to Learn From Each Example
 
 | If you want to learn... | Start with... |
 |------------------------|---------------|
-| Basic behavior trees | `rhizomorph/rhizomorph_example.py` |
-| Basic Petri nets | `hypha/minimal_hypha_demo.py` |
-| Basic state machines | `septum/septum_decorator_basic.py` |
-| Interface basics | `interfaces/interface_dsl_demo.py` |
-| Programmatic Petri nets | `hypha/programmatic_hypha_demo.py` |
-| BT with interfaces | `rhizomorph/rhizomorph_interface_demo.py` |
-| Full Petri net system | `hypha/hypha_demo.py` |
-| Event logging with Hypha | `spores/hypha_spores_example.py` |
-| Event logging with Rhizomorph | `spores/rhizomorph_spores_example.py` |
-| Event logging with Septum | `spores/septum_spores_example.py` |
+| Basic behavior trees | [`rhizomorph/rhizomorph_example.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/rhizomorph/rhizomorph_example.py) |
+| Basic Petri nets | [`hypha/minimal_hypha_demo.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/hypha/minimal_hypha_demo.py) |
+| Basic state machines | [`septum/septum_decorator_basic.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/septum/septum_decorator_basic.py) |
+| Interface basics | [`interfaces/interface_dsl_demo.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/interfaces/interface_dsl_demo.py) |
+| Programmatic Petri nets | [`hypha/programmatic_hypha_demo.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/hypha/programmatic_hypha_demo.py) |
+| BT with interfaces | [`rhizomorph/rhizomorph_interface_demo.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/rhizomorph/rhizomorph_interface_demo.py) |
+| Full Petri net system | [`hypha/hypha_demo.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/hypha/hypha_demo.py) |
+| Event logging with Hypha | [`spores/hypha_spores_example.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/spores/hypha_spores_example.py) |
+| Event logging with Rhizomorph | [`spores/rhizomorph_spores_example.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/spores/rhizomorph_spores_example.py) |
+| Event logging with Septum | [`spores/septum_spores_example.py`](https://github.com/Jeff-Ciesielski/mycorrhizal/blob/main/examples/spores/septum_spores_example.py) |
 
 ## Running All Examples
 

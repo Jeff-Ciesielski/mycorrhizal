@@ -182,7 +182,56 @@ diagram = MainTree.to_mermaid()
 print(diagram)
 ```
 
-Paste the output into the Mermaid Live Editor.
+Paste the output into the Mermaid Live Editor or any Markdown viewer that supports Mermaid.
+
+### Example Diagram
+
+Here's an example behavior tree diagram showing a threat response system:
+
+```mermaid
+flowchart TD
+  N1["Selector<br/>root"]
+  N1 --> N2
+  N2["Subtree<br/>Engage"]
+  N2 --> N3
+  N3["Sequence<br/>engage_threat"]
+  N3 --> N4
+  N4((CONDITION<br/>threat_detected))
+  N3 --> N5
+  N5["Decor<br/>Failer(Gate(cond=battery_ok)(Timeout(0.12s)(engage)))"]
+  N5 --> N6
+  N6["Decor<br/>Gate(cond=battery_ok)(Timeout(0.12s)(engage))"]
+  N6 --> N7
+  N7["Decor<br/>Timeout(0.12s)(engage)"]
+  N7 --> N8
+  N8((ACTION<br/>engage))
+  N1 --> N9
+  N9["Sequence<br/>patrol"]
+  N9 --> N10
+  N10((CONDITION<br/>has_waypoints))
+  N9 --> N11
+  N11((ACTION<br/>go_to_next))
+  N9 --> N12
+  N12["Decor<br/>Succeeder(Retry(3)(Timeout(1.0s)(scan_area)))"]
+  N12 --> N13
+  N13["Decor<br/>Retry(3)(Timeout(1.0s)(scan_area))"]
+  N13 --> N14
+  N14["Decor<br/>Timeout(1.0s)(scan_area)"]
+  N14 --> N15
+  N15((ACTION<br/>scan_area))
+  N1 --> N16
+  N16["Decor<br/>Failer(RateLimit(0.200000s)(telemetry_push))"]
+  N16 --> N17
+  N17["Decor<br/>RateLimit(0.200000s)(telemetry_push)"]
+  N17 --> N18
+  N18((ACTION<br/>telemetry_push))
+```
+
+This diagram shows:
+- A **Selector** root that chooses between Engage, Patrol, or Telemetry
+- **Decorator chains** like `Failer(Gate(Timeout(engage)))` shown as nested decorators
+- **Composite nodes** (Sequence, Selector) with their children
+- **Leaf nodes** (Conditions, Actions) clearly marked
 
 ---
 
