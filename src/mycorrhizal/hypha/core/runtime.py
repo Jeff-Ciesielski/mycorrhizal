@@ -8,12 +8,13 @@ Manages token flow, transition firing, and asyncio task coordination.
 
 import asyncio
 from asyncio import Event, Task
-from typing import Any, List, Dict, Optional, Set, Tuple, Callable, Deque, Union, Type
+from typing import Any, List, Dict, Optional, Set, Tuple, Callable, Deque, Union, Type, get_type_hints
 from collections import deque
-from itertools import product
+from itertools import product, combinations
 import inspect
 import logging
 
+from mycorrhizal.common.wrappers import create_view_from_protocol
 from .specs import NetSpec, PlaceSpec, TransitionSpec, ArcSpec, PlaceType, GuardSpec
 
 logger = logging.getLogger(__name__)
@@ -26,11 +27,15 @@ logger = logging.getLogger(__name__)
 # Cache for interface views to avoid repeated creation
 _interface_view_cache: Dict[Tuple[int, Type], Any] = {}
 
+# Cache for type inspection results to avoid repeated signature inspection
+_type_inspection_cache: Dict[int, Tuple[bool, Optional[Type]]] = {}
+
 
 def _clear_interface_view_cache() -> None:
     """Clear the interface view cache. Useful for testing."""
-    global _interface_view_cache
+    global _interface_view_cache, _type_inspection_cache
     _interface_view_cache.clear()
+    _type_inspection_cache.clear()
 
 
 def _create_interface_view_if_needed(bb: Any, handler: Callable) -> Any:
@@ -53,43 +58,53 @@ def _create_interface_view_if_needed(bb: Any, handler: Callable) -> Any:
     Returns:
         Either the original blackboard or a constrained view based on interface metadata
     """
-    from typing import get_type_hints
-
     try:
-        sig = inspect.signature(handler)
-        params = list(sig.parameters.values())
+        handler_id = id(handler)
 
-        # Check second parameter (usually 'bb' at index 1)
-        # Transition handlers have signature: handler(consumed, bb, timebase, state?)
-        # IO input handlers have signature: handler(bb, timebase)
-        if len(params) >= 2:
-            # For transitions, bb is at index 1
-            # For IO input with 2 params, bb is at index 0
-            bb_param_index = 1 if len(params) >= 3 else 0
+        # EAFP: Try to get from cache, create if not present (faster for high cache hit rate)
+        try:
+            has_interface, bb_type = _type_inspection_cache[handler_id]
+        except KeyError:
+            # Perform type inspection once and cache the result
+            sig = inspect.signature(handler)
+            params = list(sig.parameters.values())
 
-            if params[bb_param_index].name == 'bb':
-                bb_type = get_type_hints(handler).get('bb')
+            # Check second parameter (usually 'bb' at index 1)
+            # Transition handlers have signature: handler(consumed, bb, timebase, state?)
+            # IO input handlers have signature: handler(bb, timebase)
+            has_interface = False
+            bb_type = None
 
-                # If type hint exists and has interface metadata
-                if bb_type and hasattr(bb_type, '_readonly_fields'):
-                    from mycorrhizal.common.wrappers import create_view_from_protocol
+            if len(params) >= 2:
+                # For transitions, bb is at index 1
+                # For IO input with 2 params, bb is at index 0
+                bb_param_index = 1 if len(params) >= 3 else 0
 
-                    # Check cache
-                    cache_key = (id(bb), bb_type)
-                    if cache_key in _interface_view_cache:
-                        return _interface_view_cache[cache_key]
+                if params[bb_param_index].name == 'bb':
+                    bb_type = get_type_hints(handler).get('bb')
+                    has_interface = bb_type and hasattr(bb_type, '_readonly_fields')
 
-                    # Create view with interface metadata
-                    readonly_fields = getattr(bb_type, '_readonly_fields', set())
-                    view = create_view_from_protocol(
-                        bb,
-                        bb_type,
-                        readonly_fields=readonly_fields
-                    )
+            # Cache the inspection result
+            _type_inspection_cache[handler_id] = (has_interface, bb_type)
 
-                    # Cache for reuse
-                    _interface_view_cache[cache_key] = view
-                    return view
+        # If handler has interface type hint, create constrained view
+        if has_interface and bb_type:
+            # EAFP: Try to get view from cache, create if not present
+            cache_key = (id(bb), bb_type)
+            try:
+                return _interface_view_cache[cache_key]
+            except KeyError:
+                # Create view with interface metadata
+                readonly_fields = getattr(bb_type, '_readonly_fields', set())
+                view = create_view_from_protocol(
+                    bb,
+                    bb_type,
+                    readonly_fields=readonly_fields
+                )
+
+                # Cache for reuse
+                _interface_view_cache[cache_key] = view
+                return view
     except Exception:
         # If anything goes wrong with type inspection, fall back to original bb
         pass
@@ -146,7 +161,7 @@ class PlaceRuntime:
                 if token not in tokens_to_remove:
                     temp.append(token)
             self.tokens = temp
-        
+
         self.token_removed_event.set()
         self.token_removed_event.clear()
     
@@ -231,40 +246,51 @@ class TransitionRuntime:
         """Register an output arc"""
         self.output_arcs.append(arc)
     
-    def _generate_token_combinations(self) -> List[Tuple[Tuple[Any, ...], ...]]:
+    def _generate_token_combinations(self):
         """
         Generate all valid token combinations for input arcs.
-        Returns list of tuples, where each tuple contains sub-tuples for each arc.
+        Returns generator of tuples, where each tuple contains sub-tuples for each arc.
+        Using generator instead of list for lazy evaluation - stops after guard selects first valid combination.
         """
         arc_tokens = []
-        
+
         for place_parts, arc in self.input_arcs:
             place = self.net.places[place_parts]
             tokens = place.peek_tokens(arc.weight)
-            
+
             if len(tokens) < arc.weight:
-                return []
-            
+                return iter([])  # Empty generator if insufficient tokens
+
             if arc.weight == 1:
                 arc_tokens.append([(t,) for t in tokens])
             else:
-                from itertools import combinations
                 arc_tokens.append(list(combinations(tokens, arc.weight)))
-        
+
         if not arc_tokens:
-            return []
-        
-        all_combinations = list(product(*arc_tokens))
-        return all_combinations
-    
-    async def _check_guard(self, combinations: List[Tuple[Tuple[Any, ...], ...]]) -> Optional[Tuple[Tuple[Any, ...], ...]]:
+            return iter([])  # Empty generator
+
+        # Return generator instead of list - lazy evaluation
+        return product(*arc_tokens)
+
+    async def _check_guard(self, combinations_generator) -> Optional[Tuple[Tuple[Any, ...], ...]]:
         """Check guard and return combination to consume, or None"""
+        # If no guard, return first combination from generator
         if not self.spec.guard:
-            return combinations[0] if combinations else None
-        
+            try:
+                return next(iter(combinations_generator))
+            except StopIteration:
+                return None
+
+        # Guard exists - need to build list for guard evaluation
+        # Guards expect to see all combinations to choose from
+        combinations_list = list(combinations_generator)
+
+        if not combinations_list:
+            return None
+
         guard_func = self.spec.guard.func
-        guard_result = guard_func(combinations, self.net.bb, self.net.timebase)
-        
+        guard_result = guard_func(combinations_list, self.net.bb, self.net.timebase)
+
         if inspect.isgenerator(guard_result):
             for result in guard_result:
                 if result is not None:
@@ -273,7 +299,7 @@ class TransitionRuntime:
             async for result in guard_result:
                 if result is not None:
                     return result
-        
+
         return None
     
     async def _fire_transition(self, consumed_combination: Tuple[Tuple[Any, ...], ...]):
@@ -487,16 +513,38 @@ class TransitionRuntime:
                 logger.debug("[trans] %s woke; checking inputs", self.fqn)
 
                 combinations = self._generate_token_combinations()
-                logger.debug("[trans] %s combinations=%d", self.fqn, len(combinations))
 
-                if combinations:
+                # Check if there are any combinations (for generator, peek at first element)
+                combinations_iter = iter(combinations)
+                try:
+                    first_combo = next(combinations_iter)
+                    has_combinations = True
+                    # Put it back by creating a new generator with first element
+                    # We need to materialize the first element and chain it with the rest
+                    def chain_with_first(first, rest_iter):
+                        yield first
+                        yield from rest_iter
+                    combinations = chain_with_first(first_combo, combinations_iter)
+                except StopIteration:
+                    has_combinations = False
+
+                logger.debug("[trans] %s has_combinations=%s", self.fqn, has_combinations)
+
+                if has_combinations:
                     to_consume = await self._check_guard(combinations)
                     if to_consume:
                         await self._fire_transition(to_consume)
 
                         # Check if there are still tokens to process after firing
                         remaining_combinations = self._generate_token_combinations()
-                        if not remaining_combinations:
+                        remaining_iter = iter(remaining_combinations)
+                        try:
+                            next(remaining_iter)
+                            has_remaining = True
+                        except StopIteration:
+                            has_remaining = False
+
+                        if not has_remaining:
                             # No more tokens, clear the event and wait for new tokens
                             for place_fqn, arc in self.input_arcs:
                                 place = self.net.places[place_fqn]

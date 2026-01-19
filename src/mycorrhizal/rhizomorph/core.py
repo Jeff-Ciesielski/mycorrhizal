@@ -64,6 +64,7 @@ from typing import (
     Generator,
     Generic,
     List,
+    Literal,
     Optional,
     Tuple,
     Type,
@@ -72,11 +73,12 @@ from typing import (
     Set,
     Protocol,
     overload,
-    Literal,
+    get_type_hints,
+    Sequence as SequenceT,
 )
-from typing import Sequence as SequenceT
 from types import SimpleNamespace
 
+from mycorrhizal.common.wrappers import create_view_from_protocol
 from mycorrhizal.common.timebase import *
 
 logger = logging.getLogger(__name__)
@@ -92,11 +94,15 @@ F = TypeVar("F", bound=Callable[..., Any])
 # Cache for interface views to avoid repeated creation
 _interface_view_cache: Dict[Tuple[int, Type], Any] = {}
 
+# Cache for type inspection results to avoid repeated signature inspection
+_type_inspection_cache: Dict[int, Tuple[bool, Optional[Type]]] = {}
+
 
 def _clear_interface_view_cache() -> None:
     """Clear the interface view cache. Useful for testing."""
-    global _interface_view_cache
+    global _interface_view_cache, _type_inspection_cache
     _interface_view_cache.clear()
+    _type_inspection_cache.clear()
 
 
 def _create_interface_view_if_needed(bb: Any, func: Callable) -> Any:
@@ -119,25 +125,35 @@ def _create_interface_view_if_needed(bb: Any, func: Callable) -> Any:
     Returns:
         Either the original blackboard or a constrained view based on interface metadata
     """
-    from typing import get_type_hints
-
     try:
-        sig = inspect.signature(func)
-        params = list(sig.parameters.values())
+        func_id = id(func)
 
-        # Check first parameter (usually 'bb')
-        if params and params[0].name == 'bb':
-            bb_type = get_type_hints(func).get('bb')
+        # EAFP: Try to get from cache, create if not present (faster for high cache hit rate)
+        try:
+            has_interface, bb_type = _type_inspection_cache[func_id]
+        except KeyError:
+            # Perform type inspection once and cache the result
+            sig = inspect.signature(func)
+            params = list(sig.parameters.values())
 
-            # If type hint exists and has interface metadata
-            if bb_type and hasattr(bb_type, '_readonly_fields'):
-                from mycorrhizal.common.wrappers import create_view_from_protocol
+            # Check first parameter (usually 'bb')
+            has_interface = False
+            bb_type = None
 
-                # Check cache
-                cache_key = (id(bb), bb_type)
-                if cache_key in _interface_view_cache:
-                    return _interface_view_cache[cache_key]
+            if params and params[0].name == 'bb':
+                bb_type = get_type_hints(func).get('bb')
+                has_interface = bb_type and hasattr(bb_type, '_readonly_fields')
 
+            # Cache the inspection result
+            _type_inspection_cache[func_id] = (has_interface, bb_type)
+
+        # If handler has interface type hint, create constrained view
+        if has_interface and bb_type:
+            # EAFP: Try to get view from cache, create if not present
+            cache_key = (id(bb), bb_type)
+            try:
+                return _interface_view_cache[cache_key]
+            except KeyError:
                 # Create view with interface metadata
                 readonly_fields = getattr(bb_type, '_readonly_fields', set())
                 view = create_view_from_protocol(
@@ -170,17 +186,23 @@ def _supports_timebase(func: Callable) -> bool:
         return False
 
 
-async def _call_node_function(func: Callable, bb: Any, tb: Timebase) -> Any:
+async def _call_node_function(func: Callable, bb: Any, tb: Timebase, supports_timebase: bool) -> Any:
     """
     Call a node function with appropriate parameters based on its signature.
 
     If the function has an interface type hint on its 'bb' parameter, a
     constrained view will be created automatically to enforce access control.
+
+    Args:
+        func: The function to call
+        bb: The blackboard
+        tb: The timebase
+        supports_timebase: Cached flag indicating if func accepts 'tb' parameter
     """
     # Create interface view if function has interface type hint
     bb_to_pass = _create_interface_view_if_needed(bb, func)
 
-    if _supports_timebase(func):
+    if supports_timebase:
         if inspect.iscoroutinefunction(func):
             return await func(bb=bb_to_pass, tb=tb)
         else:
@@ -349,11 +371,13 @@ class Action(Node[BB]):
     ) -> None:
         super().__init__(name=_name_of(func), exception_policy=exception_policy)
         self._func = func
+        # Cache whether function supports timebase parameter (checked during construction)
+        self._supports_timebase = _supports_timebase(func)
 
     async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
         try:
-            result = await _call_node_function(self._func, bb, tb)
+            result = await _call_node_function(self._func, bb, tb, self._supports_timebase)
         except asyncio.CancelledError:
             return await self._finish(bb, Status.CANCELLED, tb)
         except Exception as e:
@@ -379,7 +403,7 @@ class Condition(Action[BB]):
     async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
         try:
-            result = await _call_node_function(self._func, bb, tb)
+            result = await _call_node_function(self._func, bb, tb, self._supports_timebase)
         except asyncio.CancelledError:
             return await self._finish(bb, Status.CANCELLED, tb)
         except Exception as e:
@@ -833,6 +857,8 @@ class Match(Node[BB]):
         for _, child in self._cases:
             child.parent = self
         self._matched_idx: Optional[int] = None
+        # Cache whether key_fn supports timebase parameter
+        self._key_fn_supports_timebase = _supports_timebase(key_fn)
 
     def reset(self) -> None:
         super().reset()
@@ -852,7 +878,7 @@ class Match(Node[BB]):
 
     async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
-        
+
         if self._matched_idx is not None:
             _, child = self._cases[self._matched_idx]
             st = await child.tick(bb, tb)
@@ -860,9 +886,9 @@ class Match(Node[BB]):
                 return Status.RUNNING
             self._matched_idx = None
             return await self._finish(bb, st, tb)
-        
-        value = await _call_node_function(self._key_fn, bb, tb)
-        
+
+        value = await _call_node_function(self._key_fn, bb, tb, self._key_fn_supports_timebase)
+
         for i, (matcher, child) in enumerate(self._cases):
             if self._matches(matcher, value):
                 st = await child.tick(bb, tb)
@@ -870,7 +896,7 @@ class Match(Node[BB]):
                     self._matched_idx = i
                     return Status.RUNNING
                 return await self._finish(bb, st, tb)
-        
+
         return await self._finish(bb, Status.FAILURE, tb)
 
 
