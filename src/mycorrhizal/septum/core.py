@@ -469,6 +469,23 @@ def get_all_states() -> Dict[str, StateSpec]:
     return _state_registry.copy()
 
 
+def _clear_state_registry() -> None:
+    """Clear the global state registry. Useful for testing.
+
+    This function should be called in test fixtures to ensure tests
+    don't interfere with each other through shared state registrations.
+
+    Example:
+        @pytest.fixture(autouse=True)
+        def clear_registries():
+            _clear_state_registry()
+            yield
+            _clear_state_registry()
+    """
+    global _state_registry
+    _state_registry.clear()
+
+
 # ============================================================================
 # StateRegistry - Validation and Resolution
 # ============================================================================
@@ -499,18 +516,12 @@ class StateRegistry:
     - Per-instance state registries for better modularity
     """
 
-    def __init__(self, states: Optional[Dict[str, StateSpec]] = None):
+    def __init__(self):
         self._state_cache: Dict[str, StateSpec] = {}
         self._transition_cache: Dict[str, Dict] = {}
         self._resolved_modules: Dict[str, Any] = {}
         self._validation_errors: list[str] = []
         self._validation_warnings: list[str] = []
-
-        # Use provided states or fall back to global registry
-        if states is not None:
-            self._explicit_states = states.copy()
-        else:
-            self._explicit_states = None
 
     def resolve_state(
         self, state_ref: Union[str, StateRef, StateSpec], validate_only: bool = False
@@ -551,24 +562,14 @@ class StateRegistry:
         if state_name in self._state_cache and not validate_only:
             return self._state_cache[state_name]
 
-        # Check explicit states first (if provided)
-        if self._explicit_states is not None:
-            if state_name in self._explicit_states:
-                state = self._explicit_states[state_name]
-                if not validate_only:
-                    self._state_cache[state_name] = state
-                return state
-
-        # Fall back to global registry
+        # Use global registry
         state = get_state(state_name)
         if state:
             if not validate_only:
                 self._state_cache[state_name] = state
             return state
 
-        # If not in explicit states or global registry, we can't resolve it
-        # (In the old system, it would try dynamic imports, but with
-        # decorator-based states, everything should be pre-registered)
+        # State not found in registry
         if validate_only:
             self._validation_errors.append(
                 f"State '{state_name}' not found in registry"
@@ -773,13 +774,23 @@ class StateRegistry:
         for transition in raw_transitions:
             match transition:
                 case LabeledTransition(label, target):
+                    # Resolve target if it's a StateRef
+                    if isinstance(target, StateRef):
+                        resolved_target = self.resolve_state(target)
+                        if not resolved_target:
+                            # Can't resolve - skip this transition
+                            continue
+                        resolved = resolved_target
+                    else:
+                        resolved = target
+
                     # Use the label enum itself as the key
-                    resolved_transitions[label] = target
+                    resolved_transitions[label] = resolved
                     # Also allow lookup by label name
-                    resolved_transitions[label.name] = target
+                    resolved_transitions[label.name] = resolved
                     # Also allow lookup by label value
                     if hasattr(label, 'value'):
-                        resolved_transitions[label.value] = target
+                        resolved_transitions[label.value] = resolved
                 case s if isinstance(s, StateSpec):
                     # Direct state reference
                     resolved_transitions[s.name] = s
@@ -805,11 +816,8 @@ class StateRegistry:
         errors = []
         warnings = []
 
-        # Get all states from explicit states or global registry
-        if self._explicit_states is not None:
-            all_states = list(self._explicit_states.values())
-        else:
-            all_states = list(get_all_states().values())
+        # Get all states from global registry
+        all_states = list(get_all_states().values())
 
         # Build a map of state name to state
         state_map = {state.name: state for state in all_states}
@@ -870,11 +878,8 @@ class StateRegistry:
         """Check that no state has multiple transitions for same event."""
         errors = []
 
-        # Get all states from explicit states or global registry
-        if self._explicit_states is not None:
-            all_states = list(self._explicit_states.values())
-        else:
-            all_states = list(get_all_states().values())
+        # Get all states from global registry
+        all_states = list(get_all_states().values())
 
         for state in all_states:
             event_transitions = {}
@@ -1001,7 +1006,6 @@ class StateMachine:
     def __init__(
         self,
         initial_state: Union[str, StateRef, StateSpec],
-        states: Optional[Dict[str, StateSpec]] = None,
         max_queue_size: int = 1000,
         queue_overflow_policy: str = "block",
         error_state: Optional[Union[str, StateRef, StateSpec]] = None,
@@ -1011,18 +1015,8 @@ class StateMachine:
         common_data: Optional[Any] = None,
     ):
 
-        # Support both global and explicit registries
-        if states is not None:
-            self.registry = StateRegistry(states=states.copy())
-        else:
-            # Fall back to global registry (deprecated)
-            import warnings
-            warnings.warn(
-                "Global state registry is deprecated. Pass 'states' parameter to StateMachine.",
-                DeprecationWarning,
-                stacklevel=2
-            )
-            self.registry = StateRegistry(states=None)
+        # Use global state registry
+        self.registry = StateRegistry()
 
         # Store queue configuration
         self.max_queue_size = max_queue_size
@@ -1760,6 +1754,7 @@ __all__ = [
     "register_state",
     "get_state",
     "get_all_states",
+    "_clear_state_registry",
     "StateRegistry",
     "ValidationError",
     "ValidationResult",

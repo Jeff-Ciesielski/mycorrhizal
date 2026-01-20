@@ -54,7 +54,7 @@ class BaseWrapper:
     and error handling.
     """
 
-    __slots__ = ('_bb', '_allowed_fields', '_private_attrs')
+    __slots__ = ('_bb', '_allowed_fields', '_private_attrs', '__weakref__')
 
     def __init__(
         self,

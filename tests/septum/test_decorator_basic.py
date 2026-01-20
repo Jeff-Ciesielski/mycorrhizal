@@ -4,6 +4,7 @@
 import sys
 sys.path.insert(0, "src")
 
+import pytest
 from enum import Enum, auto
 from mycorrhizal.septum.core import (
     septum,

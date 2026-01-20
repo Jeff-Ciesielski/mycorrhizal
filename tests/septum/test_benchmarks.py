@@ -93,7 +93,7 @@ def create_state_machine_with_n_states(num_states: int):
         # Store reference
         states[state_id] = state_func
 
-    return StateMachine(initial_state="State0", states=states)
+    return StateMachine(initial_state="State0")
 
 
 # ============================================================================

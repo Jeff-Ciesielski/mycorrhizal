@@ -93,6 +93,7 @@ def test_registry_resolve_state_spec():
 
 def test_registry_resolve_state_ref():
     """Test resolving a StateRef string"""
+    # Create registry using global state registry
     registry = StateRegistry()
 
     # Create a StateRef
@@ -106,6 +107,7 @@ def test_registry_resolve_state_ref():
 
 def test_registry_resolve_string():
     """Test resolving a state name string"""
+    # Create registry using global state registry
     registry = StateRegistry()
 
     # Resolve by string name

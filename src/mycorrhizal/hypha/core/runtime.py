@@ -9,7 +9,7 @@ Manages token flow, transition firing, and asyncio task coordination.
 import asyncio
 from asyncio import Event, Task
 from typing import Any, List, Dict, Optional, Set, Tuple, Callable, Deque, Union, Type, get_type_hints
-from collections import deque
+from collections import deque, OrderedDict
 from itertools import product, combinations
 import inspect
 import logging
@@ -20,74 +20,12 @@ from mycorrhizal.common.compilation import (
     _clear_compilation_cache,
     CompiledMetadata,
 )
+from mycorrhizal.common.cache import InterfaceViewCache
 from .specs import NetSpec, PlaceSpec, TransitionSpec, ArcSpec, PlaceType, GuardSpec
 
 logger = logging.getLogger(__name__)
 
 
-# ======================================================================================
-# Interface View Caching
-# ======================================================================================
-
-# Cache for interface views to avoid repeated creation
-_interface_view_cache: Dict[Tuple[int, Type], Any] = {}
-
-
-def _clear_interface_view_cache() -> None:
-    """Clear the interface view cache. Useful for testing."""
-    global _interface_view_cache
-    _interface_view_cache.clear()
-    # Also clear the compilation cache from common module
-    _clear_compilation_cache()
-
-
-def _create_interface_view_if_needed(bb: Any, handler: Callable) -> Any:
-    """
-    Create a constrained view if the handler has an interface type hint on its
-    blackboard parameter.
-
-    This enables type-safe, constrained access to blackboard state based on
-    interface definitions created with @blackboard_interface.
-
-    The function signature can use an interface type:
-        async def my_transition(consumed, bb: MyInterface, timebase):
-            # bb is automatically a constrained view
-            yield {output: token}
-
-    Args:
-        bb: The blackboard instance
-        handler: The transition or IO handler function to check for interface type hints
-
-    Returns:
-        Either the original blackboard or a constrained view based on interface metadata
-
-    Raises:
-        TypeError: If handler is not callable or type hints are malformed
-        AttributeError: If type hints reference undefined types
-    """
-    # Get compiled metadata (uses EAFP pattern internally)
-    # Raises specific exceptions if compilation fails
-    metadata = _get_compiled_metadata(handler)
-
-    # If handler has interface type hint, create constrained view
-    if metadata.has_interface and metadata.interface_type:
-        # EAFP: Try to get view from cache, create if not present
-        cache_key = (id(bb), metadata.interface_type)
-        try:
-            return _interface_view_cache[cache_key]
-        except KeyError:
-            # Create view with pre-extracted interface metadata
-            view = create_view_from_protocol(
-                bb,
-                metadata.interface_type,
-                readonly_fields=metadata.readonly_fields
-            )
-
-            # Cache for reuse
-            _interface_view_cache[cache_key] = view
-            return view
-
-    return bb
 try:
     # Library should not configure root logging; be quiet by default
     logger.addHandler(logging.NullHandler())
@@ -99,12 +37,13 @@ except Exception:
 
 class PlaceRuntime:
     """Runtime execution of a place"""
-    
-    def __init__(self, spec: PlaceSpec, bb: Any, timebase: Any, fqn: str):
+
+    def __init__(self, spec: PlaceSpec, bb: Any, timebase: Any, fqn: str, net: Optional['NetRuntime'] = None):
         self.spec = spec
         self.fqn = fqn
         self.bb = bb
         self.timebase = timebase
+        self.net = net  # Reference to NetRuntime for cache access
         self.state = spec.state_factory() if spec.state_factory else None
         
         # tokens can be a bag (list) or queue (deque)
@@ -129,16 +68,35 @@ class PlaceRuntime:
         self.token_added_event.set()
     
     def remove_tokens(self, tokens_to_remove: List[Any]):
-        """Remove specific tokens from this place"""
+        """Remove specific tokens from this place.
+
+        Note: This operation is idempotent - if a token has already been removed
+        (e.g., by a competing transition), it will be safely skipped.
+        """
         if self.spec.place_type == PlaceType.BAG:
             for token in tokens_to_remove:
-                self.tokens.remove(token)
+                try:
+                    self.tokens.remove(token)
+                except ValueError:
+                    # Token already removed by another transition (race condition)
+                    # This is expected when multiple transitions compete
+                    pass
         else:  # QUEUE
-            temp = deque()
-            for token in self.tokens:
-                if token not in tokens_to_remove:
-                    temp.append(token)
-            self.tokens = temp
+            # Try to use set for O(1) lookup if tokens are hashable
+            try:
+                removed_set = set(tokens_to_remove)
+                temp = deque()
+                for token in self.tokens:
+                    if token not in removed_set:
+                        temp.append(token)
+                self.tokens = temp
+            except TypeError:
+                # Fall back to O(n) lookup for unhashable tokens (e.g., Task objects)
+                temp = deque()
+                for token in self.tokens:
+                    if token not in tokens_to_remove:
+                        temp.append(token)
+                self.tokens = temp
 
         self.token_removed_event.set()
         self.token_removed_event.clear()
@@ -156,7 +114,10 @@ class PlaceRuntime:
             return
 
         # Create interface view if handler has interface type hint
-        bb_to_pass = _create_interface_view_if_needed(self.bb, self.spec.handler)
+        if self.net:
+            bb_to_pass = self.net._create_interface_view_if_needed(self.bb, self.spec.handler)
+        else:
+            bb_to_pass = self.bb
 
         async def io_input_loop():
             try:
@@ -183,7 +144,10 @@ class PlaceRuntime:
             return
 
         # Create interface view if handler has interface type hint
-        bb_to_pass = _create_interface_view_if_needed(self.bb, self.spec.handler)
+        if self.net:
+            bb_to_pass = self.net._create_interface_view_if_needed(self.bb, self.spec.handler)
+        else:
+            bb_to_pass = self.bb
 
         sig = inspect.signature(self.spec.handler)
         if len(sig.parameters) == 3:
@@ -215,6 +179,7 @@ class TransitionRuntime:
 
         self.task: Optional[Task] = None
         self._stop_event = Event()
+        self._spurious_wakeup_count = 0
     
     def add_input_arc(self, place_parts: Tuple[str, ...], arc: ArcSpec):
         """Register an input arc"""
@@ -298,7 +263,7 @@ class TransitionRuntime:
             self.net.places[place_parts].remove_tokens(tokens)
 
         # Create interface view if handler has interface type hint
-        bb_to_pass = _create_interface_view_if_needed(self.net.bb, self.spec.handler)
+        bb_to_pass = self.net._create_interface_view_if_needed(self.net.bb, self.spec.handler)
 
         sig = inspect.signature(self.spec.handler)
         param_count = len(sig.parameters)
@@ -466,25 +431,39 @@ class TransitionRuntime:
         """Main transition execution loop"""
         try:
             while not self._stop_event.is_set():
+                # Generator transitions (no inputs) fire continuously
+                if not self.input_arcs:
+                    # No input places - this is a generator transition
+                    # Fire continuously with empty consumed list
+                    logger.debug("[trans] %s is a generator, firing continuously", self.fqn)
+                    try:
+                        await self._fire_transition([])
+                    except Exception as e:
+                        logger.exception("[%s] Generator transition error", self.fqn)
+
+                    # Small delay to prevent busy-waiting
+                    await asyncio.sleep(0.01)
+                    continue
+
                 wait_tasks = []
                 for place_fqn, arc in self.input_arcs:
                     place = self.net.places[place_fqn]
                     wait_tasks.append(asyncio.create_task(place.token_added_event.wait()))
-                
+
                 if not wait_tasks:
                     break
-                
+
                 stop_task = asyncio.create_task(self._stop_event.wait())
                 wait_tasks.append(stop_task)
-                
+
                 done, pending = await asyncio.wait(
                     wait_tasks,
                     return_when=asyncio.FIRST_COMPLETED
                 )
-                
+
                 for task in pending:
                     task.cancel()
-                
+
                 if self._stop_event.is_set():
                     break
                 # Debug: indicate transition woke
@@ -530,11 +509,16 @@ class TransitionRuntime:
                             # else: there are still tokens, loop again immediately
                 else:
                     # No combinations available (event was set spuriously or tokens consumed by another transition)
-                    # Clear the event and go back to waiting
+                    # Spurious wakeup - clear events and go back to waiting
+                    self._spurious_wakeup_count += 1
+                    logger.debug(
+                        "[trans] %s spurious wakeup #%d, clearing events",
+                        self.fqn, self._spurious_wakeup_count
+                    )
                     for place_fqn, arc in self.input_arcs:
                         place = self.net.places[place_fqn]
                         place.token_added_event.clear()
-        
+
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -550,10 +534,20 @@ class TransitionRuntime:
             except asyncio.CancelledError:
                 pass
 
+    def get_spurious_wakeup_count(self) -> int:
+        """Get the number of spurious wakeups for this transition.
+
+        Useful for monitoring and debugging race conditions.
+
+        Returns:
+            Number of spurious wakeups since transition started
+        """
+        return self._spurious_wakeup_count
+
 
 class NetRuntime:
     """Runtime execution of a complete Petri net"""
-    
+
     def __init__(self, spec: NetSpec, bb: Any, timebase: Any):
         self.spec = spec
         self.bb = bb
@@ -562,6 +556,8 @@ class NetRuntime:
         # Keep as Any to simplify gradual migration (place/transition runtime objects)
         self.places: Dict[Tuple[str, ...], Any] = {}
         self.transitions: Dict[Tuple[str, ...], Any] = {}
+        # Instance-local cache for interface views (no global state)
+        self._interface_cache = InterfaceViewCache(maxsize=256)
 
         self._flatten_spec(spec)
         self._build_runtime()
@@ -587,7 +583,7 @@ class NetRuntime:
         # Build all place runtimes
         for place_parts in list(self.places.keys()):
             place_spec = self._find_place_spec_by_parts(place_parts)
-            self.places[place_parts] = PlaceRuntime(place_spec, self.bb, self.timebase, '.'.join(place_parts))
+            self.places[place_parts] = PlaceRuntime(place_spec, self.bb, self.timebase, '.'.join(place_parts), self)
         
         # Build all transition runtimes  
         for trans_parts in list(self.transitions.keys()):
@@ -618,6 +614,61 @@ class NetRuntime:
             except Exception:
                 in_count = out_count = 0
             logger.debug("[runtime] %s inputs=%d outputs=%d", tfqn, in_count, out_count)
+
+    def _create_interface_view_if_needed(self, bb: Any, handler: Callable) -> Any:
+        """
+        Create a constrained view if the handler has an interface type hint on its
+        blackboard parameter.
+
+        This enables type-safe, constrained access to blackboard state based on
+        interface definitions created with @blackboard_interface.
+
+        The function signature can use an interface type:
+            async def my_transition(consumed, bb: MyInterface, timebase):
+                # bb is automatically a constrained view
+                yield {output: token}
+
+        Args:
+            bb: The blackboard instance
+            handler: The transition or IO handler function to check for interface type hints
+
+        Returns:
+            Either the original blackboard or a constrained view based on interface metadata
+
+        Raises:
+            TypeError: If handler is not callable or type hints are malformed
+            AttributeError: If type hints reference undefined types
+        """
+        # Get compiled metadata (uses EAFP pattern internally)
+        # Raises specific exceptions if compilation fails
+        metadata = _get_compiled_metadata(handler)
+
+        # If handler has interface type hint, create constrained view
+        if metadata.has_interface and metadata.interface_type:
+            # Use instance cache for this runtime
+            readonly_fields = metadata.readonly_fields if metadata.readonly_fields else None
+
+            return self._interface_cache.get_or_create(
+                bb_id=id(bb),
+                interface_type=metadata.interface_type,
+                readonly_fields=readonly_fields,
+                creator_func=lambda: create_view_from_protocol(
+                    bb,
+                    metadata.interface_type,
+                    readonly_fields=metadata.readonly_fields
+                )
+            )
+
+        return bb
+
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """
+        Get cache statistics for monitoring and debugging.
+
+        Returns:
+            Dict with current cache size, maxsize, and hit/miss counts
+        """
+        return self._interface_cache.get_stats()
     
     def _find_place_spec(self, fqn: str) -> PlaceSpec:
         """Find place spec by FQN using hierarchy"""
