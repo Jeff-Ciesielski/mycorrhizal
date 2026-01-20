@@ -82,8 +82,8 @@ class MyState:
         # Called when entering state
         pass
 
-    @septum.on_exit
-    async def on_exit(ctx):
+    @septum.on_leave
+    async def on_leave(ctx):
         # Called when exiting state
         pass
 
@@ -169,6 +169,8 @@ class GamePlay:
 - [API Reference](../api/septum.md) - Complete API documentation
 - [Getting Started](../getting-started/your-first-septum.md) - Tutorial
 - [PDA Guide](../guides/septum-pda-guide.md) - Hierarchical state machines with Push/Pop
+- [Production Guide](production.md) - Deployment, monitoring, and performance
+- [Troubleshooting](troubleshooting.md) - Common issues and debugging
 - [Composition](../guides/composition.md) - Combining DSLs
 
 ## Mermaid Export

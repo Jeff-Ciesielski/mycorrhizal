@@ -16,6 +16,8 @@ from enum import Enum, auto
 ## Step 2: Define Your States
 
 ```python
+import asyncio
+
 @septum.state
 class RedState:
     class Events(Enum):
@@ -23,7 +25,7 @@ class RedState:
 
     @septum.on_state
     async def on_state(ctx):
-        print("🔴 Red light - Stop!")
+        print("Red light - Stop!")
         await asyncio.sleep(2)  # Wait 2 seconds
         return RedState.Events.TIMER
 
@@ -43,7 +45,7 @@ class GreenState:
 
     @septum.on_state
     async def on_state(ctx):
-        print("🟢 Green light - Go!")
+        print("Green light - Go!")
         await asyncio.sleep(2)
         return GreenState.Events.TIMER
 
@@ -63,7 +65,7 @@ class YellowState:
 
     @septum.on_state
     async def on_state(ctx):
-        print("🟡 Yellow light - Caution!")
+        print("Yellow light - Caution!")
         await asyncio.sleep(1)
         return YellowState.Events.TIMER
 
@@ -80,12 +82,14 @@ class YellowState:
 One of Septum's powerful features is the ability to **visualize your state machine before execution**. This helps you verify the structure and catch errors early:
 
 ```python
+from mycorrhizal.septum.util import to_mermaid
+
 # Create the FSM
 fsm = StateMachine(initial_state=RedState)
 await fsm.initialize()
 
 # Export to Mermaid diagram
-mermaid = fsm.generate_mermaid_flowchart()
+mermaid = to_mermaid(fsm)
 print(mermaid)
 ```
 
@@ -130,10 +134,10 @@ asyncio.run(main())
 ## Expected Output
 
 ```
-🔴 Red light - Stop!
-🟢 Green light - Go!
-🟡 Yellow light - Caution!
-🔴 Red light - Stop!
+Red light - Stop!
+Green light - Go!
+Yellow light - Caution!
+Red light - Stop!
 ...
 ```
 

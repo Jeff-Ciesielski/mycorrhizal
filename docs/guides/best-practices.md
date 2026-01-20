@@ -143,7 +143,7 @@ def transitions():
     ]
 ```
 
-### Use on_enter/on_exit for Setup/Teardown
+### Use on_enter/on_leave for Setup/Teardown
 
 ```python
 @septum.state
@@ -153,8 +153,8 @@ class ProcessingState:
         ctx.start_time = time.time()
         ctx.processing = True
 
-    @septum.on_exit
-    async def on_exit(ctx):
+    @septum.on_leave
+    async def on_leave(ctx):
         ctx.processing = False
         ctx.elapsed = time.time() - ctx.start_time
 ```

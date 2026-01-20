@@ -482,7 +482,9 @@ Understanding when lifecycle methods are called is critical:
 
 ### on_enter Behavior
 
-**Important:** `on_enter` is called EVERY time a state is entered, including when popping back from the stack.
+**WARNING:** `on_enter` is called EVERY time a state is entered, including when popping back from the stack. This is counter-intuitive behavior that catches many developers off guard.
+
+> **Important:** Unlike some state machine frameworks, Septum calls `on_enter` on **every** state entry, including when returning from a Push/Pop. This is by design but requires careful handling of state initialization.
 
 **Normal transition:** `on_enter` is called
 - State A → State B: B's `on_enter` is called
