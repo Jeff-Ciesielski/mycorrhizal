@@ -68,29 +68,26 @@ import asyncio
 from pathlib import Path
 from asyncio import PriorityQueue
 from dataclasses import dataclass, field
-from enum import Enum, auto, IntEnum
+from enum import Enum, auto, IntEnum  # noqa: F401 - auto used in docstring examples
 from typing import (
     Any,
     Callable,
     Dict,
     List,
     Optional,
-    Set,
     Union,
     Awaitable,
     TypeVar,
     Generic,
     Tuple,
     Type,
-    get_type_hints,
 )
-from functools import cache
+from weakref import WeakKeyDictionary  # noqa: F401 - reserved for future use
 
 from mycorrhizal.common.wrappers import create_view_from_protocol
 from mycorrhizal.common.compilation import (
     _get_compiled_metadata,
     _clear_compilation_cache,
-    CompiledMetadata,
 )
 
 
@@ -102,6 +99,12 @@ T = TypeVar('T')
 # ============================================================================
 
 # Cache for interface views to avoid repeated creation
+# Uses (id(blackboard_instance), interface_type) as cache key
+# This is safe because:
+# 1. id() is unique per object instance (memory address)
+# 2. Different blackboard instances get separate cache entries (correct isolation)
+# 3. Same blackboard instance shared across FSMs gets cached views (correct sharing)
+# 4. Cache is module-level global, cleared between tests via _clear_interface_view_cache()
 _interface_view_cache: Dict[Tuple[int, Type], Any] = {}
 
 
@@ -130,11 +133,22 @@ def _create_interface_view_for_context(context: SharedContext, handler: Callable
         handler: The state handler function to check for interface type hints
 
     Returns:
-        Either the original context (mutated in-place) or the original context
+        The same context object with context.common potentially updated to a constrained view
 
     Raises:
         TypeError: If handler is not callable or type hints are malformed
         AttributeError: If type hints reference undefined types
+
+    Note:
+        Uses id() for cache key which is safe because id() is unique per object instance.
+
+        Mutates context.common in-place which is safe because:
+        1. ConstrainedView wraps the underlying blackboard and forwards mutations to it
+        2. All interface views for the same blackboard share the same underlying state
+        3. Mutations through interface views PERSIST and are visible to subsequent states (this is intentional!)
+        4. Each handler call creates a fresh interface view wrapping self.context.common
+        5. Different handlers can have different interfaces, but all mutations go to the same blackboard
+        6. Readonly enforcement happens in ConstrainedView.__setattr__, not via context isolation
     """
     # Get compiled metadata (uses EAFP pattern internally)
     # Raises specific exceptions if compilation fails
@@ -142,23 +156,23 @@ def _create_interface_view_for_context(context: SharedContext, handler: Callable
 
     # If handler has interface type hint, create constrained view
     if metadata.has_interface and metadata.interface_type:
-        # EAFP: Try to get view from cache, create if not present
+        # Use id() as cache key for singleton instance caching
         cache_key = (id(context.common), metadata.interface_type)
-        try:
+
+        # Check cache
+        if cache_key in _interface_view_cache:
             constrained_common = _interface_view_cache[cache_key]
-        except KeyError:
-            # Create constrained view of common with pre-extracted interface metadata
+        else:
+            # Create view
             constrained_common = create_view_from_protocol(
                 context.common,
                 metadata.interface_type,
                 readonly_fields=metadata.readonly_fields
             )
-
             # Cache for reuse
             _interface_view_cache[cache_key] = constrained_common
 
-        # OPTIMIZATION: Mutate context in-place instead of using replace()
-        # SharedContext is NOT frozen, so this is safe and avoids copying all fields
+        # Update context.common in-place (safe, see Note above)
         context.common = constrained_common
 
     return context
@@ -482,14 +496,21 @@ class StateRegistry:
     - Validating all states in a state machine
     - Getting transition mappings for states
     - Detecting circular references and invalid transitions
+    - Per-instance state registries for better modularity
     """
 
-    def __init__(self):
+    def __init__(self, states: Optional[Dict[str, StateSpec]] = None):
         self._state_cache: Dict[str, StateSpec] = {}
         self._transition_cache: Dict[str, Dict] = {}
         self._resolved_modules: Dict[str, Any] = {}
         self._validation_errors: list[str] = []
         self._validation_warnings: list[str] = []
+
+        # Use provided states or fall back to global registry
+        if states is not None:
+            self._explicit_states = states.copy()
+        else:
+            self._explicit_states = None
 
     def resolve_state(
         self, state_ref: Union[str, StateRef, StateSpec], validate_only: bool = False
@@ -530,14 +551,22 @@ class StateRegistry:
         if state_name in self._state_cache and not validate_only:
             return self._state_cache[state_name]
 
-        # Try to get from global registry
+        # Check explicit states first (if provided)
+        if self._explicit_states is not None:
+            if state_name in self._explicit_states:
+                state = self._explicit_states[state_name]
+                if not validate_only:
+                    self._state_cache[state_name] = state
+                return state
+
+        # Fall back to global registry
         state = get_state(state_name)
         if state:
             if not validate_only:
                 self._state_cache[state_name] = state
             return state
 
-        # If not in global registry, we can't resolve it
+        # If not in explicit states or global registry, we can't resolve it
         # (In the old system, it would try dynamic imports, but with
         # decorator-based states, everything should be pre-registered)
         if validate_only:
@@ -636,8 +665,8 @@ class StateRegistry:
                                 f"State '{state_name}' has a push transition without a label"
                             )
                             handle_push(transition)
-                        case LabeledTransition(label, s):
-                            match s:
+                        case LabeledTransition():
+                            match transition.transition:
                                 case st if isinstance(st, StateSpec):
                                     handle_state(st)
                                 case r if isinstance(r, StateRef):
@@ -697,10 +726,20 @@ class StateRegistry:
                             discovered_states.add(resolved.name)
                             states_to_visit.append(resolved)
 
-            except Exception as e:
+            except Exception:
                 self._validation_errors.append(
                     f"Error processing transitions for state '{state_name}': {traceback.format_exc()}"
                 )
+
+        # Run PDA-specific validation
+        pda_result = self.validate_pda_properties(initial_state, error_state)
+        self._validation_errors.extend(pda_result.errors)
+        self._validation_warnings.extend(pda_result.warnings)
+
+        # Run determinism validation
+        determ_result = self.validate_determinism(initial_state, error_state)
+        self._validation_errors.extend(determ_result.errors)
+        self._validation_warnings.extend(determ_result.warnings)
 
         return ValidationResult(
             valid=len(self._validation_errors) == 0,
@@ -756,6 +795,107 @@ class StateRegistry:
 
         self._transition_cache[state_name] = resolved_transitions
         return resolved_transitions
+
+    def validate_pda_properties(
+        self,
+        initial_state: Union[str, StateRef, StateSpec],
+        error_state: Optional[Union[str, StateRef, StateSpec]] = None,
+    ) -> ValidationResult:
+        """Validate PDA-specific properties (stack depth, push/pop balance)."""
+        errors = []
+        warnings = []
+
+        # Get all states from explicit states or global registry
+        if self._explicit_states is not None:
+            all_states = list(self._explicit_states.values())
+        else:
+            all_states = list(get_all_states().values())
+
+        # Build a map of state name to state
+        state_map = {state.name: state for state in all_states}
+
+        for state_name, state in state_map.items():
+            transitions = state.get_transitions()
+
+            # Check for unbounded push (state pushes itself without Pop)
+            for t in transitions:
+                if isinstance(t, Push):
+                    for pushed_state in t.push_states:
+                        # Check if pushed state is the same as current state
+                        if isinstance(pushed_state, StateSpec) and pushed_state.name == state_name:
+                            # Check if there's a Pop transition
+                            has_pop = any(isinstance(tr, (Pop, type(Pop))) for tr in transitions)
+                            if not has_pop:
+                                warnings.append(
+                                    f"State '{state_name}' pushes itself without Pop. "
+                                    "This may cause unbounded stack growth."
+                                )
+
+            # Check for unreachable pop (pop without matching push)
+            has_pop = any(isinstance(t, (Pop, type(Pop))) for t in transitions)
+            if has_pop and state_name != initial_state if isinstance(initial_state, str) else state.name != (initial_state.name if isinstance(initial_state, StateSpec) else ""):
+                # Check if this state can be reached via a Push transition
+                can_be_pushed = self._check_if_state_can_be_pushed(state, state_map)
+                if not can_be_pushed:
+                    warnings.append(
+                        f"State '{state_name}' can Pop without being pushed. "
+                        "This may cause PopFromEmptyStack exception."
+                    )
+
+        return ValidationResult(
+            valid=len(errors) == 0,
+            errors=errors,
+            warnings=warnings,
+            discovered_states=set(state_map.keys()),
+        )
+
+    def _check_if_state_can_be_pushed(self, state: StateSpec, state_map: Dict[str, StateSpec]) -> bool:
+        """Check if a state can be reached via a Push transition from any other state."""
+        for other_state_name, other_state in state_map.items():
+            if other_state_name == state.name:
+                continue
+            transitions = other_state.get_transitions()
+            for t in transitions:
+                if isinstance(t, Push):
+                    for pushed_state in t.push_states:
+                        if isinstance(pushed_state, StateSpec) and pushed_state.name == state.name:
+                            return True
+        return False
+
+    def validate_determinism(
+        self,
+        initial_state: Union[str, StateRef, StateSpec],
+        error_state: Optional[Union[str, StateRef, StateSpec]] = None,
+    ) -> ValidationResult:
+        """Check that no state has multiple transitions for same event."""
+        errors = []
+
+        # Get all states from explicit states or global registry
+        if self._explicit_states is not None:
+            all_states = list(self._explicit_states.values())
+        else:
+            all_states = list(get_all_states().values())
+
+        for state in all_states:
+            event_transitions = {}
+
+            transitions = state.get_transitions()
+            for transition in transitions:
+                if isinstance(transition, LabeledTransition):
+                    event = transition.label
+                    if event in event_transitions:
+                        errors.append(
+                            f"State '{state.name}' has multiple transitions for event '{event}'. "
+                            "This creates non-deterministic behavior."
+                        )
+                    event_transitions[event] = transition
+
+        return ValidationResult(
+            valid=len(errors) == 0,
+            errors=errors,
+            warnings=[],
+            discovered_states=set(s.name for s in all_states),
+        )
 
 
 # ============================================================================
@@ -861,6 +1001,9 @@ class StateMachine:
     def __init__(
         self,
         initial_state: Union[str, StateRef, StateSpec],
+        states: Optional[Dict[str, StateSpec]] = None,
+        max_queue_size: int = 1000,
+        queue_overflow_policy: str = "block",
         error_state: Optional[Union[str, StateRef, StateSpec]] = None,
         filter_fn: Optional[Callable] = None,
         trap_fn: Optional[Callable] = None,
@@ -868,7 +1011,22 @@ class StateMachine:
         common_data: Optional[Any] = None,
     ):
 
-        self.registry = StateRegistry()
+        # Support both global and explicit registries
+        if states is not None:
+            self.registry = StateRegistry(states=states.copy())
+        else:
+            # Fall back to global registry (deprecated)
+            import warnings
+            warnings.warn(
+                "Global state registry is deprecated. Pass 'states' parameter to StateMachine.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            self.registry = StateRegistry(states=None)
+
+        # Store queue configuration
+        self.max_queue_size = max_queue_size
+        self.queue_overflow_policy = queue_overflow_policy
 
         # The filter and trap functions
         self._filter_fn = filter_fn or (lambda x, y: None)
@@ -900,7 +1058,7 @@ class StateMachine:
         )
 
         # Asyncio-based infrastructure
-        self._message_queue = PriorityQueue()
+        self._message_queue = PriorityQueue(maxsize=max_queue_size)
         self._timeout_task = None
         self._timeout_counter = 0
         self._current_timeout_id = None
@@ -932,36 +1090,78 @@ class StateMachine:
             if message and self._filter_fn(self.context, message):
                 return
             self._send_message_internal(message)
+        except asyncio.QueueFull:
+            # Handle overflow based on policy
+            if self.queue_overflow_policy == "block":
+                # Wait for space (synchronous, so raise)
+                raise RuntimeError(
+                    "Queue full, would block. Use async send_message_async or check queue depth."
+                )
+            elif self.queue_overflow_policy == "drop_newest":
+                # Drop this message (silently)
+                pass
+            elif self.queue_overflow_policy == "fail":
+                raise RuntimeError(
+                    f"Queue full (max={self.max_queue_size}), message dropped"
+                )
+            # Note: "drop_oldest" is handled in _send_message_internal
         except Exception as e:
             self._send_message_internal(e)
 
-    def _send_message_internal(self, message: Any):
-        """Internal message sending"""
+    def _get_message_priority(self, message: Any) -> int:
+        """Get message priority for queuing."""
+        if isinstance(message, SeptumInternalMessage):
+            return self.MessagePriorities.INTERNAL_MESSAGE
+        elif isinstance(message, Exception):
+            return self.MessagePriorities.ERROR
+        else:
+            return self.MessagePriorities.MESSAGE
+
+    def _send_message_internal(self, message: Any) -> None:
+        """Internal message sending with priority handling."""
+        priority = self._get_message_priority(message)
 
         match message:
             case _ if isinstance(message, SeptumInternalMessage):
                 try:
                     self._message_queue.put_nowait(
-                        PrioritizedMessage(
-                            self.MessagePriorities.INTERNAL_MESSAGE, message
-                        )
+                        PrioritizedMessage(priority, message)
                     )
-                except Exception:
-                    pass  # Queue full
+                except asyncio.QueueFull:
+                    if self.queue_overflow_policy == "drop_oldest":
+                        # Drop oldest message
+                        try:
+                            self._message_queue.get_nowait()
+                            self._message_queue.put_nowait(PrioritizedMessage(priority, message))
+                        except asyncio.QueueEmpty:
+                            pass  # Queue was actually empty, race condition
+                    # Other policies handled by send_message
             case _ if isinstance(message, Exception):
                 try:
                     self._message_queue.put_nowait(
-                        PrioritizedMessage(self.MessagePriorities.ERROR, message)
+                        PrioritizedMessage(priority, message)
                     )
-                except Exception:
-                    pass
+                except asyncio.QueueFull:
+                    if self.queue_overflow_policy == "drop_oldest":
+                        # Drop oldest message
+                        try:
+                            self._message_queue.get_nowait()
+                            self._message_queue.put_nowait(PrioritizedMessage(priority, message))
+                        except asyncio.QueueEmpty:
+                            pass  # Queue was actually empty, race condition
             case _:
                 try:
                     self._message_queue.put_nowait(
-                        PrioritizedMessage(self.MessagePriorities.MESSAGE, message)
+                        PrioritizedMessage(priority, message)
                     )
-                except Exception:
-                    pass
+                except asyncio.QueueFull:
+                    if self.queue_overflow_policy == "drop_oldest":
+                        # Drop oldest message
+                        try:
+                            self._message_queue.get_nowait()
+                            self._message_queue.put_nowait(PrioritizedMessage(priority, message))
+                        except asyncio.QueueEmpty:
+                            pass  # Queue was actually empty, race condition
 
     async def reset(self):
         """Reset the state machine to initial state"""
@@ -984,6 +1184,11 @@ class StateMachine:
         """Log a message"""
         print(f"[FSM] {message}")
 
+    @property
+    def queue_depth(self) -> int:
+        """Get current message queue depth."""
+        return self._message_queue.qsize()
+
     async def tick(self, timeout: Optional[Union[float, int]] = 0):
         """Process one state machine tick"""
 
@@ -996,7 +1201,7 @@ class StateMachine:
         # Validate timeout parameter
         match timeout:
             case x if x and not isinstance(x, (int, float)):
-                raise ValueError(f"Tick timeout must be None, or an int/float >= 0")
+                raise ValueError("Tick timeout must be None, or an int/float >= 0")
             case 0:
                 block = False
             case None:
@@ -1219,7 +1424,6 @@ class StateMachine:
 
     def _send_timeout_message(self, state_name: str, timeout_id: int, duration: float):
         """Internal method to send timeout messages"""
-
         timeout_msg = TimeoutMessage(state_name, timeout_id, duration)
         self._send_message_internal(timeout_msg)
 
