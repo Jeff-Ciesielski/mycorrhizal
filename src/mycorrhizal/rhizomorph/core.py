@@ -52,11 +52,13 @@ Multi-file Composition:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import inspect
 import logging
 import traceback
 from dataclasses import dataclass, field
 from enum import Enum
+from types import ModuleType, SimpleNamespace
 from typing import (
     Any,
     Callable,
@@ -76,7 +78,6 @@ from typing import (
     get_type_hints,
     Sequence as SequenceT,
 )
-from types import SimpleNamespace
 
 from mycorrhizal.common.wrappers import create_view_from_protocol
 from mycorrhizal.common.compilation import (
@@ -87,6 +88,11 @@ from mycorrhizal.common.compilation import (
 from mycorrhizal.common.timebase import *
 
 logger = logging.getLogger(__name__)
+
+# Context variable for trace logger
+_trace_logger_ctx: contextvars.ContextVar[Optional[logging.Logger]] = contextvars.ContextVar(
+    "_trace_logger_ctx", default=None
+)
 
 BB = TypeVar("BB")
 F = TypeVar("F", bound=Callable[..., Any])
@@ -243,6 +249,24 @@ def _name_of(obj: Any) -> str:
     return f"{obj.__class__.__name__}@{id(obj):x}"
 
 
+def _fully_qualified_name(func: Callable[..., Any]) -> str:
+    """
+    Get the fully qualified name of a function.
+
+    Returns module.function_name if the function has a module,
+    otherwise returns just the function name.
+    """
+    name = func.__name__
+    module = getattr(func, "__module__", None)
+    if module:
+        # Handle nested functions by trying to get qualname
+        qualname = getattr(func, "__qualname__", None)
+        if qualname and qualname != name:
+            return f"{module}.{qualname}"
+        return f"{module}.{name}"
+    return name
+
+
 # ======================================================================================
 # Recursion Detection
 # ======================================================================================
@@ -358,6 +382,8 @@ class Action(Node[BB]):
         self._func = func
         # Cache whether function supports timebase parameter (checked during construction)
         self._supports_timebase = _supports_timebase(func)
+        # Cache fully qualified name for tracing
+        self._fq_name = _fully_qualified_name(func)
 
     async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
@@ -373,13 +399,20 @@ class Action(Node[BB]):
                 raise
             return await self._finish(bb, Status.ERROR, tb)
 
+        # Determine final status
         if isinstance(result, Status):
-            return await self._finish(bb, result, tb)
-        if isinstance(result, bool):
-            return await self._finish(
-                bb, Status.SUCCESS if result else Status.FAILURE, tb
-            )
-        return await self._finish(bb, Status.SUCCESS, tb)
+            final_status = result
+        elif isinstance(result, bool):
+            final_status = Status.SUCCESS if result else Status.FAILURE
+        else:
+            final_status = Status.SUCCESS
+
+        # Log trace if enabled
+        trace_logger = _trace_logger_ctx.get()
+        if trace_logger is not None:
+            trace_logger.info(f"action: {self._fq_name} | {final_status.name}")
+
+        return await self._finish(bb, final_status, tb)
 
 
 class Condition(Action[BB]):
@@ -399,11 +432,18 @@ class Condition(Action[BB]):
                 raise
             return await self._finish(bb, Status.ERROR, tb)
 
+        # Determine final status
         if isinstance(result, Status):
-            return await self._finish(bb, result, tb)
-        return await self._finish(
-            bb, Status.SUCCESS if bool(result) else Status.FAILURE, tb
-        )
+            final_status = result
+        else:
+            final_status = Status.SUCCESS if bool(result) else Status.FAILURE
+
+        # Log trace if enabled
+        trace_logger = _trace_logger_ctx.get()
+        if trace_logger is not None:
+            trace_logger.info(f"condition: {self._fq_name} | {final_status.name}")
+
+        return await self._finish(bb, final_status, tb)
 
 
 # ======================================================================================
@@ -1846,6 +1886,7 @@ class Runner(Generic[BB]):
         bb: Blackboard containing shared state
         tb: Optional timebase for time management (defaults to MonotonicClock)
         exception_policy: How to handle exceptions during tree execution
+        trace: Optional logger instance for tracing action/condition execution
 
     Methods:
         tick(): Execute one tick of the behavior tree
@@ -1862,6 +1903,14 @@ class Runner(Generic[BB]):
 
         runner = Runner(MyTree, bb=blackboard)
         result = await runner.tick_until_complete()
+
+    Tracing:
+        import logging
+        trace_logger = logging.getLogger("bt.trace")
+        runner = Runner(MyTree, bb=blackboard, trace=trace_logger)
+        result = await runner.tick_until_complete()
+        # Logs: "action: module.do_work | SUCCESS"
+        #       "condition: module.check_condition | SUCCESS"
     """
     def __init__(
         self,
@@ -1869,11 +1918,13 @@ class Runner(Generic[BB]):
         bb: BB,
         tb: Optional[Timebase] = None,
         exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE,
+        trace: Optional[logging.Logger] = None,
     ) -> None:
         self.tree = tree
         self.bb: BB = bb
         self.tb = tb or MonotonicClock()
         self.exception_policy = exception_policy
+        self.trace = trace
 
         if not hasattr(tree, "root"):
             raise ValueError("Tree namespace must have a 'root' attribute")
@@ -1883,9 +1934,15 @@ class Runner(Generic[BB]):
         )
 
     async def tick(self) -> Status:
-        result = await self.root.tick(self.bb, self.tb)
-        self.tb.advance()
-        return result
+        # Set trace logger in context for this tick
+        token = _trace_logger_ctx.set(self.trace)
+        try:
+            result = await self.root.tick(self.bb, self.tb)
+            self.tb.advance()
+            return result
+        finally:
+            # Clear the context variable
+            _trace_logger_ctx.reset(token)
 
     async def tick_until_complete(self, timeout: Optional[float] = None) -> Status:
         start = self.tb.now()

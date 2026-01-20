@@ -43,6 +43,7 @@ ENV/
 htmlcov/
 .tox/
 .nox/
+.hypothesis/No
 .hypothesis/
 
 # Documentation builds
