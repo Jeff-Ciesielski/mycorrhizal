@@ -72,7 +72,7 @@ def Demo():
         yield bt.succeeder().retry(3).timeout(1.0)(scan_area)
 
     @bt.root
-    @bt.selector(memory=True, reactive=True)
+    @bt.selector(memory=False)
     def root():
         yield bt.subtree(Engage)
         yield patrol

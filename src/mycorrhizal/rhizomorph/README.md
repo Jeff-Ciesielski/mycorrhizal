@@ -104,11 +104,12 @@ Define composites as **generator factories** that yield children. Node reference
   - All `SUCCESS` → `SUCCESS`.  
   - With `memory=True`, on a subsequent tick it **resumes from the last RUNNING child**. With `memory=False`, it restarts from the first child each tick.
 
-- `@bt.selector(memory: bool = True)`  
-  **OR**: ticks children until one returns `SUCCESS`.  
-  - `RUNNING` bubbles (and may set/resume index depending on `memory`/`reactive`).  
-  - If none succeed → `FAILURE`.  
-  - With `memory=True`, the selector **remembers the last RUNNING child** and resumes there next tick.  
+- `@bt.selector(memory: bool = True)`
+  **OR**: ticks children until one returns `SUCCESS`.
+  - `RUNNING` bubbles (and may set/resume index depending on `memory`).
+  - If none succeed → `FAILURE`.
+  - With `memory=True`, the selector **remembers the last RUNNING child** and resumes there next tick.
+  - With `memory=False` (reactive mode), the selector **re-evaluates from the first child** each tick.  
 
 
 - `@bt.parallel(success_threshold: int, failure_threshold: Optional[int] = None)`  
@@ -161,7 +162,7 @@ def Telemetry():
 @bt.tree
 def Main():
     @bt.root
-    @bt.selector(reactive=True, memory=True)
+    @bt.selector(memory=False)
     def root():
         yield bt.subtree(Engage)
         yield bt.subtree(Telemetry)

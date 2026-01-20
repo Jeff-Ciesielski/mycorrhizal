@@ -1431,7 +1431,7 @@ class _BT:
         return deco
 
     def selector(
-        self, *args: Union[F, NodeSpec, Callable[[Any], Any]], memory: bool = True, reactive: bool = False
+        self, *args: Union[F, NodeSpec, Callable[[Any], Any]], memory: bool = True
     ) -> Union[F, Callable[[F], F], NodeSpec]:
         """Decorator to mark a generator function as a selector composite.
 
@@ -1453,11 +1453,11 @@ class _BT:
         # This is detected when we have multiple args, or a single arg that's not a generator function
         if len(args) == 0:
             # Case 2a: bt.selector() with no arguments - return decorator
-            return self._selector_impl(memory=memory, reactive=reactive)
+            return self._selector_impl(memory=memory)
 
         if len(args) > 1:
             # Multiple children - create selector directly
-            return self._selector_from_children(args, memory, reactive)
+            return self._selector_from_children(args, memory)
 
         # Single argument - check if it's a generator function (decorator case) or a node (direct call)
         single_arg = args[0]
@@ -1468,7 +1468,7 @@ class _BT:
             spec = NodeSpec(
                 kind=NodeSpecKind.SELECTOR,
                 name=_name_of(single_arg),
-                payload={"factory": single_arg, "memory": memory, "reactive": reactive},
+                payload={"factory": single_arg, "memory": memory},
             )
             single_arg.node_spec = spec  # type: ignore
             if self._tracking_stack:
@@ -1476,9 +1476,9 @@ class _BT:
             return single_arg
 
         # Case 3b: Single child node - bt.selector(action1)
-        return self._selector_from_children(args, memory, reactive)
+        return self._selector_from_children(args, memory)
 
-    def _selector_from_children(self, children: Tuple[Any, ...], memory: bool, reactive: bool) -> NodeSpec:
+    def _selector_from_children(self, children: Tuple[Any, ...], memory: bool) -> NodeSpec:
         """Create a selector NodeSpec from child nodes."""
         # Create a uniquely named factory to avoid false recursion detection
         child_names = ', '.join(_name_of(c) for c in children)
@@ -1496,16 +1496,16 @@ class _BT:
         return NodeSpec(
             kind=NodeSpecKind.SELECTOR,
             name=name,
-            payload={"factory": _selector_factory_direct, "memory": memory, "reactive": reactive},
+            payload={"factory": _selector_factory_direct, "memory": memory},
         )
 
-    def _selector_impl(self, memory: bool, reactive: bool) -> Callable[[F], F]:
+    def _selector_impl(self, memory: bool) -> Callable[[F], F]:
         """Implementation of selector decorator."""
         def deco(factory: F) -> F:
             spec = NodeSpec(
                 kind=NodeSpecKind.SELECTOR,
                 name=_name_of(factory),
-                payload={"factory": factory, "memory": memory, "reactive": reactive},
+                payload={"factory": factory, "memory": memory},
             )
             factory.node_spec = spec  # type: ignore
             if self._tracking_stack:

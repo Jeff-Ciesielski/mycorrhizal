@@ -91,7 +91,7 @@ def SelectorWithEmptyParens():
         yield success_action
 
 
-# Test @bt.selector(reactive=True) with args
+# Test @bt.selector(memory=False) with args
 @bt.tree
 def SelectorWithArgs():
     @bt.action
@@ -103,7 +103,7 @@ def SelectorWithArgs():
         return Status.SUCCESS
 
     @bt.root
-    @bt.selector(reactive=True)
+    @bt.selector(memory=False)
     def root():
         yield failing_action
         yield success_action
@@ -160,7 +160,7 @@ async def test_selector_with_empty_parens():
 
 @pytest.mark.asyncio
 async def test_selector_with_args():
-    """Test @bt.selector(reactive=True) with arguments"""
+    """Test @bt.selector(memory=False) with arguments"""
     bb = TestBB()
     runner = Runner(SelectorWithArgs, bb)
     result = await runner.tick_until_complete(timeout=1.0)
@@ -181,17 +181,9 @@ def test_all_trees_have_root_spec():
 
 def test_node_spec_memory_flags():
     """Verify that memory flags are set correctly"""
-    # SequenceWithArgs uses memory=False
+    # SequenceWithArgs and SelectorWithArgs use memory=False
     assert SequenceWithArgs.root.payload['memory'] is False
+    assert SelectorWithArgs.root.payload['memory'] is False
     # Others use default (True)
     assert SequenceNoParens.root.payload['memory'] is True
     assert SequenceWithEmptyParens.root.payload['memory'] is True
-
-
-def test_node_spec_reactive_flags():
-    """Verify that reactive flags are set correctly"""
-    # SelectorWithArgs uses reactive=True
-    assert SelectorWithArgs.root.payload['reactive'] is True
-    # Others use default (False)
-    assert SelectorNoParens.root.payload['reactive'] is False
-    assert SelectorWithEmptyParens.root.payload['reactive'] is False
