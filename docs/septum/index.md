@@ -168,7 +168,8 @@ class GamePlay:
 
 - [API Reference](../api/septum.md) - Complete API documentation
 - [Getting Started](../getting-started/your-first-septum.md) - Tutorial
-- [Composition](../guides/composition.md) - Hierarchical state patterns
+- [PDA Guide](../guides/septum-pda-guide.md) - Hierarchical state machines with Push/Pop
+- [Composition](../guides/composition.md) - Combining DSLs
 
 ## Mermaid Export
 

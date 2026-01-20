@@ -15,4 +15,6 @@ This section covers advanced topics and best practices for using Mycorrhizal.
 
 ## DSL-Specific Guides
 
-See the [Septum](../septum/), [Hypha](../hypha/), [Rhizomorph](../rhizomorph/), and [Spores](../spores/) sections for DSL-specific documentation.
+- [Septum PDA Guide](septum-pda-guide.md) - Hierarchical state machines with Push/Pop
+
+See the [Septum](../septum/), [Hypha](../hypha/), [Rhizomorph](../rhizomorph/), and [Spores](../spores/) sections for more DSL-specific documentation.

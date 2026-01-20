@@ -16,6 +16,7 @@ nav:
     - Your First Spores Logger: getting-started/your-first-spores.md
   - Guides:
     - guides/index.md
+    - Septum PDA Guide: guides/septum-pda-guide.md
     - Blackboards & Interfaces: guides/blackboards.md
     - Timebases: guides/timebases.md
     - Composition Patterns: guides/composition.md
@@ -155,7 +156,6 @@ extra_css:
   - assets/stylesheets/extra.css
 
 extra_javascript:
-  - https://polyfill.io/v3/polyfill.min.js?features=es6,Array.prototype.includes,Array.prototype.find,Array.prototype.findIndex,Object.assign,Object.values
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
 # Extra options
