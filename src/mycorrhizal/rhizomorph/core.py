@@ -410,7 +410,7 @@ class Action(Node[BB]):
         # Log trace if enabled
         trace_logger = _trace_logger_ctx.get()
         if trace_logger is not None:
-            trace_logger.info(f"action: {self._fq_name} | {final_status.name}")
+            trace_logger.debug(f"action: {self._fq_name} | {final_status.name}")
 
         return await self._finish(bb, final_status, tb)
 
@@ -441,7 +441,7 @@ class Condition(Action[BB]):
         # Log trace if enabled
         trace_logger = _trace_logger_ctx.get()
         if trace_logger is not None:
-            trace_logger.info(f"condition: {self._fq_name} | {final_status.name}")
+            trace_logger.debug(f"condition: {self._fq_name} | {final_status.name}")
 
         return await self._finish(bb, final_status, tb)
 

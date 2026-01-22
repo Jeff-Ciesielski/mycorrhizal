@@ -15,13 +15,13 @@ from mycorrhizal.rhizomorph.core import bt, Runner, Status
 
 # Setup logging to see trace output
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(levelname)-8s %(name)s: %(message)s'
 )
 
 # Create a dedicated trace logger
 trace_logger = logging.getLogger("bt.trace")
-trace_logger.setLevel(logging.INFO)
+trace_logger.setLevel(logging.DEBUG)
 
 
 @dataclass

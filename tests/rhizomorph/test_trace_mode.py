@@ -46,7 +46,7 @@ class TraceCapture(logging.Handler):
 def trace_logger():
     """Create a logger with a capture handler for testing."""
     logger = logging.getLogger("bt.trace.test")
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
 
     # Remove any existing handlers
     logger.handlers.clear()
