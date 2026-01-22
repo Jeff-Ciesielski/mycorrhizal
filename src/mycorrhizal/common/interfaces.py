@@ -289,9 +289,15 @@ def validate_implements(cls: type, protocol: type) -> bool:
         except TypeError:
             return False
 
-    # Check if protocol is runtime_checkable
-    if not hasattr(protocol, '__is_protocol__'):
-        return False
+    # Check if protocol - use typing.is_protocol for Python 3.12+
+    if hasattr(typing, 'is_protocol'):
+        # Python 3.12+: use public API
+        if not typing.is_protocol(protocol):
+            return False
+    else:
+        # Python 3.10-3.11: check for internal attribute
+        if not hasattr(protocol, '__is_protocol__'):
+            return False
 
     # Use isinstance if we have an instance, otherwise check structure
     try:
