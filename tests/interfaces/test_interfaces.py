@@ -15,7 +15,6 @@ from mycorrhizal.common.interfaces import (
     BlackboardProtocol,
     FieldMetadata,
     InterfaceMetadata,
-    validate_implements,
     get_interface_fields,
     create_interface_from_model,
     _extract_interface_metadata,
@@ -144,22 +143,6 @@ def test_blackboard_protocol_with_invalid_class():
 # ============================================================================
 # Helper Function Tests
 # ============================================================================
-
-def test_validate_implements_with_valid_class():
-    """Test validate_implements returns True for valid implementations"""
-    assert validate_implements(ValidBlackboard, BlackboardProtocol) is True
-
-
-def test_validate_implements_with_invalid_class():
-    """Test validate_implements returns False for invalid implementations"""
-    assert validate_implements(InvalidBlackboard, BlackboardProtocol) is False
-
-
-def test_validate_implements_with_readable():
-    """Test validate_implements works with Readable protocol"""
-    assert validate_implements(IntCounter, Readable) is True
-    assert validate_implements(IntStorage, Readable) is False
-
 
 def test_get_interface_fields_from_protocol():
     """Test get_interface_fields extracts field annotations"""
@@ -345,11 +328,6 @@ def test_protocol_with_no_annotations():
 
     fields = get_interface_fields(EmptyInterface)
     assert len(fields) == 0
-
-
-def test_validate_implements_with_none():
-    """Test validate_implements handles None gracefully"""
-    assert validate_implements(None, BlackboardProtocol) is False
 
 
 def test_create_interface_from_empty_model():

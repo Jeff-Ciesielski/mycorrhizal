@@ -322,9 +322,8 @@ print(TaskInterface._readonly_fields)   # {'max_tasks'}
 print(TaskInterface._readwrite_fields)  # {'completed_tasks', 'failed_tasks'}
 
 # Validate that a blackboard implements an interface
-from mycorrhizal.common.interfaces import validate_implements
-
-is_valid = validate_implements(TaskBlackboard, TaskInterface)
+# Use isinstance() directly with runtime_checkable protocols
+is_valid = isinstance(TaskBlackboard, TaskInterface)
 ```
 
 ---

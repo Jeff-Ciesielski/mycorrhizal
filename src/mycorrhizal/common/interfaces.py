@@ -10,6 +10,7 @@ Key concepts:
 - Composition: Combine multiple interfaces into larger ones
 """
 
+import typing
 from typing import Protocol, TypeVar, Generic, Any, runtime_checkable, runtime_checkable
 from typing import Optional, get_type_hints, Union
 from dataclasses import dataclass, field
@@ -254,61 +255,8 @@ def _extract_interface_metadata(
 
 
 # ============================================================================
-# Protocol Helper Functions
+# Interface Field Extraction
 # ============================================================================
-
-def validate_implements(cls: type, protocol: type) -> bool:
-    """
-    Validate that a class implements a protocol.
-
-    Uses structural subtyping to check if the class has all required
-    methods and attributes defined by the protocol.
-
-    Args:
-        cls: The class to check
-        protocol: The protocol to check against
-
-    Returns:
-        True if cls implements protocol, False otherwise
-
-    Example:
-        >>> class MyBlackboard:
-        ...     def validate(self) -> bool:
-        ...         return True
-        ...     def to_dict(self) -> dict:
-        ...         return {}
-        >>> validate_implements(MyBlackboard, BlackboardProtocol)
-        True
-        >>> validate_implements(str, BlackboardProtocol)
-        False
-    """
-    if not isinstance(protocol, type) or not hasattr(protocol, '__protocol_attrs__'):
-        # Not a protocol, try anyway with isinstance
-        try:
-            return issubclass(cls, protocol) if isinstance(cls, type) else isinstance(cls, protocol)
-        except TypeError:
-            return False
-
-    # Check if protocol - use typing.is_protocol for Python 3.12+
-    if hasattr(typing, 'is_protocol'):
-        # Python 3.12+: use public API
-        if not typing.is_protocol(protocol):
-            return False
-    else:
-        # Python 3.10-3.11: check for internal attribute
-        if not hasattr(protocol, '__is_protocol__'):
-            return False
-
-    # Use isinstance if we have an instance, otherwise check structure
-    try:
-        # For protocols, we need to check if the class has all protocol attributes
-        for attr in getattr(protocol, '__protocol_attrs__', []):
-            if not hasattr(cls, attr):
-                return False
-        return True
-    except Exception:
-        return False
-
 
 def get_interface_fields(interface: type) -> dict[str, type]:
     """
@@ -411,7 +359,6 @@ __all__ = [
     "InterfaceMetadata",
 
     # Helper Functions
-    "validate_implements",
     "get_interface_fields",
     "create_interface_from_model",
     "_extract_interface_metadata",

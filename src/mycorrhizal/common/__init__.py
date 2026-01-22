@@ -15,7 +15,6 @@ from mycorrhizal.common.interfaces import (
     BlackboardProtocol,
     FieldMetadata,
     InterfaceMetadata,
-    validate_implements,
     get_interface_fields,
     create_interface_from_model,
 )
@@ -55,7 +54,6 @@ __all__ = [
     "BlackboardProtocol",
     "FieldMetadata",
     "InterfaceMetadata",
-    "validate_implements",
     "get_interface_fields",
     "create_interface_from_model",
 
