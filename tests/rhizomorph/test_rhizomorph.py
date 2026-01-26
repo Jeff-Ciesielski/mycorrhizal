@@ -2059,3 +2059,230 @@ class TestEdgeCases:
 
         with pytest.raises(TypeError, match="CaseSpec"):
             bt.match(lambda bb: bb.action)(some_action)
+
+
+# =============================================================================
+# Try-Catch Tests
+# =============================================================================
+
+
+class TestTryCatch:
+    """Tests for bt.try_catch error handling pattern."""
+
+    @pytest.mark.asyncio
+    async def test_try_catch_try_block_succeeds(self, simple_bb, mock_tb):
+        """When try block succeeds, catch block should not run."""
+        @bt.tree
+        def Tree():
+            @bt.action
+            def try_action(bb: SimpleBlackboard):
+                bb.log.append("try")
+                return Status.SUCCESS
+
+            @bt.action
+            def catch_action(bb: SimpleBlackboard):
+                bb.log.append("catch")
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root():
+                yield bt.try_catch(try_action)(catch_action)
+
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+        status = await runner.tick()
+
+        assert status == Status.SUCCESS
+        assert simple_bb.log == ["try"]
+        assert "catch" not in simple_bb.log
+
+    @pytest.mark.asyncio
+    async def test_try_catch_try_block_fails_catch_succeeds(self, simple_bb, mock_tb):
+        """When try block fails, catch block should run and succeed."""
+        @bt.tree
+        def Tree():
+            @bt.action
+            def try_action(bb: SimpleBlackboard):
+                bb.log.append("try")
+                return Status.FAILURE
+
+            @bt.action
+            def catch_action(bb: SimpleBlackboard):
+                bb.log.append("catch")
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root():
+                yield bt.try_catch(try_action)(catch_action)
+
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+        status = await runner.tick()
+
+        assert status == Status.SUCCESS
+        assert simple_bb.log == ["try", "catch"]
+
+    @pytest.mark.asyncio
+    async def test_try_catch_both_fail(self, simple_bb, mock_tb):
+        """When both try and catch fail, should return FAILURE."""
+        @bt.tree
+        def Tree():
+            @bt.action
+            def try_action(bb: SimpleBlackboard):
+                bb.log.append("try")
+                return Status.FAILURE
+
+            @bt.action
+            def catch_action(bb: SimpleBlackboard):
+                bb.log.append("catch")
+                return Status.FAILURE
+
+            @bt.root
+            @bt.sequence()
+            def root():
+                yield bt.try_catch(try_action)(catch_action)
+
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+        status = await runner.tick()
+
+        assert status == Status.FAILURE
+        assert simple_bb.log == ["try", "catch"]
+
+    @pytest.mark.asyncio
+    async def test_try_catch_with_composite_try_block(self, simple_bb, mock_tb):
+        """Try block can be a composite (sequence)."""
+        @bt.tree
+        def Tree():
+            @bt.action
+            def action1(bb: SimpleBlackboard):
+                bb.log.append("action1")
+                return Status.SUCCESS
+
+            @bt.action
+            def action2(bb: SimpleBlackboard):
+                bb.log.append("action2")
+                return Status.FAILURE
+
+            @bt.action
+            def catch_action(bb: SimpleBlackboard):
+                bb.log.append("catch")
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root():
+                yield bt.try_catch(
+                    bt.sequence(action1, action2)
+                )(catch_action)
+
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+        status = await runner.tick_until_complete()
+
+        assert status == Status.SUCCESS
+        # action1 and action2 run, then fail triggers catch
+        assert "action1" in simple_bb.log
+        assert "action2" in simple_bb.log
+        assert "catch" in simple_bb.log
+
+    @pytest.mark.asyncio
+    async def test_try_catch_remembers_running_catch(self, simple_bb, mock_tb):
+        """If catch block returns RUNNING, should resume it next tick."""
+        call_count = {"try": 0, "catch": 0}
+
+        @bt.tree
+        def Tree():
+            @bt.action
+            async def try_action(bb: SimpleBlackboard):
+                call_count["try"] += 1
+                bb.log.append("try")
+                if call_count["try"] == 1:
+                    return Status.FAILURE
+                return Status.SUCCESS
+
+            @bt.action
+            async def catch_action(bb: SimpleBlackboard):
+                call_count["catch"] += 1
+                bb.log.append("catch")
+                if call_count["catch"] < 3:
+                    return Status.RUNNING
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root():
+                yield bt.try_catch(try_action)(catch_action)
+
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+
+        # First tick: try fails, catch starts RUNNING
+        status = await runner.tick()
+        assert status == Status.RUNNING
+        assert simple_bb.log == ["try", "catch"]
+        assert call_count["catch"] == 1
+
+        # Second tick: catch continues RUNNING
+        status = await runner.tick()
+        assert status == Status.RUNNING
+        assert call_count["catch"] == 2
+
+        # Third tick: catch succeeds
+        status = await runner.tick()
+        assert status == Status.SUCCESS
+        assert call_count["catch"] == 3
+
+    @pytest.mark.asyncio
+    async def test_try_catch_direct_call_pattern(self, simple_bb, mock_tb):
+        """Test direct call pattern: bt.try_catch(try_block)(catch_block)"""
+        @bt.tree
+        def Tree():
+            @bt.action
+            def try_action(bb: SimpleBlackboard):
+                bb.log.append("try")
+                return Status.FAILURE
+
+            @bt.action
+            def catch_action(bb: SimpleBlackboard):
+                bb.log.append("catch")
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root():
+                yield bt.try_catch(try_action)(catch_action)
+
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+        status = await runner.tick()
+
+        assert status == Status.SUCCESS
+        assert simple_bb.log == ["try", "catch"]
+
+    def test_mermaid_try_catch_with_labeled_edges(self):
+        """Test that Mermaid diagram shows labeled 'try' and 'catch' edges."""
+        @bt.tree
+        def Tree():
+            @bt.action
+            def try_action(bb):
+                return Status.SUCCESS
+
+            @bt.action
+            def catch_action(bb):
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root():
+                yield bt.try_catch(try_action)(catch_action)
+
+        mermaid = Tree.to_mermaid()
+
+        assert "TryCatch" in mermaid
+        assert "try_action" in mermaid
+        assert "catch_action" in mermaid
+        assert '-->|"' in mermaid  # Labeled edges
+        assert '"try"' in mermaid
+        assert '"catch"' in mermaid
+
+
+# =============================================================================
+# Test Utilities
+# =============================================================================

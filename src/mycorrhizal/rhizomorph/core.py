@@ -452,7 +452,35 @@ class Condition(Action[BB]):
 
 
 class Sequence(Node[BB]):
-    """Sequence (AND): fail/err fast; RUNNING bubbles; all SUCCESS → SUCCESS."""
+    """Sequence (AND): fail/err fast; RUNNING bubbles; all SUCCESS → SUCCESS.
+
+    Memory Behavior:
+        When memory=True (default), the sequence remembers its position across ticks.
+        This allows the sequence to progress through its children incrementally.
+
+        When memory=False, the sequence restarts from the beginning on every tick.
+        This is useful for reactive sequences that should always start from the first child.
+
+    Important Note on do_while Loops:
+        If a sequence is used as the child of a do_while loop, it typically needs
+        memory=True to make progress. Without memory, the sequence will restart from
+        its first child on each tick, preventing it from completing all children.
+
+        Example:
+            @bt.sequence(memory=True)  # Required for progress
+            def image_samples():
+                yield bt.subtree(MoveToSample)
+                yield send_image_request
+                yield bt.subtree(IncrementSampleCounter)
+
+            @bt.sequence(memory=True)
+            def happy_path():
+                yield bt.do_while(samples_remain)(image_samples)
+                yield set_pod_to_grow
+
+        Without memory=True on image_samples, the do_while loop would never
+        progress past MoveToSample because the sequence would restart each tick.
+    """
 
     def __init__(
         self,
@@ -492,7 +520,20 @@ class Sequence(Node[BB]):
 
 
 class Selector(Node[BB]):
-    """Selector (Fallback): first SUCCESS wins; RUNNING bubbles; else FAILURE."""
+    """Selector (Fallback): first SUCCESS wins; RUNNING bubbles; else FAILURE.
+
+    Memory Behavior:
+        When memory=True (default), the selector remembers its position across ticks.
+        This allows the selector to continue trying children from where it left off.
+
+        When memory=False, the selector restarts from the beginning on every tick.
+        This is useful for reactive selectors that should always re-evaluate from the first child.
+
+    Important Note on do_while Loops:
+        Similar to Sequence, if a selector is used as the child of a do_while loop,
+        it typically needs memory=True to make progress. Without memory, the selector
+        will restart from its first child on each tick.
+    """
 
     def __init__(
         self,
@@ -1003,6 +1044,68 @@ class DoWhile(Node[BB]):
         return await self._finish(bb, Status.FAILURE, tb)
 
 
+class TryCatch(Node[BB]):
+    """
+    Try-catch error handling node.
+
+    Executes the try block first. If it returns SUCCESS, that status is returned.
+    If the try block returns FAILURE, the catch block is executed instead.
+    Returns SUCCESS if either block succeeds, FAILURE if both fail.
+
+    This is semantically equivalent to a selector with two children, but provides
+    clearer intent and better visualization with labeled edges.
+    """
+
+    def __init__(
+        self,
+        try_block: Node[BB],
+        catch_block: Node[BB],
+        name: Optional[str] = None,
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE,
+    ) -> None:
+        super().__init__(
+            name or f"TryCatch(try={_name_of(try_block)}, catch={_name_of(catch_block)})",
+            exception_policy=exception_policy,
+        )
+        self.try_block = try_block
+        self.catch_block = catch_block
+        self.try_block.parent = self
+        self.catch_block.parent = self
+        self._use_catch = False
+
+    def reset(self) -> None:
+        super().reset()
+        self.try_block.reset()
+        self.catch_block.reset()
+        self._use_catch = False
+
+    async def tick(self, bb: BB, tb: Timebase) -> Status:
+        await self._ensure_entered(bb, tb)
+
+        # If we're in catch mode, continue executing catch block
+        if self._use_catch:
+            st = await self.catch_block.tick(bb, tb)
+            if st is Status.RUNNING:
+                return Status.RUNNING
+            self._use_catch = False
+            return await self._finish(bb, st, tb)
+
+        # Try the try block
+        st = await self.try_block.tick(bb, tb)
+        if st is Status.RUNNING:
+            return Status.RUNNING
+        if st is Status.SUCCESS:
+            return await self._finish(bb, Status.SUCCESS, tb)
+
+        # Try block failed, switch to catch
+        self._use_catch = True
+        st = await self.catch_block.tick(bb, tb)
+        if st is Status.RUNNING:
+            return Status.RUNNING
+        self._use_catch = False
+        return await self._finish(bb, st, tb)
+
+
 # ======================================================================================
 # Authoring DSL (NodeSpec + bt namespace)
 # ======================================================================================
@@ -1018,6 +1121,7 @@ class NodeSpecKind(Enum):
     SUBTREE = "subtree"
     MATCH = "match"
     DO_WHILE = "do_while"
+    TRY_CATCH = "try_catch"
 
 
 class _DefaultCase:
@@ -1124,6 +1228,16 @@ class NodeSpec:
                 return DoWhile(
                     cond_spec.to_node(exception_policy),
                     child_spec.to_node(exception_policy),
+                    name=self.name,
+                    exception_policy=exception_policy,
+                )
+
+            case NodeSpecKind.TRY_CATCH:
+                try_spec = self.payload["try"]
+                catch_spec = self.payload["catch"]
+                return TryCatch(
+                    try_spec.to_node(exception_policy),
+                    catch_spec.to_node(exception_policy),
                     name=self.name,
                     exception_policy=exception_policy,
                 )
@@ -1342,10 +1456,10 @@ class _MatchBuilder:
 
 class _DoWhileBuilder:
     """Builder for do_while loops."""
-    
+
     def __init__(self, condition_spec: NodeSpec) -> None:
         self._condition_spec = condition_spec
-    
+
     def __call__(self, child: Union["NodeSpec", Callable[[Any], Any]]) -> NodeSpec:
         child_spec = bt.as_spec(child)
         return NodeSpec(
@@ -1404,6 +1518,33 @@ class _BT:
 
             3. Direct call with child nodes:
                 bt.sequence(action1, action2, action3)
+
+        Memory Parameter:
+            The memory parameter controls whether the sequence remembers its position
+            across ticks:
+
+            - memory=None (default): Use the Runner's memory setting
+            - memory=True: Remember position, allowing incremental progress
+            - memory=False: Restart from beginning each tick (reactive behavior)
+
+            IMPORTANT: If a sequence is inside a do_while loop and needs to execute
+            all its children incrementally, use memory=True. Otherwise, the sequence
+            will restart from the first child on every tick and never complete.
+
+            Example:
+                # CORRECT - sequence progresses through children
+                @bt.sequence(memory=True)
+                def process_samples():
+                    yield move_to_sample
+                    yield capture_image
+                yield bt.do_while(samples_remain)(process_samples)
+
+                # WRONG - sequence restarts at move_to_sample every tick
+                @bt.sequence(memory=False)
+                def process_samples():
+                    yield move_to_sample
+                    yield capture_image  # Never reached!
+                yield bt.do_while(samples_remain)(process_samples)
         """
         # Case 3: Direct call with children - bt.sequence(node1, node2, ...)
         # This is detected when we have multiple args, or a single arg that's not a generator function
@@ -1488,6 +1629,9 @@ class _BT:
 
             3. Direct call with child nodes:
                 bt.selector(option1, option2, option3)
+
+        The memory parameter defaults to None, which means use the Runner's memory setting.
+        Explicitly set to True or False to override the Runner's setting.
         """
         # Case 3: Direct call with children - bt.selector(node1, node2, ...)
         # This is detected when we have multiple args, or a single arg that's not a generator function
@@ -1685,6 +1829,62 @@ class _BT:
         cond_spec = self.as_spec(condition)
         return _DoWhileBuilder(cond_spec)
 
+    def try_catch(
+        self, try_block: Union[NodeSpec, Callable[[Any], Any]]
+    ) -> Callable[[Union[NodeSpec, Callable[[Any], Any]]], NodeSpec]:
+        """
+        Create a try-catch error handling pattern.
+
+        Usage:
+            # Define try and catch blocks with explicit memory settings
+            @bt.sequence(memory=True)
+            def try_block():
+                yield action1
+                yield action2
+
+            @bt.sequence(memory=True)
+            def catch_block():
+                yield cleanup
+
+            # Use in the tree
+            @bt.root
+            @bt.sequence
+            def root():
+                yield bt.try_catch(try_block)(catch_block)
+
+        Behavior:
+            1. Execute try block
+            2. If try block returns SUCCESS → return SUCCESS
+            3. If try block returns FAILURE → execute catch block
+            4. Return SUCCESS if either block succeeds, FAILURE if both fail
+
+        This is semantically equivalent to a selector with two children:
+            - First child (try) runs first
+            - Second child (catch) runs only if try fails
+            - Returns SUCCESS if either succeeds
+
+        Args:
+            try_block: The node to try first (pre-defined sequence/selector/etc with explicit memory settings)
+
+        Returns:
+            A callable that accepts a catch block (pre-defined sequence/selector/etc with explicit memory settings)
+        """
+        try_spec = self.as_spec(try_block)
+
+        def catcher(catch_block: Union[NodeSpec, Callable[[Any], Any]]) -> NodeSpec:
+            catch_spec = self.as_spec(catch_block)
+            return NodeSpec(
+                kind=NodeSpecKind.TRY_CATCH,
+                name=f"TryCatch(try={_name_of(try_spec)}, catch={_name_of(catch_spec)})",
+                payload={
+                    "try": try_spec,
+                    "catch": catch_spec,
+                },
+                children=[try_spec, catch_spec],
+            )
+
+        return catcher
+
     def subtree(self, tree: SimpleNamespace) -> NodeSpec:
         """
         Mount another tree's root spec as a subtree.
@@ -1813,6 +2013,8 @@ def _generate_mermaid(tree: SimpleNamespace) -> str:
                 return f"Match<br/>{spec.name}"
             case NodeSpecKind.DO_WHILE:
                 return f"DoWhile<br/>{spec.name}"
+            case NodeSpecKind.TRY_CATCH:
+                return f"TryCatch<br/>{spec.name}"
             case _:
                 return spec.name
 
@@ -1831,6 +2033,9 @@ def _generate_mermaid(tree: SimpleNamespace) -> str:
                 # Children already set (just the body), but we also want to show condition
                 cond_spec = spec.payload["condition"]
                 spec.children = [cond_spec] + spec.children
+            case NodeSpecKind.TRY_CATCH:
+                # Children already set in _TryCatchBuilder
+                pass
         return spec.children
 
     def walk(spec: NodeSpec) -> None:
@@ -1860,10 +2065,24 @@ def _generate_mermaid(tree: SimpleNamespace) -> str:
                 body_id = nid(children[1])
                 lines.append(f'  {this_id} -->|"body"| {body_id}')
                 walk(children[1])
+        elif spec.kind == NodeSpecKind.TRY_CATCH:
+            # First child is try, second is catch
+            try_id = nid(children[0])
+            lines.append(f'  {this_id} -->|"try"| {try_id}')
+            walk(children[0])
+            if len(children) > 1:
+                catch_id = nid(children[1])
+                lines.append(f'  {this_id} -->|"catch"| {catch_id}')
+                walk(children[1])
         else:
-            for child in children:
+            for i, child in enumerate(children, start=1):
                 child_id = nid(child)
-                lines.append(f"  {this_id} --> {child_id}")
+                if spec.kind == NodeSpecKind.PARALLEL:
+                    lines.append(f'  {this_id} -->|"P"| {child_id}')
+                elif spec.kind in (NodeSpecKind.SEQUENCE, NodeSpecKind.SELECTOR):
+                    lines.append(f'  {this_id} -->|"{i}"| {child_id}')
+                else:
+                    lines.append(f"  {this_id} --> {child_id}")
                 walk(child)
 
     walk(tree.root)
