@@ -285,51 +285,64 @@ class TransitionRuntime:
             if result is not None:
                 await self._process_yield(result)
 
-    def _resolve_place_ref(self, place_ref) -> Optional[Tuple[str, ...]]:
+    def _resolve_place_ref(self, place_ref) -> Tuple[str, ...]:
         """Resolve a PlaceRef to runtime place parts.
 
-        Attempts multiple resolution strategies in order:
+        Requires exact match or parent-relative mapping for subnet instances.
+
+        Resolution strategies in order:
         1. Exact match using PlaceRef.get_parts()
         2. Parent-relative mapping (for subnet instances)
-        3. Suffix fallback (match by local name)
 
         Returns:
-            Tuple of place parts if found, None otherwise
+            Tuple of place parts if found
+
+        Raises:
+            ValueError: If reference cannot be resolved
         """
+        # Extract local_name from place_ref (handles PlaceRef objects and strings)
+        if isinstance(place_ref, str):
+            local_name = place_ref
+        elif hasattr(place_ref, 'local_name'):
+            local_name = place_ref.local_name
+        else:
+            local_name = str(place_ref)
+
         # Try to get parts from the PlaceRef API
         try:
             parts = tuple(place_ref.get_parts())
         except Exception:
             parts = None
 
-        logger.debug("[resolve] place_ref=%r parts=%s", place_ref, parts)
+        logger.debug("[resolve] place_ref=%r parts=%s local_name=%s",
+                     place_ref, parts, local_name)
 
+        # Strategy 1: Exact match
         if parts:
             key = tuple(parts)
             if key in self.net.places:
                 logger.debug("[resolve] exact match parts=%s", parts)
                 return key
 
-        # Map relative to this transition's parent parts
+        # Strategy 2: Parent-relative mapping (for subnet instances)
         trans_parts = tuple(self.fqn.split('.'))
         if len(trans_parts) > 1:
             parent_prefix = trans_parts[:-1]
-            candidate = tuple(list(parent_prefix) + [place_ref.local_name])
+            candidate = tuple(list(parent_prefix) + [local_name])
             if candidate in self.net.places:
-                logger.debug("[resolve] mapped %s -> %s using parent_prefix", parts, candidate)
+                logger.debug("[resolve] mapped %s -> %s using parent_prefix",
+                           local_name, candidate)
                 return candidate
 
-        # Fallback: find any place whose last segment matches local_name
-        for p in self.net.places.keys():
-            if isinstance(p, tuple):
-                segs = list(p)
-            else:
-                segs = p.split('.')
-            if segs and segs[-1] == place_ref.local_name:
-                logger.debug("[resolve] suffix match %s -> %s", place_ref.local_name, p)
-                return tuple(segs)
-
-        return None
+        # No match found - raise helpful error
+        available_places = [p[-1] if isinstance(p, tuple) else p.split('.')[-1]
+                           for p in self.net.places.keys()]
+        raise ValueError(
+            f"Cannot resolve place reference '{local_name}' "
+            f"in transition '{self.fqn}'. Available places: {available_places}. "
+            f"Attempted resolution: {parts}. "
+            f"Use explicit place references (e.g., subnet.place)."
+        )
 
     def _normalize_to_parts(self, key) -> Tuple[str, ...]:
         """Normalize a place key to tuple of parts for runtime lookup.
@@ -387,9 +400,6 @@ class TransitionRuntime:
                 continue
 
             place_parts = self._resolve_place_ref(key)
-            if place_parts is None:
-                continue
-
             key_normalized = self._normalize_to_parts(place_parts)
             explicit_targets.add(key_normalized)
             await self._add_token_to_place(key_normalized, token)
@@ -420,10 +430,6 @@ class TransitionRuntime:
         """Process a single (place_ref, token) tuple yield."""
         place_ref, token = yielded
         place_parts = self._resolve_place_ref(place_ref)
-
-        if place_parts is None:
-            return
-
         key = self._normalize_to_parts(place_parts)
         await self._add_token_to_place(key, token)
     
@@ -521,6 +527,8 @@ class TransitionRuntime:
 
         except asyncio.CancelledError:
             pass
+        except ValueError:
+            raise
         except Exception:
             logger.exception("[%s] Transition error", self.fqn)
     
@@ -969,20 +977,24 @@ class NetRuntime:
 
 class Runner:
     """High-level runner for executing a Petri net"""
-    
+
     def __init__(self, net_func: Any, blackboard: Any):
         if not hasattr(net_func, '_spec'):
             raise ValueError(f"{net_func} is not a valid net")
-        
+
         self.spec = net_func._spec
         self.blackboard = blackboard
         self.timebase = None
         self.runtime: Optional[NetRuntime] = None
-    
+
     async def start(self, timebase: Any):
         """Start the net with given timebase"""
         self.timebase = timebase
-        self.runtime = NetRuntime(self.spec, self.blackboard, self.timebase)
+        self.runtime = NetRuntime(
+            self.spec,
+            self.blackboard,
+            self.timebase
+        )
         await self.runtime.start()
     
     async def stop(self, timeout: float = 5.0):

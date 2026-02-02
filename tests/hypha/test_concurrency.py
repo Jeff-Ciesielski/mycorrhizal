@@ -51,6 +51,7 @@ class TestPropertyBased:
     """
 
     @pytest.mark.slow
+    @pytest.mark.timeout(60)  # Property-based tests need more time
     @given(
         num_tokens=st.integers(min_value=0, max_value=20),
         num_transitions=st.integers(min_value=1, max_value=5),
@@ -138,6 +139,7 @@ class TestPropertyBased:
         await runner.stop()
 
     @pytest.mark.slow
+    @pytest.mark.timeout(60)  # Property-based tests need more time
     @given(
         initial_tokens=st.integers(min_value=0, max_value=15),
         add_during_run=st.integers(min_value=0, max_value=10),
