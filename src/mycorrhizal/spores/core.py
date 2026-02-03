@@ -13,11 +13,12 @@ import functools
 import logging
 import threading
 from datetime import datetime
+from enum import Enum
 from typing import (
     Any, Callable, Optional, Union, Dict, List,
     ParamSpec, TypeVar, overload, get_origin, get_args, Annotated
 )
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
 
 from .models import (
@@ -44,6 +45,28 @@ R = TypeVar('R')
 # Global Configuration
 # ============================================================================
 
+class EvictionPolicy(str, Enum):
+    """
+    Cache eviction policy for object logging.
+
+    Attributes:
+        EVICT_AND_LOG: Evict from cache when full, log immediately via sync/async path
+        EVICT_AND_BUFFER: Evict from cache, buffer for later logging (future)
+        NO_EVICT: Keep in cache until explicit flush (future)
+    """
+    EVICT_AND_LOG = "evict_and_log"
+    EVICT_AND_BUFFER = "evict_and_buffer"
+    NO_EVICT = "no_evict"
+
+
+@dataclass
+class CacheMetrics:
+    """Track cache eviction statistics."""
+    evictions: int = 0
+    eviction_failures: int = 0
+    first_sights: int = 0
+
+
 @dataclass
 class SporesConfig:
     """
@@ -54,11 +77,15 @@ class SporesConfig:
         object_cache_size: Maximum objects in LRU cache
         encoder: Encoder instance to use
         transport: Transport instance to use (required for logging to work)
+        eviction_policy: Policy for handling cache eviction
+        touch_resend_n: Resend object every N touches (0 to disable periodic resend)
     """
     enabled: bool = True
     object_cache_size: int = 128
     encoder: Optional[Encoder] = None
     transport: Optional[Transport] = None
+    eviction_policy: EvictionPolicy = EvictionPolicy.EVICT_AND_LOG
+    touch_resend_n: int = 100
 
     def __post_init__(self):
         """Set default encoder if not provided."""
@@ -69,24 +96,34 @@ class SporesConfig:
 # Global state
 _config: Optional[SporesConfig] = None
 _object_cache: Optional[ObjectLRUCache[str, Object]] = None
+_config_lock = threading.RLock()  # Reentrant lock for global state initialization
+_config_initialized = False  # Track whether configure() has been called
+_cache_metrics = CacheMetrics()  # Track cache eviction statistics
 
 
 def configure(
     enabled: bool = True,
     object_cache_size: int = 128,
     encoder: Optional[Encoder] = None,
-    transport: Optional[Transport] = None
+    transport: Optional[Transport] = None,
+    eviction_policy: Union[EvictionPolicy, str] = EvictionPolicy.EVICT_AND_LOG,
+    touch_resend_n: int = 100
 ) -> None:
     """
-    Configure the Spores logging system.
+    Configure the Spores logging system (thread-safe).
 
     This should be called once at application startup.
+    If called multiple times, the last call wins.
+
+    Thread-safe: Can be called from multiple threads concurrently.
 
     Args:
         enabled: Whether spores logging is enabled (default: True)
         object_cache_size: Maximum objects in LRU cache (default: 128)
         encoder: Encoder instance (defaults to JSONEncoder)
         transport: Transport instance (required for logging to work)
+        eviction_policy: Policy for cache eviction (default: evict_and_log)
+        touch_resend_n: Resend object every N touches (default: 100, 0 to disable)
 
     Example:
         ```python
@@ -94,70 +131,181 @@ def configure(
 
         spore.configure(
             transport=FileTransport("logs/ocel.jsonl"),
-            object_cache_size=256
+            object_cache_size=256,
+            touch_resend_n=100,
         )
         ```
     """
-    global _config, _object_cache
+    global _config, _object_cache, _config_initialized, _cache_metrics
 
-    _config = SporesConfig(
-        enabled=enabled,
-        object_cache_size=object_cache_size,
-        encoder=encoder,
-        transport=transport
-    )
+    # Convert string to EvictionPolicy if needed
+    if isinstance(eviction_policy, str):
+        eviction_policy = EvictionPolicy(eviction_policy)
 
-    # Create object cache with eviction callback
-    def on_evict(object_id: str, obj: Object):
-        """Send object when evicted from cache."""
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(_send_log_record(LogRecord(object=obj)))
-            else:
-                # No running loop, schedule the coroutine
-                asyncio.ensure_future(_send_log_record(LogRecord(object=obj)))
-        except RuntimeError:
-            # No event loop at all, ignore for now
-            pass
+    with _config_lock:
+        # Warn if already configured (but allow reconfiguration)
+        if _config_initialized:
+            logger.warning(
+                "Spores already configured. Reconfiguring may cause issues. "
+                "Ensure configure() is called only once at startup."
+            )
 
-    def on_first_sight(object_id: str, obj: Object):
-        """Send object when first seen."""
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(_send_log_record(LogRecord(object=obj)))
-            else:
-                # No running loop, schedule the coroutine
-                asyncio.ensure_future(_send_log_record(LogRecord(object=obj)))
-        except RuntimeError:
-            # No event loop at all, ignore for now
-            pass
+        # Create new config (atomic under lock)
+        _config = SporesConfig(
+            enabled=enabled,
+            object_cache_size=object_cache_size,
+            encoder=encoder,
+            transport=transport,
+            eviction_policy=eviction_policy,
+            touch_resend_n=touch_resend_n
+        )
 
-    _object_cache = ObjectLRUCache(
-        maxsize=object_cache_size,
-        on_evict=on_evict,
-        on_first_sight=on_first_sight
-    )
+        # Reset metrics on reconfiguration
+        _cache_metrics = CacheMetrics()
 
-    logger.info(f"Spores configured: enabled={enabled}, cache_size={object_cache_size}")
+        # Create object cache with unified callback
+        def needs_logged(object_id: str, obj: Object):
+            """Log object when it needs to be logged (first sight, eviction, change, or Nth touch)."""
+            global _cache_metrics
+
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Async context: schedule task
+                    asyncio.create_task(_send_log_record(LogRecord(object=obj)))
+                else:
+                    # No running loop, use sync path
+                    _send_log_record_sync(LogRecord(object=obj))
+            except RuntimeError:
+                # No event loop at all, use sync path
+                try:
+                    _send_log_record_sync(LogRecord(object=obj))
+                except Exception as e:
+                    logger.error(f"Failed to log object {object_id}: {e}")
+
+        _object_cache = ObjectLRUCache(
+            maxsize=object_cache_size,
+            needs_logged=needs_logged,
+            touch_resend_n=touch_resend_n,
+            metrics=_cache_metrics
+        )
+
+        _config_initialized = True
+
+    logger.info(f"Spores configured: enabled={enabled}, cache_size={object_cache_size}, eviction_policy={eviction_policy.value}")
 
 
 def get_config() -> SporesConfig:
-    """Get the current spores configuration."""
-    global _config
-    if _config is None:
-        # Use default configuration
-        _config = SporesConfig()
+    """
+    Get the current spores configuration (thread-safe).
+
+    If no configuration exists, creates a default one.
+    Thread-safe: Can be called from multiple threads concurrently.
+    """
+    global _config, _config_initialized
+
+    # Fast path: read without lock (GIL protects single read)
+    if _config is not None:
+        return _config
+
+    # Slow path: needs initialization
+    with _config_lock:
+        # Double-check: another thread may have initialized while we waited
+        if _config is None:
+            # Initialize with defaults
+            _config = SporesConfig()
+            _config_initialized = True
+
     return _config
 
 
 def get_object_cache() -> ObjectLRUCache[str, Object]:
-    """Get the object cache."""
+    """
+    Get the object cache (thread-safe).
+
+    If no cache exists, initializes with default configuration.
+    Thread-safe: Can be called from multiple threads concurrently.
+    """
     global _object_cache
-    if _object_cache is None:
-        configure()  # Initialize with defaults
+
+    # Fast path: read without lock (GIL protects single read)
+    if _object_cache is not None:
+        return _object_cache
+
+    # Slow path: needs initialization
+    with _config_lock:
+        # Double-check: another thread may have initialized while we waited
+        if _object_cache is None:
+            # Trigger full initialization
+            configure()  # Will acquire lock again, but that's OK (reentrant in same thread)
+
     return _object_cache
+
+
+def flush_object_cache() -> None:
+    """
+    Flush all objects from the cache to the log.
+
+    This forces all cached objects to be written, even if they haven't
+    been evicted yet. Use this before application shutdown to ensure
+    all objects are logged.
+
+    Thread-safe: Can be called from multiple threads concurrently.
+
+    Example:
+        ```python
+        from mycorrhizal.spores import configure, flush_object_cache
+        from mycorrhizal.spores.transport import FileTransport
+
+        configure(transport=FileTransport("logs/ocel.jsonl"))
+
+        # ... application logic ...
+
+        flush_object_cache()  # Ensure all objects logged
+        ```
+    """
+    cache = get_object_cache()
+    config = get_config()
+
+    if not config.enabled:
+        return
+
+    # Get all objects currently in cache
+    all_objects = list(cache._cache.values())
+
+    # Log each object
+    flushed_count = 0
+    for entry in all_objects:
+        try:
+            # Use sync path to ensure it's written
+            _send_log_record_sync(LogRecord(object=entry.object))
+            flushed_count += 1
+        except Exception as e:
+            logger.error(f"Failed to flush object {entry.object.id}: {e}")
+
+    logger.info(f"Flushed {flushed_count} objects from cache")
+
+
+def get_cache_metrics() -> CacheMetrics:
+    """
+    Get cache eviction metrics.
+
+    Returns statistics about cache evictions and failures.
+
+    Returns:
+        CacheMetrics with eviction statistics
+
+    Example:
+        ```python
+        from mycorrhizal.spores import get_cache_metrics
+
+        metrics = get_cache_metrics()
+        print(f"Evictions: {metrics.evictions}")
+        print(f"Failures: {metrics.eviction_failures}")
+        ```
+    """
+    global _cache_metrics
+    return _cache_metrics
 
 
 async def _send_log_record(record: LogRecord) -> None:
@@ -1236,6 +1384,13 @@ __all__ = [
     'configure',
     'get_config',
     'get_object_cache',
+    'flush_object_cache',
+    'get_cache_metrics',
+
+    # Types
+    'SporesConfig',
+    'EvictionPolicy',
+    'CacheMetrics',
 
     # Spore getters (explicit)
     'get_spore_sync',

@@ -82,10 +82,14 @@ from .core import (
     configure,
     get_config,
     get_object_cache,
+    flush_object_cache,
+    get_cache_metrics,
     get_spore_sync,
     get_spore_async,
     spore,
     SporesConfig,
+    EvictionPolicy,
+    CacheMetrics,
     EventLogger,
     AsyncEventLogger,
     SyncEventLogger,
@@ -132,6 +136,8 @@ __all__ = [
     'configure',
     'get_config',
     'get_object_cache',
+    'flush_object_cache',
+    'get_cache_metrics',
     'get_spore_sync',
     'get_spore_async',
     'EventLogger',
@@ -139,6 +145,8 @@ __all__ = [
     'SyncEventLogger',
     'spore',  # For DSL adapters and @spore.object() decorator
     'SporesConfig',
+    'EvictionPolicy',
+    'CacheMetrics',
 
     # Models
     'Event',

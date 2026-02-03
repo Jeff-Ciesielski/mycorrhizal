@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, TYPE_CHECKING
 
 from .base import Encoder
 from ..models import LogRecord, Event, Object, Relationship, EventAttributeValue, ObjectAttributeValue
@@ -20,7 +20,7 @@ class JSONEncoder(Encoder):
     """
     JSON encoder for OCEL LogRecords.
 
-    Produces OCEL-compatible JSON.
+    Produces OCEL-compatible JSON with Unix float64 timestamps.
 
     Example output:
         {
@@ -28,9 +28,9 @@ class JSONEncoder(Encoder):
             "id": "evt-123",
             "type": "process_item",
             "activity": null,
-            "time": "2025-01-11T12:34:56.789000000Z",
+            "time": 1705689296.123456,
             "attributes": [
-              {"name": "priority", "value": "high", "type": "string", "time": null}
+              {"name": "priority", "value": "high", "type": "string"}
             ],
             "relationships": [
               {"objectId": "obj-456", "qualifier": "input"}
@@ -46,12 +46,20 @@ class JSONEncoder(Encoder):
             "id": "obj-456",
             "type": "WorkItem",
             "attributes": [
-              {"name": "status", "value": "pending", "type": "string", "time": null}
+              {"name": "status", "value": "pending", "type": "string", "time": 1705689296.123456}
             ],
             "relationships": []
           }
         }
     """
+
+    def __init__(self):
+        """
+        Initialize JSONEncoder.
+
+        Timestamps are always encoded as Unix float64 timestamps.
+        """
+        pass
 
     def encode(self, record: LogRecord) -> bytes:
         """
@@ -136,33 +144,14 @@ class JSONEncoder(Encoder):
             "qualifier": qualifier
         }
 
-    def _format_datetime(self, dt: datetime) -> str:
+    def _format_datetime(self, dt: datetime) -> float:
         """
-        Format datetime to RFC3339Nano.
+        Format datetime as Unix float64 timestamp.
 
         Args:
             dt: The datetime to format
 
         Returns:
-            ISO format string with nanosecond precision
+            Unix float64 timestamp (seconds since epoch)
         """
-        # Python's isoformat() produces RFC3339-compatible output
-        # For nanosecond precision, we need to ensure it has 9 digits
-        iso = dt.isoformat()
-
-        # Add microseconds if not present (Python 3.11+ has timespec='nanoseconds')
-        if '.' not in iso:
-            iso += '.000000000'
-
-        # Ensure we have 9 digits of fractional seconds
-        if '.' in iso:
-            main, frac = iso.split('.')
-            # Pad or truncate to 9 digits
-            frac = (frac + '0' * 9)[:9]
-            iso = f"{main}.{frac}"
-
-        # Ensure timezone is Z (UTC) or offset
-        if iso.endswith('+00:00'):
-            iso = iso[:-6] + 'Z'
-
-        return iso
+        return dt.timestamp()

@@ -206,54 +206,59 @@ def test_object_id_generation():
 # ============================================================================
 
 def test_lru_cache_eviction(mock_transport):
-    """Test LRU cache eviction callback."""
-    evicted_objects = []
+    """Test LRU cache eviction callback via unified needs_logged."""
+    logged_objects = []
 
-    def on_evict(obj_id: str, obj: Object):
-        evicted_objects.append((obj_id, obj))
+    def needs_logged(obj_id: str, obj: Object):
+        logged_objects.append((obj_id, obj))
 
-    cache = ObjectLRUCache(maxsize=2, on_evict=on_evict)
+    cache = ObjectLRUCache(maxsize=2, needs_logged=needs_logged)
 
     obj1 = Object(id="o1", type="test")
     obj2 = Object(id="o2", type="test")
     obj3 = Object(id="o3", type="test")
 
-    # Add obj1, obj2
+    # Add obj1, obj2 (first sight)
     cache.contains_or_add("o1", obj1)
     cache.contains_or_add("o2", obj2)
 
     assert len(cache) == 2
-    assert len(evicted_objects) == 0
+    assert len(logged_objects) == 2  # First sight for both
 
     # Add obj3, should evict o1
     cache.contains_or_add("o3", obj3)
 
     assert len(cache) == 2
-    assert len(evicted_objects) == 1
-    assert evicted_objects[0][0] == "o1"
+    # Should have: o1 first sight, o2 first sight, o1 eviction, o3 first sight
+    assert len(logged_objects) == 4
+    # Check that o1 was logged (first sight + eviction)
+    assert logged_objects[0][0] == "o1"  # First sight
+    assert logged_objects[2][0] == "o1"  # Eviction
+    assert logged_objects[1][0] == "o2"  # First sight
+    assert logged_objects[3][0] == "o3"  # First sight
 
 
 def test_lru_cache_first_sight(mock_transport):
-    """Test LRU cache first sight callback."""
-    first_sight_objects = []
+    """Test LRU cache first sight callback via unified needs_logged."""
+    logged_objects = []
 
-    def on_first_sight(obj_id: str, obj: Object):
-        first_sight_objects.append((obj_id, obj))
+    def needs_logged(obj_id: str, obj: Object):
+        logged_objects.append((obj_id, obj))
 
     cache = ObjectLRUCache(
         maxsize=10,
-        on_first_sight=on_first_sight
+        needs_logged=needs_logged
     )
 
     obj1 = Object(id="o1", type="test")
 
     # First sight
     cache.contains_or_add("o1", obj1)
-    assert len(first_sight_objects) == 1
+    assert len(logged_objects) == 1
 
-    # Second sight (not first anymore)
+    # Second sight (not first anymore, no change, not Nth touch)
     cache.contains_or_add("o1", obj1)
-    assert len(first_sight_objects) == 1
+    assert len(logged_objects) == 1
 
 
 # ============================================================================

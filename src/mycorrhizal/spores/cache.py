@@ -8,10 +8,13 @@ LRU cache for tracking seen objects and logging them on eviction.
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Dict, Callable, Optional, TypeVar, Generic
+from typing import Dict, Callable, Optional, TypeVar, Generic, TYPE_CHECKING
 from dataclasses import dataclass
 
 from .models import Object
+
+if TYPE_CHECKING:
+    from .core import CacheMetrics
 
 
 # Generic types for cache
@@ -28,61 +31,90 @@ class CacheEntry:
         object: The OCEL Object
         sight_count: How many times we've seen this object
         first_sight_time: When we first saw the object
+        attributes_hash: Hash of object attributes for change detection
     """
     object: Object
     sight_count: int = 1
     first_sight_time: Optional[float] = None
+    attributes_hash: Optional[int] = None
+
+
+def _compute_attributes_hash(obj: Object) -> Optional[int]:
+    """
+    Compute hash of object attributes for change detection.
+
+    Args:
+        obj: The OCEL Object
+
+    Returns:
+        Hash of attributes, or None if object has no attributes
+    """
+    if not obj.attributes:
+        return None
+    # Hash frozenset of (attr_name, attr_value) tuples
+    # ObjectAttributeValue.value holds the actual Python value
+    attrs = {k: v.value for k, v in obj.attributes.items()}
+    return hash(frozenset(attrs.items()))
 
 
 class ObjectLRUCache(Generic[K, V]):
     """
-    LRU cache with eviction callback for object tracking.
+    LRU cache with unified callback for object logging.
 
-    When an object is first seen, it should be logged via on_first_sight.
-    When an object is evicted from the cache, it's logged via on_evict.
+    The cache fires the `needs_logged` callback when an object needs to be logged:
+    - On first sight (new object added to cache)
+    - On eviction (object removed from cache to make room)
+    - When attributes change (detected via hash comparison)
+    - Every N touches (configurable via `touch_resend_n`)
 
     This ensures OCEL consumers see object evolution:
     - First sight: Initial object state
+    - Attribute changes: Updated state
     - Eviction: Final state before being removed from cache
+    - Periodic resend: Long-lived objects are re-logged periodically
 
     Example:
         ```python
-        def on_evict(object_id: str, obj: Object):
+        def needs_logged(object_id: str, obj: Object):
             # Send object to transport
             transport.send(LogRecord(object=obj))
 
-        cache = ObjectLRUCache(maxsize=128, on_evict=on_evict)
+        cache = ObjectLRUCache(maxsize=128, needs_logged=needs_logged, touch_resend_n=100)
 
         # Check if object exists, add if not
         if not cache.contains_or_add(object_id, object):
-            # Object not in cache, already logged by on_first_sight
+            # Object not in cache, already logged by needs_logged
             pass
         ```
 
     Args:
         maxsize: Maximum number of objects to cache
-        on_evict: Callback when object is evicted (object_id, object) -> None
-        on_first_sight: Optional callback when object is first seen (object_id, object) -> None
+        needs_logged: Callback when object needs logging (object_id, object) -> None
+        touch_resend_n: Resend object every N touches (0 to disable periodic resend)
     """
 
     def __init__(
         self,
         maxsize: int = 128,
-        on_evict: Optional[Callable[[K, Object], None]] = None,
-        on_first_sight: Optional[Callable[[K, Object], None]] = None
+        needs_logged: Optional[Callable[[K, Object], None]] = None,
+        touch_resend_n: int = 100,
+        metrics: Optional["CacheMetrics"] = None
     ):
         self.maxsize = maxsize
-        self.on_evict = on_evict
-        self.on_first_sight = on_first_sight
+        self.needs_logged = needs_logged
+        self.touch_resend_n = touch_resend_n
+        self.metrics = metrics
         self._cache: OrderedDict[K, CacheEntry] = OrderedDict()
 
     def _evict_if_needed(self) -> None:
         """Evict oldest entry if cache is full."""
-        if len(self._cache) >= self.maxsize:
+        while len(self._cache) >= self.maxsize:
             # FIFO from OrderedDict (oldest first)
             object_id, entry = self._cache.popitem(last=False)
-            if self.on_evict:
-                self.on_evict(object_id, entry.object)
+            if self.metrics is not None:
+                self.metrics.evictions += 1
+            if self.needs_logged:
+                self.needs_logged(object_id, entry.object)
 
     def get(self, key: K) -> Optional[Object]:
         """
@@ -119,8 +151,13 @@ class ObjectLRUCache(Generic[K, V]):
         Check if key exists, add if not.
 
         This is the primary method for object tracking:
-        - If key exists: mark as recently used, return True
-        - If key doesn't exist: add object, potentially evict, call on_first_sight, return False
+        - If key exists: check for attribute changes, periodic resend, mark as recently used
+        - If key doesn't exist: add object, potentially evict, log first sight
+
+        The `needs_logged` callback is fired when:
+        - First sight: new object added to cache
+        - Attribute change: object attributes changed (hash comparison)
+        - Every N touches: periodic resend for long-lived objects
 
         Args:
             key: The object ID
@@ -130,26 +167,50 @@ class ObjectLRUCache(Generic[K, V]):
             True if object was already in cache, False if it was just added
         """
         if key in self._cache:
-            # Already seen, mark as recently used
-            self._cache.move_to_end(key)
+            # Object exists - check if we need to log
             entry = self._cache[key]
             entry.sight_count += 1
+
+            # Compute current attribute hash
+            current_hash = _compute_attributes_hash(obj)
+
+            # Check if attributes changed
+            attrs_changed = (entry.attributes_hash is not None and
+                            current_hash != entry.attributes_hash)
+
+            # Update if attributes changed
+            if attrs_changed:
+                entry.object = obj
+                entry.attributes_hash = current_hash
+
+            # Fire callback if ANY condition met
+            should_log = any([
+                attrs_changed,
+                self.touch_resend_n > 0 and entry.sight_count % self.touch_resend_n == 0,
+            ])
+            if should_log and self.needs_logged:
+                self.needs_logged(key, entry.object)
+
+            self._cache.move_to_end(key)
             return True
         else:
-            # First sight
+            # First sight - store hash, fire callback
             self._evict_if_needed()
-
-            entry = CacheEntry(object=obj)
+            if self.metrics is not None:
+                self.metrics.first_sights += 1
+            attr_hash = _compute_attributes_hash(obj)
+            entry = CacheEntry(object=obj, attributes_hash=attr_hash)
             self._cache[key] = entry
-
-            if self.on_first_sight:
-                self.on_first_sight(key, obj)
-
+            if self.needs_logged:
+                self.needs_logged(key, obj)
             return False
 
     def add(self, key: K, obj: Object) -> None:
         """
         Add an object to the cache (or update if exists).
+
+        Note: This method fires needs_logged for new objects, but not for updates.
+        For attribute change detection and periodic resend, use contains_or_add().
 
         Args:
             key: The object ID
@@ -165,11 +226,12 @@ class ObjectLRUCache(Generic[K, V]):
             # New entry
             self._evict_if_needed()
 
-            entry = CacheEntry(object=obj)
+            attr_hash = _compute_attributes_hash(obj)
+            entry = CacheEntry(object=obj, attributes_hash=attr_hash)
             self._cache[key] = entry
 
-            if self.on_first_sight:
-                self.on_first_sight(key, obj)
+            if self.needs_logged:
+                self.needs_logged(key, obj)
 
     def remove(self, key: K) -> Optional[Object]:
         """
