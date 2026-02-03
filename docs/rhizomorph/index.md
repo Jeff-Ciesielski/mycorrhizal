@@ -153,6 +153,46 @@ def my_parallel():
     yield task_c
 ```
 
+### Conditional Wrappers
+
+Control whether child nodes execute based on conditions:
+
+#### gate
+
+Execute child only when condition is true, otherwise return FAILURE:
+
+```python
+@bt.sequence
+def gated_sequence():
+    """Child must pass gate or sequence fails."""
+    yield bt.gate(has_battery)(engage_action)
+    yield next_step  # Only reached if gate passed
+```
+
+Use `gate` when a condition is **required** for execution.
+
+#### when
+
+Execute child only when condition is true, otherwise return SUCCESS (skip but continue):
+
+```python
+@bt.sequence
+def feature_flag_sequence():
+    """Optional action - sequence continues if feature is disabled."""
+    yield validate_input
+    yield bt.when(feature_enabled)(optional_action)
+    yield continue_processing  # Always reached
+```
+
+Use `when` for **optional** steps or feature flags.
+
+**When vs Gate:**
+
+| Wrapper | Condition True | Condition False | Use Case |
+|---------|---------------|-----------------|----------|
+| `gate(cond)(child)` | Execute child | Return FAILURE | Required precondition |
+| `when(cond)(child)` | Execute child | Return SUCCESS | Optional/feature flag |
+
 ### Root Node
 
 Every tree must have a root:

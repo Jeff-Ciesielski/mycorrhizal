@@ -902,6 +902,226 @@ class TestGate:
         assert simple_bb.log == []
 
 
+class TestWhen:
+    """Tests for when decorator - optional conditional execution."""
+
+    @pytest.mark.asyncio
+    async def test_when_executes_child_when_condition_true(self, simple_bb, mock_tb):
+        """When condition is true, child should execute."""
+        @bt.tree
+        def Tree():
+            @bt.condition
+            def feature_enabled(bb: SimpleBlackboard):
+                return bb.should_succeed
+
+            @bt.action
+            def optional_action(bb: SimpleBlackboard):
+                bb.log.append("executed")
+                return Status.SUCCESS
+
+            @bt.action
+            def next_step(bb: SimpleBlackboard):
+                bb.log.append("next")
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root():
+                yield optional_action
+                yield bt.when(feature_enabled)(optional_action)
+                yield next_step
+
+        simple_bb.should_succeed = True
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+        status = await runner.tick()
+
+        assert status == Status.SUCCESS
+        assert simple_bb.log == ["executed", "executed", "next"]
+
+    @pytest.mark.asyncio
+    async def test_when_skips_with_success_when_condition_false(self, simple_bb, mock_tb):
+        """When condition is false, should skip and return SUCCESS (sequence continues)."""
+        @bt.tree
+        def Tree():
+            @bt.condition
+            def feature_enabled(bb: SimpleBlackboard):
+                return bb.should_succeed
+
+            @bt.action
+            def optional_action(bb: SimpleBlackboard):
+                bb.log.append("executed")
+                return Status.SUCCESS
+
+            @bt.action
+            def next_step(bb: SimpleBlackboard):
+                bb.log.append("next")
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root():
+                yield bt.when(feature_enabled)(optional_action)
+                yield next_step
+
+        simple_bb.should_succeed = False
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+        status = await runner.tick()
+
+        assert status == Status.SUCCESS
+        assert simple_bb.log == ["next"]  # Child skipped, sequence continued
+
+    @pytest.mark.asyncio
+    async def test_when_vs_gate_in_sequence(self, simple_bb, mock_tb):
+        """Demonstrate difference between when and gate in sequences."""
+        @bt.tree
+        def GateTree():
+            @bt.condition
+            def condition(bb: SimpleBlackboard):
+                return bb.should_succeed
+
+            @bt.action
+            def gated_action(bb: SimpleBlackboard):
+                bb.log.append("gated")
+                return Status.SUCCESS
+
+            @bt.action
+            def after_gate(bb: SimpleBlackboard):
+                bb.log.append("after_gate")
+
+            @bt.root
+            @bt.sequence()
+            def root():
+                yield bt.gate(condition)(gated_action)
+                yield after_gate  # Never reached when gate fails
+
+        @bt.tree
+        def WhenTree():
+            @bt.condition
+            def condition(bb: SimpleBlackboard):
+                return bb.should_succeed
+
+            @bt.action
+            def when_action(bb: SimpleBlackboard):
+                bb.log.append("when")
+                return Status.SUCCESS
+
+            @bt.action
+            def after_when(bb: SimpleBlackboard):
+                bb.log.append("after_when")
+
+            @bt.root
+            @bt.sequence()
+            def root():
+                yield bt.when(condition)(when_action)
+                yield after_when  # Always reached
+
+        # Gate fails the sequence
+        simple_bb.should_succeed = False
+        simple_bb.log = []
+        runner = Runner(GateTree, simple_bb, tb=mock_tb)
+        status = await runner.tick()
+        assert status == Status.FAILURE
+        assert simple_bb.log == []  # Gate blocked, after_gate never reached
+
+        # When skips but sequence continues
+        simple_bb.log = []
+        runner = Runner(WhenTree, simple_bb, tb=mock_tb)
+        status = await runner.tick()
+        assert status == Status.SUCCESS
+        assert simple_bb.log == ["after_when"]  # Child skipped, next step ran
+
+    @pytest.mark.asyncio
+    async def test_when_in_selector(self, simple_bb, mock_tb):
+        """When should work in selector context - skips with SUCCESS, selector done."""
+        @bt.tree
+        def Tree():
+            @bt.condition
+            def is_enabled(bb: SimpleBlackboard):
+                return bb.should_succeed
+
+            @bt.action
+            def when_action(bb: SimpleBlackboard):
+                bb.log.append("when")
+                return Status.FAILURE
+
+            @bt.action
+            def fallback(bb: SimpleBlackboard):
+                bb.log.append("fallback")
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.selector()
+            def root():
+                yield bt.when(is_enabled)(when_action)
+                yield fallback  # Never reached (when already succeeded)
+
+        simple_bb.should_succeed = False
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+        status = await runner.tick()
+
+        assert status == Status.SUCCESS
+        assert simple_bb.log == []  # when skipped with SUCCESS, selector done
+
+    @pytest.mark.asyncio
+    async def test_when_fluent_chain(self, simple_bb, mock_tb):
+        """When should work in fluent chains."""
+        @bt.tree
+        def Tree():
+            @bt.condition
+            def condition(bb: SimpleBlackboard):
+                return bb.should_succeed
+
+            @bt.action
+            def child(bb: SimpleBlackboard):
+                bb.log.append("executed")
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root():
+                # when with failer - condition true, child runs, then failer converts to FAILURE
+                yield bt.failer().when(condition)(child)
+
+        simple_bb.should_succeed = True
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+        status = await runner.tick()
+
+        assert status == Status.FAILURE  # failer wrapper still works
+        assert simple_bb.log == ["executed"]  # Child was executed
+
+    @pytest.mark.asyncio
+    async def test_when_with_decorated_condition(self, simple_bb, mock_tb):
+        """When should work with @bt.condition decorated functions."""
+        @bt.tree
+        def Tree():
+            @bt.condition
+            def feature_enabled(bb: SimpleBlackboard):
+                return bb.should_succeed
+
+            @bt.action
+            def optional_action(bb: SimpleBlackboard):
+                bb.log.append("executed")
+                return Status.SUCCESS
+
+            @bt.action
+            def next_step(bb: SimpleBlackboard):
+                bb.log.append("next")
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.sequence()
+            def root():
+                yield bt.when(feature_enabled)(optional_action)
+                yield next_step
+
+        simple_bb.should_succeed = False
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+        status = await runner.tick()
+
+        assert status == Status.SUCCESS
+        assert simple_bb.log == ["next"]
+
+
 class TestRateLimit:
     """Tests for rate limit decorator."""
 

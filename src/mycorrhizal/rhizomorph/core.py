@@ -890,20 +890,72 @@ class Gate(Node[BB]):
         return await self._finish(bb, st, tb)
 
 
+class When(Node[BB]):
+    """
+    Conditionally execute a child, returning SUCCESS if the condition fails.
+
+    Unlike gate(), when() does NOT fail the parent when the condition is false.
+    This is useful for optional steps or feature flags in sequences.
+
+    Behavior:
+      - If condition returns SUCCESS → execute child, return child's status
+      - If condition returns RUNNING → return RUNNING
+      - Otherwise → return SUCCESS (skip but don't fail parent)
+
+    Example:
+        yield bt.when(feature_enabled)(optional_action)
+        # If feature_enabled is false, returns SUCCESS and sequence continues
+    """
+
+    def __init__(
+        self,
+        condition: Node[BB],
+        child: Node[BB],
+        name: Optional[str] = None,
+        exception_policy: ExceptionPolicy = ExceptionPolicy.LOG_AND_CONTINUE,
+    ) -> None:
+        super().__init__(
+            name or f"When(cond={_name_of(condition)}, child={_name_of(child)})",
+            exception_policy=exception_policy,
+        )
+        self.condition = condition
+        self.child = child
+        self.condition.parent = self
+        self.child.parent = self
+
+    def reset(self) -> None:
+        super().reset()
+        self.condition.reset()
+        self.child.reset()
+
+    async def tick(self, bb: BB, tb: Timebase) -> Status:
+        await self._ensure_entered(bb, tb)
+        c = await self.condition.tick(bb, tb)
+        if c is Status.RUNNING:
+            return Status.RUNNING
+        if c is not Status.SUCCESS:
+            # Condition failed - return SUCCESS to skip but don't block parent
+            return await self._finish(bb, Status.SUCCESS, tb)
+        st = await self.child.tick(bb, tb)
+        if st is Status.RUNNING:
+            return Status.RUNNING
+        return await self._finish(bb, st, tb)
+
+
 class Match(Node[BB]):
     """
     Pattern-matching dispatch node.
-    
+
     Evaluates a key function against the blackboard, then checks each case
     in order. The first matching case's child is executed. If the child
     completes (SUCCESS or FAILURE), that status is returned immediately.
-    
+
     Cases can match by:
       - Type: isinstance(value, case_type)
       - Predicate: case_predicate(value) returns True
       - Value: value == case_value
       - Default: always matches (should be last)
-    
+
     If no case matches and there's no default, returns FAILURE.
     """
 
@@ -1385,6 +1437,31 @@ class _WrapperChain:
             lambda ch: Gate(cond_spec.to_node(), ch),
         )
 
+    def when(
+        self, condition_spec_or_fn: Union["NodeSpec", Callable[[Any], Any]]
+    ) -> "_WrapperChain":
+        """
+        Add a conditional wrapper that executes the child only when condition is true.
+
+        Unlike gate(), when() returns SUCCESS (not FAILURE) when the condition fails.
+        This allows sequences to continue when optional steps are skipped.
+
+        Args:
+            condition_spec_or_fn: A node spec or callable that returns True/False
+
+        Returns:
+            The chain for further wrapping
+
+        Example:
+            yield bt.when(is_enabled)(optional_action)
+            # If is_enabled is False, returns SUCCESS and sequence continues
+        """
+        cond_spec = bt.as_spec(condition_spec_or_fn)
+        return self._append(
+            f"When(cond={_name_of(cond_spec)})",
+            lambda ch: When(cond_spec.to_node(), ch),
+        )
+
     def __call__(self, inner: Union["NodeSpec", Callable[[Any], Any]]) -> "NodeSpec":
         """
         Apply the chain to a child spec → nested decorator NodeSpecs.
@@ -1747,6 +1824,28 @@ class _BT:
     def gate(self, condition: Union[NodeSpec, Callable[[Any], Any]]) -> _WrapperChain:
         cond_spec = self.as_spec(condition)
         return _WrapperChain().gate(cond_spec)
+
+    def when(self, condition: Union[NodeSpec, Callable[[Any], Any]]) -> _WrapperChain:
+        """
+        Create a conditional wrapper that executes the child only when condition is true.
+
+        Unlike gate(), when() returns SUCCESS (not FAILURE) when the condition fails.
+        This is useful for optional steps or feature flags in sequences.
+
+        Args:
+            condition: A node spec or callable that returns True/False
+
+        Returns:
+            A wrapper chain that can be applied to a child node
+
+        Example:
+            @bt.sequence
+            def my_sequence():
+                yield bt.when(feature_enabled)(optional_feature)
+                yield next_step  # Always reached, even if flag is disabled
+        """
+        cond_spec = self.as_spec(condition)
+        return _WrapperChain().when(cond_spec)
 
     def match(
         self, key_fn: Callable[[Any], Any], name: Optional[str] = None
