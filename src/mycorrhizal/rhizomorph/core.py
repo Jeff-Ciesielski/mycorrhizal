@@ -2,17 +2,18 @@
 """
 Rhizomorph - Asyncio Behavior Tree Framework
 
-A decorator-based DSL for defining and executing behavior trees with support for
+A dual-API framework for defining and executing behavior trees with support for
 asyncio, multi-file composition, and type-safe blackboard interfaces.
 
-Usage:
+Two Usage Patterns:
+
+1. Decorator DSL (Declarative):
     from mycorrhizal.rhizomorph.core import bt, Runner, Status
 
     @bt.tree
     def MyBehaviorTree():
         @bt.action
         async def do_work(bb) -> Status:
-            # Do some work
             return Status.SUCCESS
 
         @bt.condition
@@ -25,21 +26,39 @@ Usage:
             yield should_work
             yield do_work
 
-    # Run the tree
     runner = Runner(MyBehaviorTree, bb=blackboard)
+    result = await runner.tick_until_complete()
+
+2. TreeBuilder API (Programmatic):
+    from mycorrhizal.rhizomorph.core import TreeBuilder, Runner, Status
+
+    builder = TreeBuilder("MyTree")
+
+    has_battery = builder.condition("has_battery", lambda bb: bb.battery > 20)
+    move_forward = builder.action("move_forward", move_func)
+
+    # Fluent wrapper chaining
+    protected_move = move_forward.gate(has_battery).timeout(5.0).retry(3)
+
+    patrol = builder.sequence(has_battery, protected_move, memory=True)
+    tree = builder.build(patrol)
+
+    runner = Runner(tree, bb=blackboard)
     result = await runner.tick_until_complete()
 
 Key Classes:
     Status - Result status for behavior tree nodes (SUCCESS, FAILURE, RUNNING, etc.)
+    Runner - Runtime for executing behavior trees
     Node - Base class for all behavior tree nodes
     Action - Leaf node that executes a function
     Condition - Leaf node that evaluates a predicate
     Sequence - Composite that runs children in order
     Selector - Composite that runs children until one succeeds
     Parallel - Composite that runs children concurrently
+    TreeBuilder - Programmatic API for building trees without decorators
 
 Multi-file Composition:
-    Use bt.subtree() to reference trees defined in other modules:
+    Use bt.subtree() or builder.subtree() to reference trees defined in other modules:
         from other_module import OtherTree
 
         @bt.tree
@@ -47,7 +66,14 @@ Multi-file Composition:
             @bt.root
             @bt.sequence
             def root():
-                yield bt.subtree(OtherTree, owner=MainTree)
+                yield bt.subtree(OtherTree)
+
+        # Or with TreeBuilder:
+        builder = TreeBuilder("MainTree")
+        builder.root(builder.sequence(
+            builder.subtree(OtherTree),
+            other_action
+        ))
 """
 from __future__ import annotations
 
@@ -416,7 +442,7 @@ class Action(Node[BB]):
 
 
 class Condition(Action[BB]):
-    """Boolean leaf: True→SUCCESS, False→FAILURE (Status accepted but discouraged)."""
+    """Boolean leaf: True→SUCCESS, False→FAILURE (status also accepted)."""
 
     async def tick(self, bb: BB, tb: Timebase) -> Status:
         await self._ensure_entered(bb, tb)
@@ -2069,6 +2095,728 @@ class _BT:
                 f"{maybe!r} is not a BT node (missing node_spec attribute)."
             )
         return spec
+
+
+# ======================================================================================
+# Programmatic Tree Builder
+# ======================================================================================
+
+
+class _NodeWrapper:
+    """
+    Fluent wrapper for programmatic nodes that enables decorator-like chaining.
+
+    Similar to _WrapperChain but for NodeSpecs created via TreeBuilder.
+
+    Example:
+        wrapped = builder.action("scan", scan_func).timeout(1.0).retry(3)
+    """
+
+    def __init__(self, spec: NodeSpec, builder: "TreeBuilder"):
+        self._spec = spec
+        self._builder = builder
+
+    def timeout(self, seconds: float) -> "_NodeWrapper":
+        """Wrap with a Timeout decorator"""
+        wrapper_spec = NodeSpec(
+            kind=NodeSpecKind.DECORATOR,
+            name=f"Timeout({seconds}s, {self._spec.name})",
+            payload=lambda ch: Timeout(ch, seconds=seconds),
+            children=[self._spec],
+        )
+        return _NodeWrapper(wrapper_spec, self._builder)
+
+    def retry(
+        self,
+        max_attempts: int,
+        retry_on: Tuple[Status, ...] = (Status.FAILURE, Status.ERROR),
+    ) -> "_NodeWrapper":
+        """Wrap with a Retry decorator"""
+        wrapper_spec = NodeSpec(
+            kind=NodeSpecKind.DECORATOR,
+            name=f"Retry({max_attempts}, {self._spec.name})",
+            payload=lambda ch: Retry(ch, max_attempts=max_attempts, retry_on=retry_on),
+            children=[self._spec],
+        )
+        return _NodeWrapper(wrapper_spec, self._builder)
+
+    def ratelimit(
+        self, *, hz: Optional[float] = None, period: Optional[float] = None
+    ) -> "_NodeWrapper":
+        """Wrap with a RateLimit decorator"""
+        label = "RateLimit(?)"
+        if hz is not None:
+            label = f"RateLimit({1.0 / float(hz):.6f}s)"
+        elif period is not None:
+            label = f"RateLimit({float(period):.6f}s)"
+
+        wrapper_spec = NodeSpec(
+            kind=NodeSpecKind.DECORATOR,
+            name=f"{label}, {self._spec.name}",
+            payload=lambda ch: RateLimit(ch, hz=hz, period=period),
+            children=[self._spec],
+        )
+        return _NodeWrapper(wrapper_spec, self._builder)
+
+    def gate(self, condition: Union[NodeSpec, Callable[[Any], Any]]) -> "_NodeWrapper":
+        """Wrap with a Gate decorator - fails when condition is false"""
+        cond_spec = self._builder.as_spec(condition)
+        wrapper_spec = NodeSpec(
+            kind=NodeSpecKind.DECORATOR,
+            name=f"Gate(cond={_name_of(cond_spec)}, {self._spec.name})",
+            payload=lambda ch: Gate(cond_spec.to_node(), ch),
+            children=[self._spec],
+        )
+        return _NodeWrapper(wrapper_spec, self._builder)
+
+    def when(self, condition: Union[NodeSpec, Callable[[Any], Any]]) -> "_NodeWrapper":
+        """Wrap with a When decorator - succeeds when condition is false (no-op)"""
+        cond_spec = self._builder.as_spec(condition)
+        wrapper_spec = NodeSpec(
+            kind=NodeSpecKind.DECORATOR,
+            name=f"When(cond={_name_of(cond_spec)}, {self._spec.name})",
+            payload=lambda ch: When(cond_spec.to_node(), ch),
+            children=[self._spec],
+        )
+        return _NodeWrapper(wrapper_spec, self._builder)
+
+    def succeeder(self) -> "_NodeWrapper":
+        """Wrap with a Succeeder decorator - always returns SUCCESS"""
+        wrapper_spec = NodeSpec(
+            kind=NodeSpecKind.DECORATOR,
+            name=f"Succeeder({self._spec.name})",
+            payload=lambda ch: Succeeder(ch),
+            children=[self._spec],
+        )
+        return _NodeWrapper(wrapper_spec, self._builder)
+
+    def failer(self) -> "_NodeWrapper":
+        """Wrap with a Failer decorator - always returns FAILURE"""
+        wrapper_spec = NodeSpec(
+            kind=NodeSpecKind.DECORATOR,
+            name=f"Failer({self._spec.name})",
+            payload=lambda ch: Failer(ch),
+            children=[self._spec],
+        )
+        return _NodeWrapper(wrapper_spec, self._builder)
+
+    def inverter(self) -> "_NodeWrapper":
+        """Wrap with an Inverter decorator - inverts SUCCESS/FAILURE"""
+        wrapper_spec = NodeSpec(
+            kind=NodeSpecKind.DECORATOR,
+            name=f"Inverter({self._spec.name})",
+            payload=lambda ch: Inverter(ch),
+            children=[self._spec],
+        )
+        return _NodeWrapper(wrapper_spec, self._builder)
+
+    @property
+    def spec(self) -> NodeSpec:
+        """Get the underlying NodeSpec"""
+        return self._spec
+
+
+class TreeBuilder:
+    """
+    Programmatic builder for behavior trees.
+
+    Provides an imperative API for constructing behavior trees without decorators.
+    Similar to NetBuilder in Hypha.
+
+    Example:
+        builder = TreeBuilder("MyTree")
+
+        has_battery = builder.condition("has_battery", lambda bb: bb.battery > 20)
+        move_forward = builder.action("move_forward", move_func)
+
+        patrol = builder.sequence(has_battery, move_forward, memory=True)
+        tree = builder.root(patrol)
+
+        runner = Runner(tree, bb=blackboard)
+        await runner.tick()
+    """
+
+    def __init__(self, name: str):
+        self._name = name
+        self._root_spec: Optional[NodeSpec] = None
+
+    def action(self, name: str, func: Callable[..., Any]) -> _NodeWrapper:
+        """
+        Create an action node.
+
+        Args:
+            name: Name for the action
+            func: Action function (can be async) that takes (bb) and returns Status
+
+        Returns:
+            _NodeWrapper for fluent chaining
+        """
+        spec = NodeSpec(kind=NodeSpecKind.ACTION, name=name, payload=func)
+        return _NodeWrapper(spec, self)
+
+    def condition(self, name: str, func: Callable[[Any], bool]) -> _NodeWrapper:
+        """
+        Create a condition node.
+
+        Args:
+            name: Name for the condition
+            func: Condition function that takes (bb) and returns bool
+
+        Returns:
+            _NodeWrapper for fluent chaining
+        """
+        spec = NodeSpec(kind=NodeSpecKind.CONDITION, name=name, payload=func)
+        return _NodeWrapper(spec, self)
+
+    def sequence(
+        self, *children: Union[NodeSpec, _NodeWrapper, Callable[[Any], Any]], memory: bool = True
+    ) -> NodeSpec:
+        """
+        Create a sequence composite.
+
+        Args:
+            *children: Child nodes (NodeSpec, _NodeWrapper, or callables with node_spec)
+            memory: Whether to remember position across ticks
+
+        Returns:
+            NodeSpec for the sequence
+        """
+        child_specs = [self.as_spec(c) for c in children]
+
+        # Use a counter to generate unique factory names
+        if not hasattr(self, "_factory_counter"):
+            self._factory_counter = 0
+        self._factory_counter += 1
+        factory_id = self._factory_counter
+
+        def _sequence_factory() -> Generator[Any, None, None]:
+            for child in child_specs:
+                yield child
+
+        child_names = ", ".join(c.name for c in child_specs)
+        name = f"Sequence({child_names})" if child_specs else "Sequence"
+
+        # Set unique name including builder name to avoid false recursion detection
+        _sequence_factory.__name__ = f"{self._name}._sequence_factory_{factory_id}"
+        _sequence_factory.__qualname__ = f"{self._name}._sequence_factory_{factory_id}"
+
+        return NodeSpec(
+            kind=NodeSpecKind.SEQUENCE,
+            name=name,
+            payload={"factory": _sequence_factory, "memory": memory},
+        )
+
+    def selector(
+        self, *children: Union[NodeSpec, _NodeWrapper, Callable[[Any], Any]], memory: bool = True
+    ) -> NodeSpec:
+        """
+        Create a selector composite.
+
+        Args:
+            *children: Child nodes (NodeSpec, _NodeWrapper, or callables with node_spec)
+            memory: Whether to remember position across ticks
+
+        Returns:
+            NodeSpec for the selector
+        """
+        child_specs = [self.as_spec(c) for c in children]
+
+        # Use a counter to generate unique factory names
+        if not hasattr(self, "_factory_counter"):
+            self._factory_counter = 0
+        self._factory_counter += 1
+        factory_id = self._factory_counter
+
+        def _selector_factory() -> Generator[Any, None, None]:
+            for child in child_specs:
+                yield child
+
+        child_names = ", ".join(c.name for c in child_specs)
+        name = f"Selector({child_names})" if child_specs else "Selector"
+
+        # Set unique name including builder name to avoid false recursion detection
+        _selector_factory.__name__ = f"{self._name}._selector_factory_{factory_id}"
+        _selector_factory.__qualname__ = f"{self._name}._selector_factory_{factory_id}"
+
+        return NodeSpec(
+            kind=NodeSpecKind.SELECTOR,
+            name=name,
+            payload={"factory": _selector_factory, "memory": memory},
+        )
+
+    def parallel(
+        self,
+        *children: Union[NodeSpec, _NodeWrapper, Callable[[Any], Any]],
+        success_threshold: int,
+        failure_threshold: Optional[int] = None,
+    ) -> NodeSpec:
+        """
+        Create a parallel composite.
+
+        Args:
+            *children: Child nodes (NodeSpec, _NodeWrapper, or callables with node_spec)
+            success_threshold: Minimum number of children that must succeed
+            failure_threshold: Minimum number of children that must fail (None = len(children))
+
+        Returns:
+            NodeSpec for the parallel node
+        """
+        child_specs = [self.as_spec(c) for c in children]
+
+        # Use a counter to generate unique factory names
+        if not hasattr(self, "_factory_counter"):
+            self._factory_counter = 0
+        self._factory_counter += 1
+        factory_id = self._factory_counter
+
+        def _parallel_factory() -> Generator[Any, None, None]:
+            for child in child_specs:
+                yield child
+
+        child_names = ", ".join(c.name for c in child_specs)
+        name = f"Parallel({child_names})" if child_specs else "Parallel"
+
+        # Set unique name including builder name to avoid false recursion detection
+        _parallel_factory.__name__ = f"{self._name}._parallel_factory_{factory_id}"
+        _parallel_factory.__qualname__ = f"{self._name}._parallel_factory_{factory_id}"
+
+        return NodeSpec(
+            kind=NodeSpecKind.PARALLEL,
+            name=name,
+            payload={
+                "factory": _parallel_factory,
+                "success_threshold": success_threshold,
+                "failure_threshold": failure_threshold,
+            },
+        )
+
+    def subtree(self, tree: Union[SimpleNamespace, Callable[..., Any]]) -> NodeSpec:
+        """
+        Mount another tree's root spec as a subtree.
+
+        Args:
+            tree: A tree namespace created with @bt.tree, or a tree built by TreeBuilder
+
+        Returns:
+            NodeSpec for the subtree
+
+        Example:
+            # DSL tree
+            engage_tree = Engage  # @bt.tree decorated function
+
+            # Programmatic tree
+            builder = TreeBuilder("Demo")
+            builder.root(builder.sequence(
+                builder.subtree(engage_tree),
+                other_action
+            ))
+
+            # Two programmatic trees
+            engage_builder = TreeBuilder("Engage")
+            # ... build engage ...
+            engage_tree_func = engage_builder.build()
+
+            demo_builder = TreeBuilder("Demo")
+            demo_builder.root(demo_builder.sequence(
+                demo_builder.subtree(engage_tree_func),
+                other_action
+            ))
+        """
+        # Check if it's a tree function from build()
+        if hasattr(tree, "_spec"):
+            root_spec = tree._spec
+            tree_name = tree._name
+            return NodeSpec(
+                kind=NodeSpecKind.SUBTREE,
+                name=tree_name,
+                payload={"root": root_spec},
+                children=[root_spec],
+            )
+
+        # Otherwise assume it's a SimpleNamespace from @bt.tree
+        if not hasattr(tree, "root"):
+            raise ValueError(
+                f"Tree must have a 'root' attribute or be built via TreeBuilder.build(). "
+                f"Did you forget @bt.root on a composite, or TreeBuilder.build()?"
+            )
+
+        root_spec = tree.root
+        tree_name = getattr(tree, "_tree_name", root_spec.name)
+        return NodeSpec(
+            kind=NodeSpecKind.SUBTREE,
+            name=tree_name,
+            payload={"root": root_spec},
+            children=[root_spec],
+        )
+
+    def as_spec(self, maybe: Union[NodeSpec, _NodeWrapper, Callable[[Any], Any]]) -> NodeSpec:
+        """
+        Convert various node types to a NodeSpec.
+
+        Handles:
+        - NodeSpec: returns as-is
+        - _NodeWrapper: extracts the spec
+        - Callable with node_spec attribute: extracts the spec
+
+        Args:
+            maybe: NodeSpec, _NodeWrapper, or callable with node_spec
+
+        Returns:
+            NodeSpec
+
+        Raises:
+            TypeError: If the input cannot be converted to a NodeSpec
+        """
+        if isinstance(maybe, NodeSpec):
+            return maybe
+        if isinstance(maybe, _NodeWrapper):
+            return maybe.spec
+
+        spec = getattr(maybe, "node_spec", None)
+        if spec is None:
+            raise TypeError(
+                f"{maybe!r} is not a BT node (missing node_spec attribute)."
+            )
+        return spec
+
+    def root(self, child: Union[NodeSpec, _NodeWrapper, Callable[[Any], Any]]) -> Callable[..., Any]:
+        """
+        Set the root of the tree and return a tree function.
+
+        The returned function is compatible with the Runner API and has a _spec attribute
+        that holds the root NodeSpec.
+
+        Args:
+            child: Root node (NodeSpec, _NodeWrapper, or callable with node_spec)
+
+        Returns:
+            A callable function with _spec attribute for use with Runner
+
+        Example:
+            builder = TreeBuilder("MyTree")
+            action1 = builder.action("act1", func1)
+            action2 = builder.action("act2", func2)
+            root_seq = builder.sequence(action1, action2)
+            tree = builder.root(root_seq)
+
+            runner = Runner(tree, bb=blackboard)
+            await runner.tick()
+        """
+        root_spec = self.as_spec(child)
+        self._root_spec = root_spec
+
+        # Create a wrapper function that holds the spec (for Runner compatibility)
+        def tree_func():
+            pass
+
+        tree_func._spec = root_spec
+        tree_func._name = self._name
+        tree_func.__name__ = self._name
+        tree_func.root = root_spec  # Runner expects .root attribute
+
+        # Add convenience methods for serialization and visualization
+        def to_mermaid() -> str:
+            """Generate Mermaid diagram for this tree."""
+            from mycorrhizal.rhizomorph.core import _generate_mermaid
+
+            class TreeNamespace:
+                def __init__(self, root_spec: NodeSpec, name: str):
+                    self.root = root_spec
+                    self._tree_name = name
+
+            tree_ns = TreeNamespace(root_spec, self._name)
+            return _generate_mermaid(tree_ns)
+
+        def to_dict() -> Dict[str, Any]:
+            """Serialize tree to dictionary."""
+            from mycorrhizal.rhizomorph.core import NodeSpecKind
+
+            def spec_to_dict(spec: NodeSpec) -> Dict[str, Any]:
+                result = {"kind": spec.kind.value, "name": spec.name}
+                if spec.payload is not None:
+                    if callable(spec.payload):
+                        result["payload"] = f"<function:{spec.payload.__name__}>"
+                        if spec.kind == NodeSpecKind.DECORATOR:
+                            result["decorator"] = spec.name.split("(")[0]
+                    elif isinstance(spec.payload, dict):
+                        payload_dict = {}
+                        for k, v in spec.payload.items():
+                            if callable(v):
+                                payload_dict[k] = f"<function:{v.__name__}>"
+                            else:
+                                payload_dict[k] = v
+                        result["payload"] = payload_dict
+                    else:
+                        result["payload"] = str(spec.payload)
+                if spec.children:
+                    result["children"] = [spec_to_dict(child) for child in spec.children]
+                return result
+
+            return {"name": self._name, "root": spec_to_dict(root_spec)}
+
+        tree_func.to_mermaid = to_mermaid
+        tree_func.to_dict = to_dict
+
+        return tree_func
+
+    def build(self, child: Optional[Union[NodeSpec, _NodeWrapper, Callable[[Any], Any]]] = None) -> Callable[..., Any]:
+        """
+        Build and return the tree function.
+
+        This is an alias for root() that makes the intent clearer when
+        you're at the end of building a tree.
+
+        Args:
+            child: Root node (optional if already set via root())
+
+        Returns:
+            A callable function with _spec attribute for use with Runner
+
+        Example:
+            builder = TreeBuilder("MyTree")
+            tree = builder.build(
+                builder.sequence(
+                    builder.action("act", func)
+                )
+            )
+        """
+        if child is not None:
+            return self.root(child)
+        if self._root_spec is None:
+            raise ValueError(f"TreeBuilder '{self._name}' has no root. Call root() or build(child) first.")
+        return self.root(self._root_spec)
+
+    def to_mermaid(self) -> str:
+        """
+        Generate Mermaid flowchart diagram for this tree.
+
+        Returns:
+            Mermaid flowchart syntax as a string
+
+        Example:
+            builder = TreeBuilder("MyTree")
+            tree = builder.build(...)
+            print(tree.to_mermaid())
+        """
+        if self._root_spec is None:
+            raise ValueError(f"TreeBuilder '{self._name}' has no root. Cannot generate Mermaid diagram.")
+
+        # Create a mock tree namespace for the existing _generate_mermaid function
+        class TreeNamespace:
+            def __init__(self, root_spec: NodeSpec, name: str):
+                self.root = root_spec
+                self._tree_name = name
+
+        tree_ns = TreeNamespace(self._root_spec, self._name)
+        return _generate_mermaid(tree_ns)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Serialize the tree to a dictionary.
+
+        Creates a JSON-serializable representation of the tree structure
+        that can be saved to a file or transmitted over network.
+
+        Returns:
+            Dictionary representation of the tree
+
+        Example:
+            builder = TreeBuilder("MyTree")
+            tree = builder.build(...)
+            tree_dict = tree.to_dict()
+
+            import json
+            with open("tree.json", "w") as f:
+                json.dump(tree_dict, f, indent=2)
+        """
+        if self._root_spec is None:
+            raise ValueError(f"TreeBuilder '{self._name}' has no root. Cannot serialize.")
+
+        def spec_to_dict(spec: NodeSpec) -> Dict[str, Any]:
+            """Convert a NodeSpec to dictionary representation."""
+            result = {
+                "kind": spec.kind.value,
+                "name": spec.name,
+            }
+
+            # Add payload if present (serializable only)
+            if spec.payload is not None:
+                # Check if payload is a lambda/function (not serializable)
+                if callable(spec.payload):
+                    result["payload"] = f"<function:{spec.payload.__name__}>"
+
+                    # For decorators, include decorator name
+                    if spec.kind == NodeSpecKind.DECORATOR:
+                        result["decorator"] = spec.name.split("(")[0]
+                elif isinstance(spec.payload, dict):
+                    # For composites (sequence, selector, parallel)
+                    payload_dict = {}
+                    for k, v in spec.payload.items():
+                        if callable(v):
+                            payload_dict[k] = f"<function:{v.__name__}>"
+
+                        else:
+                            payload_dict[k] = v
+                    result["payload"] = payload_dict
+                else:
+                    result["payload"] = str(spec.payload)
+
+            # Add children recursively
+            if spec.children:
+                result["children"] = [spec_to_dict(child) for child in spec.children]
+
+            return result
+
+        return {
+            "name": self._name,
+            "root": spec_to_dict(self._root_spec),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TreeBuilder":
+        """
+        Deserialize a tree from a dictionary.
+
+        Creates a TreeBuilder from a previously serialized tree.
+        Note: Functions cannot be serialized, so you must provide a function
+        registry to restore behavior.
+
+        Args:
+            data: Dictionary output from to_dict()
+
+        Returns:
+            A new TreeBuilder instance
+
+        Example:
+            # First, save with function registry
+            tree_dict = tree.to_dict()
+
+            # Later, load with function registry
+            def my_action(bb):
+                return Status.SUCCESS
+
+            registry = {"my_action": my_action}
+            builder = TreeBuilder.from_dict(tree_dict, function_registry=registry)
+            tree = builder.build()
+        """
+        # Implementation requires function registry - will be added separately
+        raise NotImplementedError(
+            "TreeBuilder.from_dict() requires a function registry to restore node behaviors. "
+            "Use TreeBuilder.from_dict(data, function_registry=registry) instead."
+        )
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: Dict[str, Any],
+        function_registry: Dict[str, Callable[..., Any]],
+    ) -> "TreeBuilder":
+        """
+        Deserialize a tree from a dictionary with function registry.
+
+        Reconstructs a TreeBuilder from a serialized dictionary.
+        You must provide a registry of functions to restore node behaviors.
+
+        Args:
+            data: Dictionary output from to_dict()
+            function_registry: Dict mapping function names to callable functions
+
+        Returns:
+            A new TreeBuilder instance
+
+        Example:
+            # Define your functions
+            async def my_action(bb):
+                return Status.SUCCESS
+
+            def my_condition(bb):
+                return True
+
+            # Build and save tree
+            builder = TreeBuilder("MyTree")
+            action = builder.action("my_action", my_action)
+            cond = builder.condition("my_condition", my_condition)
+            tree = builder.build(builder.sequence(cond, action))
+            tree_dict = tree.to_dict()
+
+            # Load tree later
+            registry = {
+                "my_action": my_action,
+                "my_condition": my_condition,
+            }
+            loaded_builder = TreeBuilder.from_dict(tree_dict, function_registry=registry)
+            loaded_tree = loaded_builder.build()
+        """
+        name = data["name"]
+
+        def dict_to_spec(spec_dict: Dict[str, Any]) -> NodeSpec:
+            """Convert dictionary back to NodeSpec."""
+            kind = NodeSpecKind(spec_dict["kind"])
+            spec_name = spec_dict["name"]
+
+            # Restore payload/function based on kind
+            if kind in (NodeSpecKind.ACTION, NodeSpecKind.CONDITION):
+                # Look up function in registry
+                func_ref = spec_dict.get("payload", "")
+                if isinstance(func_ref, str) and func_ref.startswith("<function:"):
+                    func_name = func_ref[10:-1]  # Extract name from <function:name>
+                    if func_name not in function_registry:
+                        raise ValueError(f"Function '{func_name}' not found in registry. "
+                                       f"Available: {list(function_registry.keys())}")
+                    payload = function_registry[func_name]
+                else:
+                    payload = function_registry.get(func_ref)
+
+                return NodeSpec(kind=kind, name=spec_name, payload=payload)
+
+            elif kind == NodeSpecKind.SUBTREE:
+                # Subtrees have special payload structure
+                return NodeSpec(
+                    kind=kind,
+                    name=spec_name,
+                    payload=spec_dict.get("payload"),
+                )
+
+            elif kind in (NodeSpecKind.SEQUENCE, NodeSpecKind.SELECTOR, NodeSpecKind.PARALLEL):
+                # Composites have factory in payload
+                # We'll reconstruct from children
+                payload = spec_dict.get("payload", {})
+                children = [dict_to_spec(child) for child in spec_dict.get("children", [])]
+
+                # Create factory function from children
+                def make_factory(child_specs: List[NodeSpec]):
+                    def factory():
+                        for child in child_specs:
+                            yield child
+                    return factory
+
+                # Reconstruct payload with factory
+                payload["factory"] = make_factory(children)
+                return NodeSpec(kind=kind, name=spec_name, payload=payload, children=children)
+
+            elif kind == NodeSpecKind.DECORATOR:
+                # Decorators - extract wrapper name and child
+                decorator_name = spec_dict.get("decorator", spec_name.split("(")[0])
+                children = [dict_to_spec(child) for child in spec_dict.get("children", [])]
+
+                # Map decorator names to wrapper builders
+                # This is limited - full reconstruction would require more metadata
+                # For now, we'll create a placeholder
+                payload = lambda ch: ch  # Identity function as placeholder
+                return NodeSpec(kind=kind, name=spec_name, payload=payload, children=children)
+
+            else:
+                # Generic fallback
+                children = [dict_to_spec(child) for child in spec_dict.get("children", [])]
+                return NodeSpec(kind=kind, name=spec_name, payload=spec_dict.get("payload"), children=children)
+
+        root_spec = dict_to_spec(data["root"])
+
+        # Create new TreeBuilder
+        builder = cls(name)
+        builder._root_spec = root_spec
+
+        return builder
 
 
 bt = _BT()

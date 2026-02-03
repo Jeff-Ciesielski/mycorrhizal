@@ -95,7 +95,7 @@ class OrderProcessingSystem:
 
     @spore.log_event(
         event_type="PaymentProcessed",
-        relationships={
+        relationship={
             # 3-tuple: log only specific attributes (status changed during payment)
             "order": ("order", "Order", ["status", "total"]),
         },
