@@ -119,6 +119,10 @@ class IncidenceMatrix:
     # output_destinations[trans_idx] = {place_idx: produced_tokens}
     output_destinations: Dict[int, Dict[int, int]] = field(default_factory=dict)
 
+    # Cache token slots for each transition (computed once, reused)
+    # _token_slots_cache[trans_idx] = list of (place_idx, slot_idx) tuples
+    _token_slots_cache: Dict[int, List[Tuple[int, int]]] = field(default_factory=dict, init=False)
+
     def get(self, place_idx: int, trans_idx: int) -> int:
         """Get matrix entry at (place_idx, trans_idx)"""
         return self.matrix.get(place_idx, {}).get(trans_idx, 0)
@@ -204,7 +208,7 @@ class IncidenceMatrix:
         return True
 
     def get_token_slots(self, trans_idx: int) -> List[Tuple[int, int]]:
-        """Get token consumption slots for a transition.
+        """Get token consumption slots for a transition (cached for performance).
 
         When multiple arcs connect the same place to a transition,
         we need to consume separate tokens (or the same token multiple times for bag semantics).
@@ -212,6 +216,10 @@ class IncidenceMatrix:
         Returns:
             List of (place_idx, slot_index) tuples representing token consumption slots
         """
+        # Return cached slots if available
+        if trans_idx in self._token_slots_cache:
+            return self._token_slots_cache[trans_idx]
+
         if trans_idx not in self.input_requirements:
             return []
 
@@ -219,6 +227,9 @@ class IncidenceMatrix:
         for place_idx, count in self.input_requirements[trans_idx].items():
             for i in range(count):
                 slots.append((place_idx, i))
+
+        # Cache for future use
+        self._token_slots_cache[trans_idx] = slots
         return slots
 
 
@@ -331,9 +342,18 @@ class Marking:
 
     For data-carrying tokens, stores token IDs. For simple count places,
     stores the count directly.
+
+    PERFORMANCE: Cached count dict is invalidated on token changes to avoid
+    recomputing on every transition check.
     """
     # place_idx -> list of token IDs (or count for simple places)
     tokens: Dict[int, List[Any]] = field(default_factory=dict)
+    _cached_count_dict: Optional[Dict[int, int]] = field(default=None, init=False)
+    _cache_valid: bool = field(default=False, init=False)
+
+    def _invalidate_cache(self):
+        """Invalidate the count cache."""
+        self._cache_valid = False
 
     def get_count(self, place_idx: int) -> int:
         """Get token count at a place."""
@@ -344,6 +364,7 @@ class Marking:
         if place_idx not in self.tokens:
             self.tokens[place_idx] = []
         self.tokens[place_idx].extend(tokens)
+        self._invalidate_cache()
 
     def remove_tokens(self, place_idx: int, count: int) -> List[Any]:
         """Remove tokens from a place (returns removed tokens)."""
@@ -357,7 +378,33 @@ class Marking:
         if not self.tokens[place_idx]:
             del self.tokens[place_idx]
 
+        self._invalidate_cache()
         return removed
+
+    def remove_tokens_fast(self, place_idx: int, token_ids: List[Any]):
+        """Remove specific tokens from a place (faster O(1) per token).
+
+        This is used when we know exactly which tokens to remove.
+        Uses a set-based approach for O(n) total instead of O(n*m).
+        """
+        if place_idx not in self.tokens:
+            return
+
+        if not token_ids:
+            return
+
+        place_tokens = self.tokens[place_idx]
+
+        # Build a set of tokens to remove for O(1) lookup
+        to_remove = set(token_ids)
+
+        # Filter out the removed tokens (single pass)
+        self.tokens[place_idx] = [t for t in place_tokens if t not in to_remove]
+
+        if not self.tokens[place_idx]:
+            del self.tokens[place_idx]
+
+        self._invalidate_cache()
 
     def peek_tokens(self, place_idx: int, count: int) -> List[Any]:
         """Peek at tokens without removing."""
@@ -369,8 +416,11 @@ class Marking:
         return self.get_count(place_idx) >= count
 
     def get_count_dict(self) -> Dict[int, int]:
-        """Get dict of place_idx -> token_count."""
-        return {idx: len(tokens) for idx, tokens in self.tokens.items()}
+        """Get dict of place_idx -> token_count (cached for performance)."""
+        if not self._cache_valid:
+            self._cached_count_dict = {idx: len(tokens) for idx, tokens in self.tokens.items()}
+            self._cache_valid = True
+        return self._cached_count_dict
 
 
 # =============================================================================
@@ -793,9 +843,11 @@ class MatrixRuntime:
         """
         firing_vector = [0] * self.incidence_matrix.num_transitions
 
+        # Get count dict once per cycle (cached in Marking)
+        count_dict = self.marking.get_count_dict()
+
         for trans_idx in range(self.incidence_matrix.num_transitions):
             # Check if enabled (has sufficient tokens)
-            count_dict = self.marking.get_count_dict()
             if not self.incidence_matrix.is_enabled(trans_idx, count_dict):
                 self._enabled_times.pop(trans_idx, None)
                 continue
@@ -1044,20 +1096,13 @@ class MatrixRuntime:
 
             # Remove consumed tokens IMMEDIATELY before executing
             # This ensures subsequent transitions don't see these tokens
-            # We need to map tokens back to their places
+            # Use fast removal for each place
             for place_idx, count in self.incidence_matrix.input_requirements.get(trans_idx, {}).items():
-                # Find which tokens in 'consumed' belong to this place
-                # by checking against consumed_by_place
-                place_tokens_to_remove = []
                 if place_idx in consumed_by_place:
                     # Get the tokens from this place (consumed_by_place has the original order)
                     place_tokens_to_remove = consumed_by_place[place_idx][:count]
-
-                # Remove each token from the marking
-                for token_id in place_tokens_to_remove:
-                    place_tokens = self.marking.tokens.get(place_idx, [])
-                    if token_id in place_tokens:
-                        place_tokens.remove(token_id)
+                    # Use optimized removal
+                    self.marking.remove_tokens_fast(place_idx, place_tokens_to_remove)
 
             # Convert token IDs to data
             consumed_data = [self.token_registry.get(tid) for tid in consumed]
@@ -1176,9 +1221,11 @@ class MatrixRuntime:
         """
         firing_vector = [0] * self.incidence_matrix.num_transitions
 
+        # Get count dict once per cycle (cached in Marking)
+        count_dict = self.marking.get_count_dict()
+
         for trans_idx in range(self.incidence_matrix.num_transitions):
             # Check if enabled (has sufficient tokens)
-            count_dict = self.marking.get_count_dict()
             if not self.incidence_matrix.is_enabled(trans_idx, count_dict):
                 self._enabled_times.pop(trans_idx, None)
                 continue
@@ -1371,20 +1418,13 @@ class MatrixRuntime:
 
             # Remove consumed tokens IMMEDIATELY before executing
             # This ensures subsequent transitions don't see these tokens
-            # We need to map tokens back to their places
+            # Use fast removal for each place
             for place_idx, count in self.incidence_matrix.input_requirements.get(trans_idx, {}).items():
-                # Find which tokens in 'consumed' belong to this place
-                # by checking against consumed_by_place
-                place_tokens_to_remove = []
                 if place_idx in consumed_by_place:
                     # Get the tokens from this place (consumed_by_place has the original order)
                     place_tokens_to_remove = consumed_by_place[place_idx][:count]
-
-                # Remove each token from the marking
-                for token_id in place_tokens_to_remove:
-                    place_tokens = self.marking.tokens.get(place_idx, [])
-                    if token_id in place_tokens:
-                        place_tokens.remove(token_id)
+                    # Use optimized removal
+                    self.marking.remove_tokens_fast(place_idx, place_tokens_to_remove)
 
             # Convert token IDs to data
             consumed_data = [self.token_registry.get(tid) for tid in consumed]
