@@ -117,7 +117,6 @@ from .exceptions import (
 # BT-in-PN integration exports
 from .hypha_bridge import pn, pn_net, PNRunner
 from .pn_context import PNContext
-from ..hypha.core.specs import PlaceType
 
 # Spores integration
 from .spores_integration import TreeSporesAdapter, log_tree_event
@@ -163,7 +162,6 @@ __all__ = [
     "pn_net",
     "PNRunner",
     "PNContext",
-    "PlaceType",
 
     # Spores integration
     "TreeSporesAdapter",

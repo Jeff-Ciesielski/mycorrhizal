@@ -9,7 +9,7 @@ from enum import Enum, auto
 from typing import Any, List
 from pydantic import BaseModel
 
-from mycorrhizal.mycelium import pn, PNRunner as Runner, PlaceType
+from mycorrhizal.mycelium import pn, PNRunner as Runner
 from mycorrhizal.rhizomorph.core import bt, Status
 from mycorrhizal.common.timebase import MonotonicClock, CycleClock
 
@@ -88,9 +88,9 @@ async def test_bt_basic_routing():
 
     @pn.net
     def TestNet(builder):
-        input_q = builder.place("input_q", type=PlaceType.QUEUE)
-        high_q = builder.place("high_q", type=PlaceType.QUEUE)
-        low_q = builder.place("low_q", type=PlaceType.QUEUE)
+        input_q = builder.place("input_q")
+        high_q = builder.place("high_q")
+        low_q = builder.place("low_q")
 
         @builder.transition(bt=SimpleRouter, bt_mode="token", outputs=[high_q, low_q])
         async def route(consumed, bb, timebase):
@@ -182,8 +182,8 @@ async def test_bt_token_rejection():
 
     @pn.net
     def TestNet(builder):
-        input_q = builder.place("input_q", type=PlaceType.QUEUE)
-        validated_q = builder.place("validated_q", type=PlaceType.QUEUE)
+        input_q = builder.place("input_q")
+        validated_q = builder.place("validated_q")
 
         @builder.transition(bt=Validator, bt_mode="token", outputs=[validated_q])
         async def validate(consumed, bb, timebase):
@@ -252,8 +252,8 @@ async def test_bt_enrichment():
 
     @pn.net
     def TestNet(builder):
-        input_q = builder.place("input_q", type=PlaceType.QUEUE)
-        enriched_q = builder.place("enriched_q", type=PlaceType.QUEUE)
+        input_q = builder.place("input_q")
+        enriched_q = builder.place("enriched_q")
 
         @builder.transition(bt=Enricher, bt_mode="token", outputs=[enriched_q])
         async def enrich(consumed, bb, timebase):
@@ -308,8 +308,8 @@ async def test_bt_with_side_effects():
 
     @pn.net
     def TestNet(builder):
-        input_q = builder.place("input_q", type=PlaceType.QUEUE)
-        output_q = builder.place("output_q", type=PlaceType.QUEUE)
+        input_q = builder.place("input_q")
+        output_q = builder.place("output_q")
 
         @builder.transition(bt=Counter, bt_mode="token", outputs=[output_q])
         async def count(consumed, bb, timebase):
@@ -348,8 +348,8 @@ async def test_backward_compatibility():
 
     @pn.net
     def TestNet(builder):
-        input_q = builder.place("input_q", type=PlaceType.QUEUE)
-        output_q = builder.place("output_q", type=PlaceType.QUEUE)
+        input_q = builder.place("input_q")
+        output_q = builder.place("output_q")
 
         @builder.transition()
         async def vanilla_transition(consumed, bb, timebase):
@@ -417,9 +417,9 @@ async def test_bt_with_composite_nodes():
 
     @pn.net
     def TestNet(builder):
-        input_q = builder.place("input_q", type=PlaceType.QUEUE)
-        critical_q = builder.place("critical_q", type=PlaceType.QUEUE)
-        normal_q = builder.place("normal_q", type=PlaceType.QUEUE)
+        input_q = builder.place("input_q")
+        critical_q = builder.place("critical_q")
+        normal_q = builder.place("normal_q")
 
         @builder.transition(bt=ComplexRouter, bt_mode="token", outputs=[critical_q, normal_q])
         async def route(consumed, bb, timebase):

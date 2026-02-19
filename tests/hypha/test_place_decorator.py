@@ -4,7 +4,7 @@
 import sys
 sys.path.insert(0, "src")
 
-from mycorrhizal.hypha.core import pn, PlaceType, NetBuilder
+from mycorrhizal.hypha.core import pn, NetBuilder
 from pydantic import BaseModel
 from typing import List
 
@@ -54,7 +54,7 @@ def PlaceWithCustomName(builder: NetBuilder):
 @pn.net
 def PlaceMethodCall(builder: NetBuilder):
 
-    input_queue = builder.place("input_queue", type=PlaceType.QUEUE)
+    input_queue = builder.place("input_queue")
 
     @builder.transition()
     async def process(consumed, bb, timebase):
@@ -71,7 +71,6 @@ def test_place_no_parens_creates_place():
     """Test @builder.place without parentheses creates a place"""
     spec = PlaceNoParens._spec
     assert "input_queue" in spec.places
-    assert spec.places["input_queue"].place_type == PlaceType.BAG
     assert spec.places["input_queue"].handler is not None
 
 
@@ -94,7 +93,6 @@ def test_place_method_call():
     """Test traditional method call style still works"""
     spec = PlaceMethodCall._spec
     assert "input_queue" in spec.places
-    assert spec.places["input_queue"].place_type == PlaceType.QUEUE
 
 
 def test_place_handler_registered():
@@ -114,11 +112,11 @@ def test_place_no_handler_when_method_call():
 
 
 def test_place_with_type_and_decorator():
-    """Test @builder.place with type parameter and handler"""
+    """Test @builder.place with handler"""
     @pn.net
     def TypedPlace(builder: NetBuilder):
 
-        my_queue = builder.place(type=PlaceType.QUEUE)
+        my_queue = builder.place()
 
         @my_queue
         def queue_handler(bb: TestBB):
@@ -126,7 +124,6 @@ def test_place_with_type_and_decorator():
 
     spec = TypedPlace._spec
     assert "queue_handler" in spec.places
-    assert spec.places["queue_handler"].place_type == PlaceType.QUEUE
     assert spec.places["queue_handler"].handler is not None
 
 

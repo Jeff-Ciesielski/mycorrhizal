@@ -14,7 +14,7 @@ import tracemalloc
 from dataclasses import dataclass, field, replace
 from typing import Any, List
 
-from mycorrhizal.hypha.core import pn, PlaceType, Runner as PNRunner
+from mycorrhizal.hypha.core import pn, Runner as PNRunner
 from mycorrhizal.common.timebase import CycleClock
 
 
@@ -74,8 +74,8 @@ class TestCacheStats:
 
         @pn.net
         def CacheNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def worker(consumed, bb: TestInterface, timebase):
@@ -129,8 +129,8 @@ class TestWeakReferences:
 
         @pn.net
         def WeakRefNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def worker(consumed, bb: TestInterface, timebase):
@@ -170,8 +170,8 @@ class TestWeakReferences:
 
         @pn.net
         def MultiBBNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def worker(consumed, bb: MemoryTestBlackboard, timebase):
@@ -271,8 +271,8 @@ class TestMemoryLeaks:
 
         @pn.net
         def LeakTestNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def worker(consumed, bb: MemoryTestBlackboard, timebase):
@@ -341,8 +341,8 @@ class TestMemoryLeaks:
         # Create simple net with ONE transition that uses interface view
         @pn.net
         def SimpleNet(builder):
-            input_p = builder.place("input", type=PlaceType.QUEUE)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def processor(consumed, bb: CacheTestInterface, timebase):
@@ -449,8 +449,8 @@ class TestTokenMemory:
 
         @pn.net
         def LargeTokenNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def worker(consumed, bb, timebase):
@@ -496,8 +496,8 @@ class TestEventMemory:
 
         @pn.net
         def EventNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def worker(consumed, bb, timebase):
@@ -538,8 +538,8 @@ class TestTaskMemory:
 
         @pn.net
         def TaskNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def worker(consumed, bb, timebase):

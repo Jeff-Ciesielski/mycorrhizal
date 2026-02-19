@@ -31,14 +31,14 @@ Both approaches are fully capable and produce equivalent nets. The choice depend
 
 ```python
 from mycorrhizal.hypha.core.builder import NetBuilder
-from mycorrhizal.hypha.core import PlaceType, Runner
+from mycorrhizal.hypha.core import Runner
 
 # Create a builder
 builder = NetBuilder("MyNet")
 
 # Create places
-input_place = builder.place("input", type=PlaceType.QUEUE)
-output_place = builder.place("output", type=PlaceType.BAG)
+input_place = builder.place("input")
+output_place = builder.place("output")
 
 # Create transition
 async def my_transition(consumed, bb, timebase):
@@ -67,10 +67,10 @@ runner = Runner(net_func, blackboard)
 
 ```python
 # BAG place (multiset, allows duplicates)
-bag = builder.place("my_bag", type=PlaceType.BAG)
+bag = builder.place("my_bag")
 
 # QUEUE place (FIFO queue)
-queue = builder.place("my_queue", type=PlaceType.QUEUE)
+queue = builder.place("my_queue")
 ```
 
 #### IO Input Places
@@ -163,17 +163,17 @@ subnet_ref = builder.subnet(MySubnet, "instance1")
 
 ```python
 from mycorrhizal.hypha.core.builder import NetBuilder
-from mycorrhizal.hypha.core import PlaceType, Runner
+from mycorrhizal.hypha.core import Runner
 
 def build_linear_workflow():
     """Build a simple linear processing pipeline"""
     builder = NetBuilder("LinearWorkflow")
 
     # Create places
-    input_p = builder.place("input", type=PlaceType.QUEUE)
-    stage1 = builder.place("stage1", type=PlaceType.QUEUE)
-    stage2 = builder.place("stage2", type=PlaceType.QUEUE)
-    output_p = builder.place("output", type=PlaceType.BAG)
+    input_p = builder.place("input")
+    stage1 = builder.place("stage1")
+    stage2 = builder.place("stage2")
+    output_p = builder.place("output")
 
     # Create transitions
     @builder.transition()
@@ -217,11 +217,7 @@ def build_net_from_config(config):
     # Build places
     places = {}
     for place_config in config["places"]:
-        place_type = PlaceType.QUEUE if place_config["type"] == "queue" else PlaceType.BAG
-        places[place_config["name"]] = builder.place(
-            place_config["name"],
-            type=place_type
-        )
+        places[place_config["name"]] = builder.place(place_config["name"])
 
     # Build transitions
     transitions = {}
@@ -279,12 +275,12 @@ def build_adaptive_workflow(use_validation: bool):
 
     builder = NetBuilder("AdaptiveWorkflow")
 
-    input_p = builder.place("input", type=PlaceType.QUEUE)
-    output_p = builder.place("output", type=PlaceType.BAG)
+    input_p = builder.place("input")
+    output_p = builder.place("output")
 
     if use_validation:
         # Path with validation step
-        validation = builder.place("validation", type=PlaceType.BAG)
+        validation = builder.place("validation")
 
         @builder.transition()
         async def validate(consumed, bb, timebase):
@@ -329,11 +325,11 @@ def build_parallel_processing():
     builder = NetBuilder("ParallelProcessing")
 
     # Create places
-    input_p = builder.place("input", type=PlaceType.QUEUE)
-    worker1_p = builder.place("worker1", type=PlaceType.QUEUE)
-    worker2_p = builder.place("worker2", type=PlaceType.QUEUE)
-    worker3_p = builder.place("worker3", type=PlaceType.QUEUE)
-    output_p = builder.place("output", type=PlaceType.BAG)
+    input_p = builder.place("input")
+    worker1_p = builder.place("worker1")
+    worker2_p = builder.place("worker2")
+    worker3_p = builder.place("worker3")
+    output_p = builder.place("output")
 
     # Fork: distribute work to 3 workers
     builder.fork(input_p, [worker1_p, worker2_p, worker3_p])
@@ -370,7 +366,7 @@ def MyNet(builder: NetBuilder):
         yield "token1"
         yield "token2"
 
-    output = builder.place("output", type=PlaceType.BAG)
+    output = builder.place("output")
 
     @builder.transition()
     async def process(consumed, bb, timebase):
@@ -401,7 +397,7 @@ def build_my_net():
         yield "token2"
 
     input_p = builder.io_input_place()(source)
-    output_p = builder.place("output", type=PlaceType.BAG)
+    output_p = builder.place("output")
 
     async def process(consumed, bb, timebase):
         for token in consumed:
@@ -441,8 +437,8 @@ from mycorrhizal.hypha.core import pn
 # Define a reusable subnet
 @pn.net
 def ProcessorSubnet(builder: NetBuilder):
-    input_p = builder.place("input", type=PlaceType.QUEUE)
-    output_p = builder.place("output", type=PlaceType.BAG)
+    input_p = builder.place("input")
+    output_p = builder.place("output")
 
     @builder.transition()
     async def process(consumed, bb, timebase):
@@ -455,8 +451,8 @@ def ProcessorSubnet(builder: NetBuilder):
 def build_hierarchical_net():
     builder = NetBuilder("HierarchicalNet")
 
-    main_input = builder.place("main_input", type=PlaceType.QUEUE)
-    main_output = builder.place("main_output", type=PlaceType.BAG)
+    main_input = builder.place("main_input")
+    main_output = builder.place("main_output")
 
     # Instantiate subnet
     processor1 = builder.subnet(ProcessorSubnet, "processor1")
@@ -502,12 +498,12 @@ builder.arc(trans2, place3)
 
 ```python
 # Good
-input_queue = builder.place("input_queue", type=PlaceType.QUEUE)
-processed_data = builder.place("processed_data", type=PlaceType.BAG)
+input_queue = builder.place("input_queue")
+processed_data = builder.place("processed_data")
 
 # Avoid
-p1 = builder.place("p1", type=PlaceType.QUEUE)
-p2 = builder.place("p2", type=PlaceType.BAG)
+p1 = builder.place("p1")
+p2 = builder.place("p2")
 ```
 
 ### 2. Use Consistent Conventions for Wrapper Functions

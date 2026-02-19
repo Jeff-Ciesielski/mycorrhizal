@@ -19,7 +19,7 @@ import asyncio
 from typing import Annotated, List
 from pydantic import BaseModel
 
-from mycorrhizal.hypha.core import pn, PlaceType, Runner as PNRunner, NetBuilder
+from mycorrhizal.hypha.core import pn, Runner as PNRunner, NetBuilder
 from mycorrhizal.common.interface_builder import blackboard_interface, readonly, readwrite
 from mycorrhizal.common.wrappers import AccessControlError
 
@@ -71,8 +71,8 @@ def test_transition_with_interface_type_hint():
     """Test that transitions can use interface type hints"""
     @pn.net
     def TestNet(builder: NetBuilder):
-        input_place = builder.place("input", type=PlaceType.QUEUE)
-        output_place = builder.place("output", type=PlaceType.BAG)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         @builder.transition()
         async def process_with_interface(consumed, bb: TaskInterface, timebase):
@@ -107,8 +107,8 @@ def test_transition_readonly_field_enforced():
     """Test that readonly fields cannot be modified through interface"""
     @pn.net
     def TestNet(builder: NetBuilder):
-        input_place = builder.place("input", type=PlaceType.QUEUE)
-        output_place = builder.place("output", type=PlaceType.BAG)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         @builder.transition()
         async def try_modify_readonly(consumed, bb: TaskInterface, timebase):
@@ -152,8 +152,8 @@ def test_transition_unspecified_field_inaccessible():
     """Test that fields not in interface are inaccessible"""
     @pn.net
     def TestNet(builder: NetBuilder):
-        input_place = builder.place("input", type=PlaceType.QUEUE)
-        output_place = builder.place("output", type=PlaceType.BAG)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         @builder.transition()
         async def try_access_secret(consumed, bb: TaskInterface, timebase):
@@ -199,9 +199,9 @@ def test_multiple_interfaces_same_net():
     """Test that different transitions can use different interfaces"""
     @pn.net
     def TestNet(builder: NetBuilder):
-        task_input = builder.place("task_input", type=PlaceType.QUEUE)
-        queue_input = builder.place("queue_input", type=PlaceType.QUEUE)
-        output = builder.place("output", type=PlaceType.BAG)
+        task_input = builder.place("task_input")
+        queue_input = builder.place("queue_input")
+        output = builder.place("output")
 
         @builder.transition()
         async def process_task(consumed, bb: TaskInterface, timebase):
@@ -250,10 +250,10 @@ def test_interface_with_different_place_types():
     @pn.net
     def TestNet(builder: NetBuilder):
         # Queue place
-        queue_place = builder.place("queue", type=PlaceType.QUEUE)
+        queue_place = builder.place("queue")
         # Bag place
-        bag_place = builder.place("bag", type=PlaceType.BAG)
-        output = builder.place("output", type=PlaceType.BAG)
+        bag_place = builder.place("bag")
+        output = builder.place("output")
 
         @builder.transition()
         async def process_queue(consumed, bb: TaskInterface, timebase):
@@ -301,8 +301,8 @@ def test_transition_without_interface_still_works():
     """Test that transitions without interface type hints still work"""
     @pn.net
     def TestNet(builder: NetBuilder):
-        input_place = builder.place("input", type=PlaceType.QUEUE)
-        output_place = builder.place("output", type=PlaceType.BAG)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         @builder.transition()
         async def full_access(consumed, bb: TaskBlackboard, timebase):
@@ -341,8 +341,8 @@ def test_transition_with_untyped_bb():
     """Test that transitions with untyped bb parameter still work"""
     @pn.net
     def TestNet(builder: NetBuilder):
-        input_place = builder.place("input", type=PlaceType.QUEUE)
-        output_place = builder.place("output", type=PlaceType.BAG)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         @builder.transition()
         async def untyped(consumed, bb, timebase):
@@ -381,10 +381,10 @@ def test_sequential_transitions_with_interfaces():
     """Test sequential workflow with interface constraints"""
     @pn.net
     def TestNet(builder: NetBuilder):
-        input1 = builder.place("input1", type=PlaceType.QUEUE)
-        input2 = builder.place("input2", type=PlaceType.QUEUE)
-        intermediate = builder.place("intermediate", type=PlaceType.QUEUE)
-        output = builder.place("output", type=PlaceType.BAG)
+        input1 = builder.place("input1")
+        input2 = builder.place("input2")
+        intermediate = builder.place("intermediate")
+        output = builder.place("output")
 
         @builder.transition()
         async def first_stage(consumed, bb: TaskInterface, timebase):
@@ -431,9 +431,9 @@ def test_parallel_transitions_with_interfaces():
     """Test parallel transitions with interface constraints"""
     @pn.net
     def TestNet(builder: NetBuilder):
-        input1 = builder.place("input1", type=PlaceType.QUEUE)
-        input2 = builder.place("input2", type=PlaceType.QUEUE)
-        output = builder.place("output", type=PlaceType.BAG)
+        input1 = builder.place("input1")
+        input2 = builder.place("input2")
+        output = builder.place("output")
 
         @builder.transition()
         async def process_a(consumed, bb: TaskInterface, timebase):
@@ -484,8 +484,8 @@ def test_interface_violation_in_transition():
     """Test that interface violations are handled gracefully"""
     @pn.net
     def TestNet(builder: NetBuilder):
-        input_place = builder.place("input", type=PlaceType.QUEUE)
-        output_place = builder.place("output", type=PlaceType.BAG)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         @builder.transition()
         async def violating_transition(consumed, bb: TaskInterface, timebase):
@@ -533,8 +533,8 @@ def test_interface_view_caching():
     """Test that interface views are cached for performance"""
     @pn.net
     def TestNet(builder: NetBuilder):
-        input_place = builder.place("input", type=PlaceType.QUEUE)
-        output_place = builder.place("output", type=PlaceType.BAG)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         # Track how many times transition runs
         run_count = {"count": 0}
@@ -588,8 +588,8 @@ def test_readonly_interface():
     """Test that readonly interface allows reads but not writes"""
     @pn.net
     def TestNet(builder: NetBuilder):
-        input_place = builder.place("input", type=PlaceType.QUEUE)
-        output_place = builder.place("output", type=PlaceType.BAG)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         @builder.transition()
         async def check_readonly(consumed, bb: ReadOnlyInterface, timebase):
@@ -637,8 +637,8 @@ def test_writeonly_interface():
     """Test that writeonly interface allows writes but restricts reads"""
     @pn.net
     def TestNet(builder: NetBuilder):
-        input_place = builder.place("input", type=PlaceType.QUEUE)
-        output_place = builder.place("output", type=PlaceType.BAG)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         @builder.transition()
         async def use_writeonly(consumed, bb: WriteOnlyInterface, timebase):

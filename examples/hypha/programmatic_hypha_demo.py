@@ -15,7 +15,7 @@ When to use programmatic building:
 import asyncio
 from pydantic import BaseModel
 
-from mycorrhizal.hypha.core import Runner, PlaceType
+from mycorrhizal.hypha.core import Runner
 from mycorrhizal.hypha.core.builder import NetBuilder
 from mycorrhizal.common.timebase import MonotonicClock
 
@@ -45,8 +45,8 @@ def DecoratorNet(builder: NetBuilder):
             await timebase.sleep(0.1)
             yield f"token_{i}"
 
-    queue = builder.place("queue", type=PlaceType.QUEUE)
-    processed = builder.place("processed", type=PlaceType.BAG)
+    queue = builder.place("queue")
+    processed = builder.place("processed")
 
     @builder.transition()
     async def process(consumed, bb, timebase):
@@ -81,8 +81,8 @@ def build_programmatic_net():
     source = builder.io_input_place()(source_func)
 
     # Define regular places
-    queue = builder.place("queue", type=PlaceType.QUEUE)
-    processed = builder.place("processed", type=PlaceType.BAG)
+    queue = builder.place("queue")
+    processed = builder.place("processed")
 
     # Define transition function
     async def process_func(consumed, bb, timebase):
@@ -141,11 +141,7 @@ def build_net_from_config(config: dict):
     # Create places from config
     places = {}
     for place_config in config["places"]:
-        place_type = PlaceType.QUEUE if place_config["type"] == "queue" else PlaceType.BAG
-        places[place_config["name"]] = builder.place(
-            place_config["name"],
-            type=place_type
-        )
+        places[place_config["name"]] = builder.place(place_config["name"])
 
     # Create transitions from config
     transitions = {}
@@ -210,8 +206,8 @@ def build_conditional_net(use_fast_path: bool):
     builder = NetBuilder("ConditionalNet")
 
     # Common places
-    input_place = builder.place("input", type=PlaceType.QUEUE)
-    output_place = builder.place("output", type=PlaceType.BAG)
+    input_place = builder.place("input")
+    output_place = builder.place("output")
 
     if use_fast_path:
         # Fast path: direct processing
@@ -225,7 +221,7 @@ def build_conditional_net(use_fast_path: bool):
 
     else:
         # Slow path: validation then processing
-        validation = builder.place("validation", type=PlaceType.BAG)
+        validation = builder.place("validation")
 
         @builder.transition()
         async def validate(consumed, bb, timebase):
@@ -263,9 +259,9 @@ def build_net_with_convenience_methods():
     builder = NetBuilder("ConvenienceNet")
 
     # Create places
-    input1 = builder.place("input1", type=PlaceType.QUEUE)
-    input2 = builder.place("input2", type=PlaceType.QUEUE)
-    output = builder.place("output", type=PlaceType.BAG)
+    input1 = builder.place("input1")
+    input2 = builder.place("input2")
+    output = builder.place("output")
 
     # Use forward() for simple pass-through
     builder.forward(input1, output, name="forward1")

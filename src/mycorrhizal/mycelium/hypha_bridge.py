@@ -1068,8 +1068,8 @@ def create_pn_net_decorator():
             # Vanilla transition (no integration)
             @pn_net
             def MyNet(builder):
-                input_q = builder.place("input_q", type=PlaceType.QUEUE)
-                output_q = builder.place("output_q", type=PlaceType.QUEUE)
+                input_q = builder.place("input_q")
+                output_q = builder.place("output_q")
 
                 @builder.transition()
                 async def process(consumed, bb, timebase):
@@ -1081,8 +1081,8 @@ def create_pn_net_decorator():
             # With BT integration
             @pn_net
             def MyNet(builder):
-                input_q = builder.place("input_q", type=PlaceType.QUEUE)
-                output_q = builder.place("output_q", type=PlaceType.QUEUE)
+                input_q = builder.place("input_q")
+                output_q = builder.place("output_q")
 
                 @builder.transition(bt=MyBT, bt_mode="token", outputs=[output_q])
                 async def route(consumed, bb, timebase):
@@ -1094,9 +1094,9 @@ def create_pn_net_decorator():
             # With FSM integration
             @pn_net
             def MyNet(builder):
-                input_q = builder.place("input_q", type=PlaceType.QUEUE)
-                success_q = builder.place("success_q", type=PlaceType.QUEUE)
-                failure_q = builder.place("failure_q", type=PlaceType.QUEUE)
+                input_q = builder.place("input_q")
+                success_q = builder.place("success_q")
+                failure_q = builder.place("failure_q")
 
                 @builder.transition(fsm=MyFSMState, outputs=[success_q, failure_q])
                 async def process(consumed, bb, timebase):

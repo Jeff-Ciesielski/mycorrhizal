@@ -12,7 +12,7 @@ import pytest
 from dataclasses import dataclass, field
 from typing import Any, List
 
-from mycorrhizal.hypha.core import pn, PlaceType, Runner as PNRunner
+from mycorrhizal.hypha.core import pn, Runner as PNRunner
 from mycorrhizal.common.timebase import CycleClock
 
 
@@ -50,8 +50,8 @@ class TestEmptyTokens:
 
         @pn.net
         def EmptyPlaceNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def worker(consumed, bb, timebase):
@@ -84,8 +84,8 @@ class TestEmptyTokens:
 
         @pn.net
         def DelayedTokensNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def worker(consumed, bb, timebase):
@@ -127,7 +127,7 @@ class TestNoInputsOutputs:
 
         @pn.net
         def GeneratorNet(builder):
-            output_p = builder.place("output", type=PlaceType.BAG)
+            output_p = builder.place("output")
 
             @builder.transition()
             async def generator(consumed, bb, timebase):
@@ -151,7 +151,7 @@ class TestNoInputsOutputs:
 
         @pn.net
         def SinkNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
+            input_p = builder.place("input")
 
             @builder.transition()
             async def sink(consumed, bb, timebase):
@@ -189,7 +189,7 @@ class TestSelfLoops:
 
         @pn.net
         def SelfLoopNet(builder):
-            loop_p = builder.place("loop", type=PlaceType.BAG)
+            loop_p = builder.place("loop")
 
             @builder.transition()
             async def looper(consumed, bb, timebase):
@@ -226,8 +226,8 @@ class TestMultipleArcs:
 
         @pn.net
         def MultiArcNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def multi_consumer(consumed, bb, timebase):
@@ -265,8 +265,8 @@ class TestCancellation:
 
         @pn.net
         def CancelNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def slow_worker(consumed, bb, timebase):
@@ -297,8 +297,8 @@ class TestCancellation:
 
         @pn.net
         def StartStopNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def worker(consumed, bb, timebase):
@@ -334,8 +334,8 @@ class TestSingleToken:
 
         @pn.net
         def SingleTokenNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def worker(consumed, bb, timebase):
@@ -361,51 +361,19 @@ class TestSingleToken:
 
 
 # =============================================================================
-# Queue vs Bag Tests
+# Bag Place Tests
 # =============================================================================
 
-class TestQueueVsBag:
-    """Tests comparing QUEUE and BAG place types"""
+class TestBagPlaces:
+    """Tests for BAG place type (multi-set semantics)"""
 
-    async def test_queue_place_ordering(self, edge_bb, cycle_tb):
-        """QUEUE place maintains FIFO order"""
-
-        @pn.net
-        def QueueNet(builder):
-            input_p = builder.place("input", type=PlaceType.QUEUE)
-            output_p = builder.place("output", type=PlaceType.BAG)
-
-            @builder.transition()
-            async def worker(consumed, bb, timebase):
-                yield {output_p: consumed[0]}
-
-            builder.arc(input_p, worker)
-
-        runner = PNRunner(QueueNet, edge_bb)
-        await runner.start(cycle_tb)
-
-        # Add tokens in specific order
-        input_place = runner.runtime.places[('QueueNet', 'input')]
-        for i in range(5):
-            input_place.add_token(f"token{i}")
-
-        await asyncio.sleep(0.2)
-
-        # Verify order maintained
-        output_tokens = runner.runtime.places[('QueueNet', 'output')].tokens
-        assert len(output_tokens) == 5
-        # QUEUE should process in FIFO order
-        # Note: This is a basic test - more sophisticated ordering tests could be added
-
-        await runner.stop()
-
-    async def test_bag_place_no_ordering(self, edge_bb, cycle_tb):
-        """BAG place has no guaranteed order"""
+    async def test_bag_place_basic(self, edge_bb, cycle_tb):
+        """BAG place stores tokens with multiplicity"""
 
         @pn.net
         def BagNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def worker(consumed, bb, timebase):
@@ -423,7 +391,7 @@ class TestQueueVsBag:
 
         await asyncio.sleep(0.2)
 
-        # Verify all processed (order not guaranteed for BAG)
+        # Verify all processed
         output_tokens = runner.runtime.places[('BagNet', 'output')].tokens
         assert len(output_tokens) == 5
 

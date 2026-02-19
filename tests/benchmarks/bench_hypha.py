@@ -13,7 +13,7 @@ import pytest
 from dataclasses import dataclass
 from typing import Any
 
-from mycorrhizal.hypha.core import pn, PlaceType, Runner
+from mycorrhizal.hypha.core import pn, Runner
 from mycorrhizal.hypha.core.builder import NetBuilder
 from mycorrhizal.common.timebase import MonotonicClock, CycleClock
 
@@ -46,8 +46,8 @@ def SimpleProcessingNet(builder: NetBuilder):
     Measures baseline token processing throughput.
     """
 
-    input_place = builder.place("input", type=PlaceType.BAG)
-    output_place = builder.place("output", type=PlaceType.BAG)
+    input_place = builder.place("input")
+    output_place = builder.place("output")
 
     @builder.transition()
     async def process(consumed, bb: SimpleBlackboard, timebase):
@@ -67,9 +67,9 @@ def RoutingNet(builder: NetBuilder):
     Measures throughput with conditional routing.
     """
 
-    input_place = builder.place("input", type=PlaceType.BAG)
-    output_a = builder.place("output_a", type=PlaceType.BAG)
-    output_b = builder.place("output_b", type=PlaceType.BAG)
+    input_place = builder.place("input")
+    output_a = builder.place("output_a")
+    output_b = builder.place("output_b")
 
     @builder.transition()
     async def route(consumed, bb: SimpleBlackboard, timebase):
@@ -96,11 +96,11 @@ def MultiStageNet(builder: NetBuilder):
     Measures throughput through a processing pipeline.
     """
 
-    input_q = builder.place("input", type=PlaceType.QUEUE)
-    stage1 = builder.place("stage1", type=PlaceType.BAG)
-    stage2 = builder.place("stage2", type=PlaceType.BAG)
-    stage3 = builder.place("stage3", type=PlaceType.BAG)
-    output = builder.place("output", type=PlaceType.BAG)
+    input_q = builder.place("input")
+    stage1 = builder.place("stage1")
+    stage2 = builder.place("stage2")
+    stage3 = builder.place("stage3")
+    output = builder.place("output")
 
     @builder.transition()
     async def stage1_process(consumed, bb: SimpleBlackboard, timebase):
@@ -140,8 +140,8 @@ def WorkerPoolNet(builder: NetBuilder):
     Measures throughput with concurrent processing transitions.
     """
 
-    input_place = builder.place("input", type=PlaceType.QUEUE)
-    output_place = builder.place("output", type=PlaceType.BAG)
+    input_place = builder.place("input")
+    output_place = builder.place("output")
 
     @builder.transition()
     async def worker1(consumed, bb: SimpleBlackboard, timebase):

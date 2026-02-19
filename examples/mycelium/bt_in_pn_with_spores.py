@@ -22,7 +22,7 @@ from pathlib import Path
 from pydantic import BaseModel
 from typing import Annotated, List
 
-from mycorrhizal.hypha.core import pn, PlaceType
+from mycorrhizal.hypha.core import pn
 from mycorrhizal.rhizomorph.core import bt, Status
 from mycorrhizal.mycelium import PNRunner
 from mycorrhizal.common.timebase import MonotonicClock
@@ -147,17 +147,17 @@ def JobQueueNet(builder):
     Each transition is logged with spores.
     """
 
-    @builder.place(type=PlaceType.QUEUE)
+    @builder.place()
     def pending(bb: ProcessingContext):
         """Pending jobs place."""
         return [job for job in bb.job_queue.pending_jobs]
 
-    @builder.place(type=PlaceType.QUEUE)
+    @builder.place()
     def processing(bb: ProcessingContext):
         """Jobs currently being processed."""
         return []
 
-    @builder.place(type=PlaceType.QUEUE)
+    @builder.place()
     def completed(bb: ProcessingContext):
         """Completed jobs place."""
         return [job for job in bb.job_queue.completed_jobs]

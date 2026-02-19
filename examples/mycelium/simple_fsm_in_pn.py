@@ -19,7 +19,7 @@ import asyncio
 from enum import Enum, auto
 from pydantic import BaseModel
 
-from mycorrhizal.mycelium import pn, PNRunner, PlaceType
+from mycorrhizal.mycelium import pn, PNRunner
 from mycorrhizal.septum.core import septum, LabeledTransition
 from mycorrhizal.common.timebase import MonotonicClock
 
@@ -179,9 +179,9 @@ def SimpleFSMNet(builder):
     """
 
     # Places
-    input_q = builder.place("input_q", type=PlaceType.QUEUE)
-    success_q = builder.place("success_q", type=PlaceType.QUEUE)
-    failure_q = builder.place("failure_q", type=PlaceType.QUEUE)
+    input_q = builder.place("input_q")
+    success_q = builder.place("success_q")
+    failure_q = builder.place("failure_q")
 
     # Transition with FSM integration
     # Note: The fsm parameter takes the initial state of the FSM

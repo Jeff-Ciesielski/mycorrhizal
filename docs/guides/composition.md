@@ -22,7 +22,7 @@ class SharedContext(BaseModel):
 # Petri net generates tasks
 @pn.net
 class TaskScheduler:
-    @pn.place(type=pn.PlaceType.QUEUE)
+    @pn.place(type=pn.PlaceType.BAG)
     def pending_tasks(bb):
         return []
 
@@ -135,11 +135,11 @@ Create reusable Petri net components:
 @pn.net
 class DataValidationNet:
     """Reusable validation subnet."""
-    @pn.place(type=pn.PlaceType.QUEUE)
+    @pn.place(type=pn.PlaceType.BAG)
     def input_data(bb):
         return []
 
-    @pn.place(type=pn.PlaceType.QUEUE)
+    @pn.place(type=pn.PlaceType.BAG)
     def validated_data(bb):
         return []
 
@@ -157,11 +157,11 @@ class DataValidationNet:
 ```python
 @pn.net
 class ProcessingPipeline:
-    @pn.place(type=pn.PlaceType.QUEUE)
+    @pn.place(type=pn.PlaceType.BAG)
     def raw_input(bb):
         return []
 
-    @pn.place(type=pn.PlaceType.QUEUE)
+    @pn.place(type=pn.PlaceType.BAG)
     def final_output(bb):
         return []
 

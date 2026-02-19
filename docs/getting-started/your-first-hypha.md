@@ -9,7 +9,7 @@ You'll create a simple workflow that processes items through a queue.
 ## Step 1: Import Hypha
 
 ```python
-from mycorrhizal.hypha.core import pn, PlaceType, Runner as PNRunner
+from mycorrhizal.hypha.core import pn, Runner as PNRunner
 from pydantic import BaseModel
 ```
 
@@ -26,11 +26,11 @@ class WorkItem(BaseModel):
 ```python
 @pn.net
 class ProcessingNet:
-    @pn.place(type=PlaceType.QUEUE)
+    @pn.place()
     def input_queue(bb):
         return []
 
-    @pn.place(type=PlaceType.QUEUE)
+    @pn.place()
     def processed(bb):
         return []
 
@@ -58,7 +58,7 @@ class ProcessingNet:
 
     @pn.arc
     def process_to_output():
-        return pn.Arc(process_item, processed, place_type=PlaceType.QUEUE)
+        return pn.Arc(process_item, processed, place_)
 
     @pn.arc
     def output_to_final():

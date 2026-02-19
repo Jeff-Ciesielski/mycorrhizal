@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 from collections import deque
 
-from mycorrhizal.hypha.core import pn, PlaceType, Runner as PNRunner
+from mycorrhizal.hypha.core import pn, Runner as PNRunner
 from mycorrhizal.hypha.core.specs import (
     PlaceSpec,
     TransitionSpec,
@@ -126,26 +126,14 @@ async def await_tokens(place: PlaceRuntime, count: int, timeout: float = 1.0):
 
 
 # =============================================================================
-# PlaceType Tests
-# =============================================================================
-
-
-def test_placetype_enum():
-    """Test PlaceType enum values."""
-    assert PlaceType.BAG.value == 1
-    assert PlaceType.QUEUE.value == 2
-
-
-# =============================================================================
 # PlaceSpec Tests
 # =============================================================================
 
 
 def test_placespec_creation():
-    """Test PlaceSpec creation with name and type."""
-    spec = PlaceSpec("test_place", PlaceType.BAG)
+    """Test PlaceSpec creation with name."""
+    spec = PlaceSpec("test_place")
     assert spec.name == "test_place"
-    assert spec.place_type == PlaceType.BAG
     assert spec.handler is None
     assert spec.state_factory is None
     assert spec.is_io_input is False
@@ -157,17 +145,17 @@ def test_placespec_with_state_factory():
     def factory():
         return {"count": 0}
 
-    spec = PlaceSpec("counter", PlaceType.BAG, state_factory=factory)
+    spec = PlaceSpec("counter", state_factory=factory)
     assert spec.state_factory == factory
 
 
 def test_placespec_io_flags():
     """Test PlaceSpec IO flags."""
-    input_spec = PlaceSpec("input", PlaceType.QUEUE, is_io_input=True)
+    input_spec = PlaceSpec("input", is_io_input=True)
     assert input_spec.is_io_input is True
     assert input_spec.is_io_output is False
 
-    output_spec = PlaceSpec("output", PlaceType.QUEUE, is_io_output=True)
+    output_spec = PlaceSpec("output", is_io_output=True)
     assert output_spec.is_io_output is True
     assert output_spec.is_io_input is False
 
@@ -309,7 +297,7 @@ def test_transition_ref_get_parts():
 def test_subnet_ref_attribute_access_place():
     """Test SubnetRef.__getattr__ for place access."""
     net = NetSpec("test_net")
-    net.places["input"] = PlaceSpec("input", PlaceType.QUEUE)
+    net.places["input"] = PlaceSpec("input")
 
     subnet_ref = SubnetRef(net)
     place_ref = subnet_ref.input
@@ -382,7 +370,7 @@ def test_netspec_get_parts():
 def test_netspec_to_mermaid():
     """Test NetSpec.to_mermaid() generates valid Mermaid syntax."""
     net = NetSpec("test_net")
-    net.places["input"] = PlaceSpec("input", PlaceType.QUEUE)
+    net.places["input"] = PlaceSpec("input")
     net.transitions["process"] = TransitionSpec("process", simple_handler)
 
     mermaid = net.to_mermaid()
@@ -398,8 +386,8 @@ def test_netspec_to_mermaid_with_arcs():
     trans = TransitionRef("process", net)
     output_place = PlaceRef("output", net)
 
-    net.places["input"] = PlaceSpec("input", PlaceType.QUEUE)
-    net.places["output"] = PlaceSpec("output", PlaceType.QUEUE)
+    net.places["input"] = PlaceSpec("input")
+    net.places["output"] = PlaceSpec("output")
     net.transitions["process"] = TransitionSpec("process", simple_handler)
     net.arcs.append(ArcSpec(input_place, trans))
     net.arcs.append(ArcSpec(trans, output_place))
@@ -411,8 +399,8 @@ def test_netspec_to_mermaid_with_arcs():
 def test_netspec_to_mermaid_with_io_places():
     """Test NetSpec.to_mermaid() includes IO place labels."""
     net = NetSpec("test_net")
-    net.places["input"] = PlaceSpec("input", PlaceType.QUEUE, is_io_input=True)
-    net.places["output"] = PlaceSpec("output", PlaceType.QUEUE, is_io_output=True)
+    net.places["input"] = PlaceSpec("input", is_io_input=True)
+    net.places["output"] = PlaceSpec("output", is_io_output=True)
 
     mermaid = net.to_mermaid()
     # IO places should have special labels
@@ -428,20 +416,19 @@ def test_netspec_to_mermaid_with_io_places():
 def test_builder_place_bag():
     """Test builder.place() creates BAG type place."""
     builder = NetBuilder("test_net")
-    place_ref = builder.place("my_place", type=PlaceType.BAG)
+    place_ref = builder.place("my_place")
 
     assert isinstance(place_ref, PlaceRef)
     assert "my_place" in builder.spec.places
-    assert builder.spec.places["my_place"].place_type == PlaceType.BAG
 
 
-def test_builder_place_queue():
-    """Test builder.place() creates QUEUE type place."""
+def test_builder_place_creates_bag():
+    """Test builder.place() creates a BAG type place."""
     builder = NetBuilder("test_net")
-    place_ref = builder.place("my_place", type=PlaceType.QUEUE)
+    place_ref = builder.place("my_place")
 
     assert isinstance(place_ref, PlaceRef)
-    assert builder.spec.places["my_place"].place_type == PlaceType.QUEUE
+    assert "my_place" in builder.spec.places
 
 
 def test_builder_place_with_state_factory():
@@ -450,7 +437,7 @@ def test_builder_place_with_state_factory():
         return {"count": 0}
 
     builder = NetBuilder("test_net")
-    place_ref = builder.place("counter", type=PlaceType.BAG, state_factory=factory)
+    place_ref = builder.place("counter", state_factory=factory)
 
     assert "counter" in builder.spec.places
     assert builder.spec.places["counter"].state_factory == factory
@@ -487,7 +474,7 @@ def test_builder_guard():
 def test_builder_arc():
     """Test builder.arc() creates arc and returns ArcChain."""
     builder = NetBuilder("test_net")
-    input_place = builder.place("input", PlaceType.QUEUE)
+    input_place = builder.place("input")
 
     @builder.transition()
     async def process(consumed, bb, timebase):
@@ -505,9 +492,9 @@ def test_builder_arc():
 def test_builder_arc_chain():
     """Test ArcChain can chain multiple arcs."""
     builder = NetBuilder("test_net")
-    input_place = builder.place("input", PlaceType.QUEUE)
-    middle_place = builder.place("middle", PlaceType.QUEUE)
-    output_place = builder.place("output", PlaceType.QUEUE)
+    input_place = builder.place("input")
+    middle_place = builder.place("middle")
+    output_place = builder.place("output")
 
     @builder.transition()
     async def trans1(consumed, bb, timebase):
@@ -542,7 +529,6 @@ async def test_io_input_place():
     place_spec = builder.spec.places["source"]
     assert place_spec.is_io_input is True
     assert place_spec.is_io_output is False
-    assert place_spec.place_type == PlaceType.QUEUE
     assert callable(place_spec.handler)
 
 
@@ -599,7 +585,7 @@ def test_pn_net_decorator():
     """Test @pn.net decorator creates NetSpec."""
     @pn.net
     def SimpleNet(builder):
-        p = builder.place("test", PlaceType.BAG)
+        p = builder.place("test")
 
     assert hasattr(SimpleNet, "_spec")
     assert isinstance(SimpleNet._spec, NetSpec)
@@ -610,7 +596,7 @@ def test_pn_net_decorator_with_to_mermaid():
     """Test @pn.net decorator attaches to_mermaid() method."""
     @pn.net
     def SimpleNet(builder):
-        p = builder.place("test", PlaceType.BAG)
+        p = builder.place("test")
 
     assert hasattr(SimpleNet, "to_mermaid")
     assert callable(SimpleNet.to_mermaid)
@@ -624,11 +610,11 @@ def test_multiple_nets():
     """Test multiple @pn.net decorators work independently."""
     @pn.net
     def Net1(builder):
-        builder.place("place1", PlaceType.BAG)
+        builder.place("place1")
 
     @pn.net
     def Net2(builder):
-        builder.place("place2", PlaceType.BAG)
+        builder.place("place2")
 
     assert Net1._spec.name == "Net1"
     assert Net2._spec.name == "Net2"
@@ -644,8 +630,8 @@ def test_multiple_nets():
 def test_forward_helper():
     """Test builder.forward() creates pass-through transition."""
     builder = NetBuilder("test")
-    input_place = builder.place("input", PlaceType.QUEUE)
-    output_place = builder.place("output", PlaceType.QUEUE)
+    input_place = builder.place("input")
+    output_place = builder.place("output")
 
     builder.forward(input_place, output_place, name="my_forward")
 
@@ -663,10 +649,10 @@ def test_forward_helper():
 def test_fork_helper():
     """Test builder.fork() creates transition with multiple outputs."""
     builder = NetBuilder("test")
-    input_place = builder.place("input", PlaceType.QUEUE)
-    out1 = builder.place("out1", PlaceType.QUEUE)
-    out2 = builder.place("out2", PlaceType.QUEUE)
-    out3 = builder.place("out3", PlaceType.QUEUE)
+    input_place = builder.place("input")
+    out1 = builder.place("out1")
+    out2 = builder.place("out2")
+    out3 = builder.place("out3")
 
     builder.fork(input_place, [out1, out2, out3], name="my_fork")
 
@@ -689,10 +675,10 @@ def test_fork_helper():
 def test_join_helper():
     """Test builder.join() creates transition with multiple inputs."""
     builder = NetBuilder("test")
-    in1 = builder.place("in1", PlaceType.QUEUE)
-    in2 = builder.place("in2", PlaceType.QUEUE)
-    in3 = builder.place("in3", PlaceType.QUEUE)
-    output_place = builder.place("output", PlaceType.QUEUE)
+    in1 = builder.place("in1")
+    in2 = builder.place("in2")
+    in3 = builder.place("in3")
+    output_place = builder.place("output")
 
     builder.join([in1, in2, in3], output_place, name="my_join")
 
@@ -714,9 +700,9 @@ def test_join_helper():
 def test_merge_helper():
     """Test builder.merge() creates multiple transitions."""
     builder = NetBuilder("test")
-    in1 = builder.place("in1", PlaceType.QUEUE)
-    in2 = builder.place("in2", PlaceType.QUEUE)
-    output_place = builder.place("output", PlaceType.QUEUE)
+    in1 = builder.place("in1")
+    in2 = builder.place("in2")
+    output_place = builder.place("output")
 
     builder.merge([in1, in2], output_place)
 
@@ -730,9 +716,9 @@ def test_merge_helper():
 def test_round_robin_helper():
     """Test builder.round_robin() creates stateful distributor."""
     builder = NetBuilder("test")
-    input_place = builder.place("input", PlaceType.QUEUE)
-    out1 = builder.place("out1", PlaceType.QUEUE)
-    out2 = builder.place("out2", PlaceType.QUEUE)
+    input_place = builder.place("input")
+    out1 = builder.place("out1")
+    out2 = builder.place("out2")
 
     builder.round_robin(input_place, [out1, out2], name="rr")
 
@@ -751,9 +737,9 @@ def test_round_robin_helper():
 def test_route_helper():
     """Test builder.route() creates type-based router."""
     builder = NetBuilder("test")
-    input_place = builder.place("input", PlaceType.QUEUE)
-    str_out = builder.place("str_out", PlaceType.QUEUE)
-    int_out = builder.place("int_out", PlaceType.QUEUE)
+    input_place = builder.place("input")
+    str_out = builder.place("str_out")
+    int_out = builder.place("int_out")
 
     type_map = {str: str_out, int: int_out}
     builder.route(input_place, type_map, name="router")
@@ -774,8 +760,8 @@ def test_subnet_instantiation():
     """Test builder.subnet() creates nested net."""
     @pn.net
     def WorkerNet(builder):
-        input_place = builder.place("input", PlaceType.QUEUE)
-        output_place = builder.place("output", PlaceType.QUEUE)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         @builder.transition()
         async def work(consumed, bb, timebase):
@@ -806,8 +792,8 @@ def test_subnet_remaps_arcs():
     """Test subnet arcs are remapped to instance."""
     @pn.net
     def WorkerNet(builder):
-        input_place = builder.place("input", PlaceType.QUEUE)
-        output_place = builder.place("output", PlaceType.QUEUE)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         @builder.transition()
         async def work(consumed, bb, timebase):
@@ -845,11 +831,11 @@ def test_nested_subnets():
     """Test subnets within subnets."""
     @pn.net
     def InnerWorker(builder):
-        builder.place("inner_input", PlaceType.QUEUE)
+        builder.place("inner_input")
 
     @pn.net
     def OuterWorker(builder):
-        builder.place("outer_input", PlaceType.QUEUE)
+        builder.place("outer_input")
         inner = builder.subnet(InnerWorker, "inner")
 
     builder = NetBuilder("main")
@@ -871,24 +857,25 @@ def test_nested_subnets():
 
 def test_place_runtime_bag():
     """Test PlaceRuntime with BAG type creates list."""
-    spec = PlaceSpec("test", PlaceType.BAG)
+    spec = PlaceSpec("test")
     place = PlaceRuntime(spec, None, None, "test")
 
     assert isinstance(place.tokens, list)
     assert len(place.tokens) == 0
 
 
-def test_place_runtime_queue():
-    """Test PlaceRuntime with QUEUE type creates deque."""
-    spec = PlaceSpec("test", PlaceType.QUEUE)
+def test_place_runtime_all_are_bags():
+    """Test that all PlaceRuntime instances use list storage (multi-set semantics)."""
+    spec = PlaceSpec("test")
     place = PlaceRuntime(spec, None, None, "test")
 
-    assert isinstance(place.tokens, deque)
+    # All places are now bags (lists)
+    assert isinstance(place.tokens, list)
 
 
 def test_place_runtime_add_token():
     """Test PlaceRuntime.add_token()."""
-    spec = PlaceSpec("test", PlaceType.BAG)
+    spec = PlaceSpec("test")
     place = PlaceRuntime(spec, None, None, "test")
 
     place.add_token(Token(1))
@@ -901,7 +888,7 @@ def test_place_runtime_add_token():
 
 def test_place_runtime_remove_tokens():
     """Test PlaceRuntime.remove_tokens()."""
-    spec = PlaceSpec("test", PlaceType.BAG)
+    spec = PlaceSpec("test")
     place = PlaceRuntime(spec, None, None, "test")
 
     token1 = Token(1)
@@ -918,7 +905,7 @@ def test_place_runtime_remove_tokens():
 
 def test_place_runtime_peek_tokens():
     """Test PlaceRuntime.peek_tokens()."""
-    spec = PlaceSpec("test", PlaceType.QUEUE)
+    spec = PlaceSpec("test")
     place = PlaceRuntime(spec, None, None, "test")
 
     place.add_token(Token(1))
@@ -940,7 +927,7 @@ def test_place_runtime_state_factory():
     def factory():
         return {"count": 0}
 
-    spec = PlaceSpec("counter", PlaceType.BAG, state_factory=factory)
+    spec = PlaceSpec("counter", state_factory=factory)
     place = PlaceRuntime(spec, None, None, "counter")
 
     assert place.state == {"count": 0}
@@ -955,8 +942,8 @@ def test_netruntime_flatten_simple(simple_bb, mock_tb):
     """Test NetRuntime._flatten_spec() with simple net."""
     @pn.net
     def SimpleNet(builder):
-        builder.place("input", PlaceType.QUEUE)
-        builder.place("output", PlaceType.BAG)
+        builder.place("input")
+        builder.place("output")
 
     runtime = NetRuntime(SimpleNet._spec, simple_bb, mock_tb)
 
@@ -969,8 +956,8 @@ def test_netruntime_build(simple_bb, mock_tb):
     """Test NetRuntime._build_runtime() creates runtime objects."""
     @pn.net
     def SimpleNet(builder):
-        input_place = builder.place("input", PlaceType.QUEUE)
-        output_place = builder.place("output", PlaceType.QUEUE)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         @builder.transition()
         async def process(consumed, bb, timebase):
@@ -1001,8 +988,8 @@ async def test_simple_pipeline(simple_bb, mono_tb):
     """Test end-to-end token flow through simple pipeline."""
     @pn.net
     def Pipeline(builder):
-        input_place = builder.place("input", PlaceType.QUEUE)
-        output_place = builder.place("output", PlaceType.QUEUE)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         @builder.transition()
         async def process(consumed, bb, timebase):
@@ -1044,7 +1031,7 @@ async def test_pn_net_with_runner(simple_bb, mono_tb):
                 await timebase.sleep(0.05)
                 yield TaskToken(f"task_{i}")
 
-        done_place = builder.place("done", PlaceType.BAG)
+        done_place = builder.place("done")
 
         @builder.transition()
         async def process(consumed, bb, timebase):
@@ -1070,11 +1057,11 @@ async def test_pn_net_with_runner(simple_bb, mono_tb):
 
 @pytest.mark.asyncio
 async def test_subnet_integration(simple_bb, mono_tb):
-    """Test end-to-end flow with subnets."""
+    """Test end-to-end flow with subnets using bag semantics."""
     @pn.net
     def Worker(builder):
-        input_place = builder.place("input", PlaceType.QUEUE)
-        output_place = builder.place("output", PlaceType.QUEUE)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         @builder.transition()
         async def work(consumed, bb, timebase):
@@ -1086,12 +1073,13 @@ async def test_subnet_integration(simple_bb, mono_tb):
 
     @pn.net
     def Main(builder):
-        input_place = builder.place("input", PlaceType.QUEUE)
-        output_place = builder.place("output", PlaceType.QUEUE)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         worker1 = builder.subnet(Worker, "worker1")
         worker2 = builder.subnet(Worker, "worker2")
 
+        # forward() broadcasts tokens to both workers
         builder.forward(input_place, worker1.input)
         builder.forward(input_place, worker2.input)
         builder.merge([worker1.output, worker2.output], output_place)
@@ -1099,7 +1087,7 @@ async def test_subnet_integration(simple_bb, mono_tb):
     runner = PNRunner(Main, simple_bb)
     await runner.start(mono_tb)
 
-    # Add tokens with delay
+    # Add tokens
     runtime = runner.runtime
     runtime.places[("Main", "input")].add_token(Token("job1"))
     await asyncio.sleep(0.1)
@@ -1107,11 +1095,11 @@ async def test_subnet_integration(simple_bb, mono_tb):
 
     await asyncio.sleep(1.0)
 
-    # Check both workers processed
+    # With bag semantics and forward(), each job goes to BOTH workers
+    # So we get 4 tokens: job1_worked (from worker1), job1_worked (from worker2),
+    #                   job2_worked (from worker1), job2_worked (from worker2)
     output = runtime.places[("Main", "output")]
-    # Since both transitions compete for tokens from the same queue,
-    # we expect 2 tokens total (one per job, each processed by one worker)
-    assert len(output.tokens) == 2
+    assert len(output.tokens) == 4
 
     await runner.stop()
 
@@ -1122,8 +1110,8 @@ async def test_forward_helper_integration(simple_bb, mono_tb):
     """Test forward helper in actual net execution."""
     @pn.net
     def ForwardNet(builder):
-        input_place = builder.place("input", PlaceType.QUEUE)
-        output_place = builder.place("output", PlaceType.QUEUE)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         builder.forward(input_place, output_place)
 
@@ -1149,10 +1137,10 @@ async def test_fork_helper_integration(simple_bb, mono_tb):
     """Test fork helper distributes tokens to multiple outputs."""
     @pn.net
     def ForkNet(builder):
-        input_place = builder.place("input", PlaceType.QUEUE)
-        out1 = builder.place("out1", PlaceType.BAG)
-        out2 = builder.place("out2", PlaceType.BAG)
-        out3 = builder.place("out3", PlaceType.BAG)
+        input_place = builder.place("input")
+        out1 = builder.place("out1")
+        out2 = builder.place("out2")
+        out3 = builder.place("out3")
 
         builder.fork(input_place, [out1, out2, out3])
 
@@ -1178,9 +1166,9 @@ async def test_round_robin_helper_integration(simple_bb, mono_tb):
     """Test round_robin helper distributes tokens sequentially."""
     @pn.net
     def RRNet(builder):
-        input_place = builder.place("input", PlaceType.QUEUE)
-        out1 = builder.place("out1", PlaceType.BAG)
-        out2 = builder.place("out2", PlaceType.BAG)
+        input_place = builder.place("input")
+        out1 = builder.place("out1")
+        out2 = builder.place("out2")
 
         builder.round_robin(input_place, [out1, out2])
 

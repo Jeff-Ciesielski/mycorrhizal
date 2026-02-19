@@ -3,16 +3,16 @@
 Hypha - Decorator-based Colored Petri Net Framework
 
 A DSL for defining and executing colored Petri nets with support for asyncio,
-various place types, guards, and hierarchical subnet composition.
+multi-set places, guards, and hierarchical subnet composition.
 
 Usage:
-    from mycorrhizal.hypha.core import pn, Runner, PlaceType
+    from mycorrhizal.hypha.core import pn, Runner
 
     @pn.net
     def ProcessingNet(builder):
-        # Define places
-        pending = builder.place("pending", type=PlaceType.QUEUE)
-        processed = builder.place("processed", type=PlaceType.QUEUE)
+        # Define places (all are multi-sets/bags)
+        pending = builder.place("pending")
+        processed = builder.place("processed")
 
         # Define transitions
         @builder.transition()
@@ -30,16 +30,11 @@ Usage:
 
 Key Classes:
     NetBuilder - Builder for constructing Petri nets
-    PlaceType - Type of place (QUEUE, SET, FLAG, COUNTER)
     PlaceSpec - Specification for a place
     TransitionSpec - Specification for a transition
     Runner - Runtime for executing Petri nets
 
-Place Types:
-    QUEUE - FIFO queue, allows multiple tokens
-    SET - Unordered collection with unique tokens
-    FLAG - Boolean place (has token or not)
-    COUNTER - Numeric place with bounded capacity
+All places are multi-sets (bags) with unordered token storage that supports multiplicity.
 
 Transitions:
     Transitions consume tokens from input places and produce tokens for output places.
@@ -51,7 +46,6 @@ Guards:
 """
 
 from .specs import (
-    PlaceType,
     PlaceSpec,
     GuardSpec,
     TransitionSpec,
@@ -65,7 +59,6 @@ from .specs import (
 from .builder import (
     NetBuilder,
     ArcChain,
-    PetriNetDSL,
     pn,
 )
 
@@ -78,27 +71,26 @@ from .runtime import (
 
 __all__ = [
     # Core types
-    'PlaceType',
     'GuardSpec',
-    
+
     # Specification types (for type hints)
     'PlaceSpec',
     'TransitionSpec',
     'ArcSpec',
     'NetSpec',
-    
+
     # Reference types
     'PlaceRef',
     'TransitionRef',
     'SubnetRef',
-    
+
     # Builder
     'NetBuilder',
     'ArcChain',
-    
+
     # Main API
     'pn',
-    
+
     # Runtime
     'PlaceRuntime',
     'TransitionRuntime',

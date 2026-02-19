@@ -14,7 +14,7 @@ import asyncio
 from typing import Annotated
 from pydantic import BaseModel
 
-from mycorrhizal.hypha.core import pn, PlaceType, Runner as PNRunner, NetBuilder
+from mycorrhizal.hypha.core import pn, Runner as PNRunner, NetBuilder
 from mycorrhizal.common.interface_builder import blackboard_interface, readonly, readwrite
 from mycorrhizal.common.wrappers import AccessControlError
 
@@ -36,8 +36,8 @@ def test_hypha_interface_integration():
     """Test basic interface integration with Hypha transitions"""
     @pn.net
     def TestNet(builder: NetBuilder):
-        input_place = builder.place("input", type=PlaceType.QUEUE)
-        output_place = builder.place("output", type=PlaceType.BAG)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         @builder.transition()
         async def process_with_interface(consumed, bb: TaskInterface, timebase):
@@ -88,8 +88,8 @@ def test_hypha_backward_compatibility():
     """Test that transitions without interfaces still work (backward compatibility)"""
     @pn.net
     def TestNet(builder: NetBuilder):
-        input_place = builder.place("input", type=PlaceType.QUEUE)
-        output_place = builder.place("output", type=PlaceType.BAG)
+        input_place = builder.place("input")
+        output_place = builder.place("output")
 
         @builder.transition()
         async def process_no_interface(consumed, bb: TestBlackboard, timebase):

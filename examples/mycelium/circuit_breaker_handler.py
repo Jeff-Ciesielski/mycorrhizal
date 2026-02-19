@@ -39,7 +39,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
 from mycorrhizal.mycelium import (
-    pn, PNRunner, PlaceType,
+    pn, PNRunner
 )
 from mycorrhizal.septum.core import (
     septum, LabeledTransition, StateConfiguration,
@@ -297,12 +297,12 @@ def CircuitBreakerOrchestrator(builder):
     """
 
     # Places
-    input_queue = builder.place("input_queue", type=PlaceType.QUEUE)
-    validated_requests = builder.place("validated_requests", type=PlaceType.QUEUE)
-    rejected_requests = builder.place("rejected_requests", type=PlaceType.QUEUE)
-    success_responses = builder.place("success_responses", type=PlaceType.QUEUE)
-    failed_requests = builder.place("failed_requests", type=PlaceType.QUEUE)
-    circuit_open_rejections = builder.place("circuit_open_rejections", type=PlaceType.QUEUE)
+    input_queue = builder.place("input_queue")
+    validated_requests = builder.place("validated_requests")
+    rejected_requests = builder.place("rejected_requests")
+    success_responses = builder.place("success_responses")
+    failed_requests = builder.place("failed_requests")
+    circuit_open_rejections = builder.place("circuit_open_rejections")
 
     # Transition 1: Request validation (simple filter, no FSM)
     @builder.transition(outputs=[validated_requests, rejected_requests])

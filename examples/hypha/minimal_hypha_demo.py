@@ -8,7 +8,7 @@ Minimal Hypha Core2 Demo
 """
 
 import asyncio
-from mycorrhizal.hypha.core import pn, PlaceType, Runner
+from mycorrhizal.hypha.core import pn, Runner
 from mycorrhizal.hypha.core.builder import NetBuilder
 from mycorrhizal.common.timebase import MonotonicClock
 
@@ -24,8 +24,8 @@ class SimpleToken:
 @pn.net
 def MinimalNet(builder: NetBuilder):
     # Places
-    queue = builder.place("queue", type=PlaceType.QUEUE)
-    processed = builder.place("processed", type=PlaceType.QUEUE)
+    queue = builder.place("queue")
+    processed = builder.place("processed")
 
     # IO input source
     @builder.io_input_place()

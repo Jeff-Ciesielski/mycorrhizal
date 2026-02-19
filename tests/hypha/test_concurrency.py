@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, List
 from hypothesis import given, strategies as st, settings, Phase, HealthCheck
 
-from mycorrhizal.hypha.core import pn, PlaceType, Runner as PNRunner
+from mycorrhizal.hypha.core import pn, Runner as PNRunner
 from mycorrhizal.common.timebase import CycleClock
 
 
@@ -84,8 +84,8 @@ class TestPropertyBased:
         # Build a net with N competing transitions processing tokens
         @pn.net
         def TokenFlowNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             # Create N competing transitions
             for i in range(num_transitions):
@@ -143,7 +143,6 @@ class TestPropertyBased:
     @given(
         initial_tokens=st.integers(min_value=0, max_value=15),
         add_during_run=st.integers(min_value=0, max_value=10),
-        place_type=st.sampled_from([PlaceType.BAG, PlaceType.QUEUE]),
         use_output=st.booleans()
     )
     @settings(
@@ -152,7 +151,7 @@ class TestPropertyBased:
         deadline=None,
         suppress_health_check=[HealthCheck.function_scoped_fixture]  # We create resources inline
     )
-    async def test_property_no_lost_tokens(self, initial_tokens, add_during_run, place_type, use_output):
+    async def test_property_no_lost_tokens(self, initial_tokens, add_during_run, use_output):
         """Property: Token count is conserved through the net
 
         This test verifies the token conservation invariant:
@@ -177,9 +176,9 @@ class TestPropertyBased:
 
         @pn.net
         def ConservationNet(builder):
-            input_p = builder.place("input", type=place_type)
+            input_p = builder.place("input")
             if use_output:
-                output_p = builder.place("output", type=place_type)
+                output_p = builder.place("output")
 
             @builder.transition()
             async def passthrough(consumed, bb, timebase):
@@ -276,9 +275,9 @@ class TestRaceConditions:
 
         @pn.net
         def CompetingNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output1_p = builder.place("output1", type=PlaceType.BAG)
-            output2_p = builder.place("output2", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output1_p = builder.place("output1")
+            output2_p = builder.place("output2")
 
             @builder.transition()
             async def consumer1(consumed, bb, timebase):
@@ -324,11 +323,11 @@ class TestRaceConditions:
 
         @pn.net
         def ManyCompetingNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
+            input_p = builder.place("input")
 
             # Create 10 competing transitions
             for i in range(10):
-                output_p = builder.place(f"output{i}", type=PlaceType.BAG)
+                output_p = builder.place(f"output{i}")
 
                 @builder.transition()
                 async def consumer(consumed, bb, timebase, idx=i):
@@ -370,8 +369,8 @@ class TestRaceConditions:
 
         @pn.net
         def SpuriousWakeupNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def processor(consumed, bb, timebase):
@@ -407,8 +406,8 @@ class TestRaceConditions:
 
         @pn.net
         def ConcurrentAccessNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def fast_processor(consumed, bb, timebase):
@@ -453,8 +452,8 @@ class TestStress:
 
         @pn.net
         def ManyTransitionsNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             # Create 100 transitions
             for i in range(100):
@@ -486,8 +485,8 @@ class TestStress:
 
         @pn.net
         def RapidAdditionNet(builder):
-            input_p = builder.place("input", type=PlaceType.BAG)
-            output_p = builder.place("output", type=PlaceType.BAG)
+            input_p = builder.place("input")
+            output_p = builder.place("output")
 
             @builder.transition()
             async def worker(consumed, bb, timebase):

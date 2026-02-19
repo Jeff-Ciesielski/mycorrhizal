@@ -8,14 +8,14 @@ Hypha Petri Nets provide:
 
 - **Decorator-based syntax** - Define nets, places, and transitions with decorators
 - **Colored tokens** - Rich data objects as tokens, not just markers
-- **Multiple place types** - Queues, sets, and boolean flags
+- **Multi-set places** - All places are bags (multi-sets) supporting token multiplicity
 - **Async execution** - Full asyncio support for concurrent transitions
 - **Modular composition** - Subnets for hierarchical design
 
 ## Quick Example
 
 ```python
-from mycorrhizal.hypha.core import pn, PlaceType, Runner as PNRunner
+from mycorrhizal.hypha.core import pn, Runner as PNRunner
 from pydantic import BaseModel
 
 class WorkItem(BaseModel):
@@ -23,37 +23,21 @@ class WorkItem(BaseModel):
     data: str
 
 @pn.net
-class ProcessingNet:
-    @pn.place(type=PlaceType.QUEUE)
-    def input_queue(bb):
-        return []
+def ProcessingNet(builder):
+    input_place = builder.place("input")
+    processed = builder.place("processed")
 
-    @pn.place(type=PlaceType.QUEUE)
-    def processed(bb):
-        return []
-
-    @pn.transition()
+    @builder.transition()
     async def process_item(consumed, bb, timebase):
-        item = consumed[0].value
-        print(f"Processing: {item.data}")
-        result = WorkItem(id=item.id, data=item.data.upper())
-        return [pn.Token(value=result)]
-
-    @pn.transition()
-    async def output_results(consumed, bb, timebase):
-        item = consumed[0].value
-        print(f"Output: {item.data}")
-        return []
+        for token in consumed:
+            item = token.data
+            print(f"Processing: {item.data}")
+            result = WorkItem(id=item.id, data=item.data.upper())
+            yield {processed: result}
 
 # Create and run
-net = ProcessingNet()
-runner = PNRunner(
-    net=net,
-    initial_tokens={
-        "input_queue": [pn.Token(value=WorkItem(id=1, data="hello"))]
-    }
-)
-await runner.run()
+runner = PNRunner(ProcessingNet, blackboard=WorkItem(id=0, data=""))
+await runner.start(timebase)
 ```
 
 ## Key Concepts
@@ -64,35 +48,24 @@ A net is the container for places and transitions:
 
 ```python
 @pn.net
-class MyNet:
-    @pn.place(type=PlaceType.QUEUE)
-    def my_place(bb):
-        return []
+def MyNet(builder):
+    my_place = builder.place("my_place")
 
-    @pn.transition()
+    @builder.transition()
     async def my_transition(consumed, bb, timebase):
-        return []
+        yield {my_place: consumed[0]}
 ```
 
 ### Places
 
-Places hold tokens. Three types are available:
+Places hold tokens as multi-sets (bags):
 
 ```python
-# QUEUE - Ordered collection, can have duplicates
-@pn.place(type=PlaceType.QUEUE)
-def work_queue(bb):
-    return []
-
-# SET - Unordered unique items
-@pn.place(type=PlaceType.SET)
-def unique_items(bb):
-    return set()
-
-# BOOLEAN - Simple flag (true if token present)
-@pn.place(type=PlaceType.BOOLEAN)
-def is_processing(bb):
-    return False
+@pn.net
+def MyNet(builder):
+    # All places are multi-sets (bags)
+    work_items = builder.place("work_items")
+    results = builder.place("results")
 ```
 
 ### Transitions
@@ -100,24 +73,23 @@ def is_processing(bb):
 Transitions consume and produce tokens:
 
 ```python
-@pn.transition()
-async def my_transition(consumed: List[pn.Token], bb: Blackboard, timebase: Timebase):
+@builder.transition()
+async def my_transition(consumed, bb, timebase):
     """
-    Process consumed tokens and return output tokens.
+    Process consumed tokens and yield output tokens.
 
     Args:
         consumed: List of consumed tokens (from input places)
         bb: Shared blackboard
         timebase: Time abstraction
 
-    Returns:
-        List of output tokens
+    Yields:
+        Dictionaries mapping place references to tokens
     """
     # Process consumed tokens
-    input_data = [t.value for t in consumed]
-
-    # Produce output tokens
-    return [pn.Token(value=output)]
+    for token in consumed:
+        # Produce output tokens
+        yield {output_place: processed_token}
 ```
 
 ### Arcs
@@ -125,67 +97,10 @@ async def my_transition(consumed: List[pn.Token], bb: Blackboard, timebase: Time
 Arcs connect places to transitions:
 
 ```python
-@pn.arc
-def place_to_transition():
-    """Connect place to transition."""
-    return pn.Arc(
-        place=my_place,
-        transition=my_transition,
-        place_type=PlaceType.QUEUE  # Optional, inferred from place
-    )
-```
-
-### Tokens
-
-Tokens carry data through the net:
-
-```python
-# Create tokens
-token = pn.Token(value=my_object)
-
-# Access token value in transitions
-@pn.transition()
-async def process(consumed, bb, timebase):
-    data = consumed[0].value  # Access token's value
-    return [pn.Token(value=processed_data)]
-```
-
-## Place Types
-
-### QUEUE
-
-FIFO order, allows duplicates:
-
-```python
-@pn.place(type=PlaceType.QUEUE)
-def task_queue(bb):
-    return []
-
-# Tokens processed in insertion order
-```
-
-### SET
-
-Unordered, unique items:
-
-```python
-@pn.place(type=PlaceType.SET)
-def active_users(bb):
-    return set()
-
-# Only one token per unique value
-```
-
-### BOOLEAN
-
-Simple presence/absence:
-
-```python
-@pn.place(type=PlaceType.BOOLEAN)
-def system_ready(bb):
-    return False
-
-# Presence of token = True, absence = False
+# Connect place to transition
+builder.arc(input_place, my_transition)
+# Chain to connect transition to output
+builder.arc(my_transition, output_place)
 ```
 
 ## Subnets
@@ -194,26 +109,26 @@ Compose nets hierarchically:
 
 ```python
 @pn.net
-class ValidationNet:
+def Validator(builder):
     """Reusable validation subnet."""
-    @pn.place(type=PlaceType.QUEUE)
-    def input(bb):
-        return []
+    input_p = builder.place("input")
+    output_p = builder.place("output")
 
-    @pn.transition()
+    @builder.transition()
     async def validate(consumed, bb, timebase):
         # Validation logic
-        return [pn.Token(value=validated)]
+        yield {output_p: validated_token}
 
 @pn.net
-class MainNet:
+def MainNet(builder):
     """Main processing net using subnet."""
-    validator = ValidationNet()
+    input_p = builder.place("input")
+    output_p = builder.place("output")
 
-    @pn.transition()
-    async def process(consumed, bb, timebase):
-        # Process validated data
-        return []
+    validator = builder.subnet(Validator, "validator")
+
+    builder.arc(input_p, validator.input)
+    builder.arc(validator.output, output_p)
 ```
 
 ## Blackboard Integration
@@ -227,26 +142,27 @@ class NetContext(BaseModel):
     processed_count: int = 0
 
 @pn.net
-class CountingNet:
-    @pn.transition()
+def CountingNet(builder):
+    @builder.transition()
     async def count_and_process(consumed, bb, timebase):
         # Access blackboard
         bb.processed_count += 1
         print(f"Processed {bb.processed_count} items")
 
         # Process tokens
-        return [pn.Token(value=output)]
+        yield {output_place: processed_token}
 ```
 
 ## Examples
 
-- [Petri Net Demo](../../examples/hypha_demo.py) - Basic workflow
+- [Petri Net Demo](../../examples/hypha/hypha_demo.py) - Basic workflow
 - [Blended Demo](../../examples/blended_demo.py) - Petri net + behavior tree
 
 ## Documentation
 
 - [API Reference](../api/hypha.md) - Complete API documentation
 - [Getting Started](../getting-started/your-first-hypha.md) - Tutorial
+- [Programmatic Hypha](../guides/programmatic-hypha.md) - Building nets programmatically
 - [Composition](../guides/composition.md) - Subnet patterns
 
 ## Mermaid Export

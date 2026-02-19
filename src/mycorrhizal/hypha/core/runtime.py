@@ -8,8 +8,7 @@ Manages token flow, transition firing, and asyncio task coordination.
 
 import asyncio
 from asyncio import Event, Task
-from typing import Any, List, Dict, Optional, Set, Tuple, Callable, Deque, Union, Type, get_type_hints
-from collections import deque, OrderedDict
+from typing import Any, List, Dict, Optional, Tuple, Callable
 from itertools import product, combinations
 import inspect
 import logging
@@ -17,11 +16,9 @@ import logging
 from mycorrhizal.common.wrappers import create_view_from_protocol
 from mycorrhizal.common.compilation import (
     _get_compiled_metadata,
-    _clear_compilation_cache,
-    CompiledMetadata,
 )
 from mycorrhizal.common.cache import InterfaceViewCache
-from .specs import NetSpec, PlaceSpec, TransitionSpec, ArcSpec, PlaceType, GuardSpec
+from .specs import NetSpec, PlaceSpec, TransitionSpec, ArcSpec, GuardSpec
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +42,10 @@ class PlaceRuntime:
         self.timebase = timebase
         self.net = net  # Reference to NetRuntime for cache access
         self.state = spec.state_factory() if spec.state_factory else None
-        
-        # tokens can be a bag (list) or queue (deque)
-        self.tokens: Union[List[Any], Deque[Any]]
-        if spec.place_type == PlaceType.BAG:
-            self.tokens = []
-        else:  # QUEUE
-            self.tokens = deque()
-        
+
+        # All places are multi-sets (bags) using list storage
+        self.tokens: List[Any] = []
+
         self.token_added_event = Event()
         self.token_removed_event = Event()
         
@@ -60,11 +53,7 @@ class PlaceRuntime:
     
     def add_token(self, token: Any):
         """Add a token to this place"""
-        if self.spec.place_type == PlaceType.BAG:
-            self.tokens.append(token)
-        else:  # QUEUE
-            self.tokens.append(token)
-        
+        self.tokens.append(token)
         self.token_added_event.set()
     
     def remove_tokens(self, tokens_to_remove: List[Any]):
@@ -73,30 +62,13 @@ class PlaceRuntime:
         Note: This operation is idempotent - if a token has already been removed
         (e.g., by a competing transition), it will be safely skipped.
         """
-        if self.spec.place_type == PlaceType.BAG:
-            for token in tokens_to_remove:
-                try:
-                    self.tokens.remove(token)
-                except ValueError:
-                    # Token already removed by another transition (race condition)
-                    # This is expected when multiple transitions compete
-                    pass
-        else:  # QUEUE
-            # Try to use set for O(1) lookup if tokens are hashable
+        for token in tokens_to_remove:
             try:
-                removed_set = set(tokens_to_remove)
-                temp = deque()
-                for token in self.tokens:
-                    if token not in removed_set:
-                        temp.append(token)
-                self.tokens = temp
-            except TypeError:
-                # Fall back to O(n) lookup for unhashable tokens (e.g., Task objects)
-                temp = deque()
-                for token in self.tokens:
-                    if token not in tokens_to_remove:
-                        temp.append(token)
-                self.tokens = temp
+                self.tokens.remove(token)
+            except ValueError:
+                # Token already removed by another transition (race condition)
+                # This is expected when multiple transitions compete
+                pass
 
         self.token_removed_event.set()
         self.token_removed_event.clear()
@@ -105,8 +77,7 @@ class PlaceRuntime:
         """Peek at tokens without removing them"""
         if len(self.tokens) < count:
             return []
-        # Normalize to a list slice for both BAG and QUEUE
-        return list(self.tokens)[:count]
+        return self.tokens[:count]
     
     async def start_io_input(self):
         """Start IOInputPlace generator task"""
@@ -167,7 +138,7 @@ class PlaceRuntime:
 
 class TransitionRuntime:
     """Runtime execution of a transition"""
-    
+
     def __init__(self, spec: TransitionSpec, net: 'NetRuntime', fqn: str):
         self.spec = spec
         self.fqn = fqn
@@ -180,6 +151,9 @@ class TransitionRuntime:
         self.task: Optional[Task] = None
         self._stop_event = Event()
         self._spurious_wakeup_count = 0
+
+        # Track when this transition became enabled (for delay support)
+        self._enabled_time: Optional[float] = None
     
     def add_input_arc(self, place_parts: Tuple[str, ...], arc: ArcSpec):
         """Register an input arc"""
@@ -188,7 +162,32 @@ class TransitionRuntime:
     def add_output_arc(self, arc: ArcSpec):
         """Register an output arc"""
         self.output_arcs.append(arc)
-    
+
+    def _is_delay_elapsed(self) -> bool:
+        """Check if the delay period has elapsed since becoming enabled."""
+        if self.spec.delay <= 0:
+            return True  # No delay, always ready
+
+        if self._enabled_time is None:
+            return False  # Not enabled yet
+
+        current_time = self.net.timebase.now()
+        elapsed = current_time - self._enabled_time
+        return elapsed >= self.spec.delay
+
+    def _get_remaining_delay(self) -> float:
+        """Get the remaining delay time in seconds."""
+        if self.spec.delay <= 0:
+            return 0.0
+
+        if self._enabled_time is None:
+            return self.spec.delay
+
+        current_time = self.net.timebase.now()
+        elapsed = current_time - self._enabled_time
+        remaining = self.spec.delay - elapsed
+        return max(0.0, remaining)
+
     def _generate_token_combinations(self):
         """
         Generate all valid token combinations for input arcs.
@@ -264,9 +263,6 @@ class TransitionRuntime:
 
         # Create interface view if handler has interface type hint
         bb_to_pass = self.net._create_interface_view_if_needed(self.net.bb, self.spec.handler)
-
-        sig = inspect.signature(self.spec.handler)
-        param_count = len(sig.parameters)
 
         if self.state is not None:
             logger.debug("[fire] %s consumed=%s", self.fqn, consumed_flat)
@@ -435,6 +431,9 @@ class TransitionRuntime:
     
     async def run(self):
         """Main transition execution loop"""
+        # Track pending tasks for cleanup
+        pending_tasks = set()
+
         try:
             while not self._stop_event.is_set():
                 # Generator transitions (no inputs) fire continuously
@@ -444,31 +443,61 @@ class TransitionRuntime:
                     logger.debug("[trans] %s is a generator, firing continuously", self.fqn)
                     try:
                         await self._fire_transition([])
-                    except Exception as e:
+                    except Exception:
                         logger.exception("[%s] Generator transition error", self.fqn)
 
                     # Small delay to prevent busy-waiting
                     await asyncio.sleep(0.01)
                     continue
 
+                # Create tasks for all wait operations
                 wait_tasks = []
                 for place_fqn, arc in self.input_arcs:
                     place = self.net.places[place_fqn]
-                    wait_tasks.append(asyncio.create_task(place.token_added_event.wait()))
+                    task = asyncio.create_task(place.token_added_event.wait())
+                    wait_tasks.append(task)
+                    pending_tasks.add(task)
 
                 if not wait_tasks:
                     break
 
                 stop_task = asyncio.create_task(self._stop_event.wait())
                 wait_tasks.append(stop_task)
+                pending_tasks.add(stop_task)
 
-                done, pending = await asyncio.wait(
-                    wait_tasks,
-                    return_when=asyncio.FIRST_COMPLETED
-                )
+                # For transitions with delay, add a sleep task for the remaining delay
+                if self.spec.delay > 0 and self._enabled_time is not None:
+                    remaining_delay = self._get_remaining_delay()
+                    if remaining_delay > 0:
+                        delay_task = asyncio.create_task(self.net.timebase.sleep(remaining_delay))
+                        wait_tasks.append(delay_task)
+                        pending_tasks.add(delay_task)
 
+                try:
+                    done, pending = await asyncio.wait(
+                        wait_tasks,
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+                except asyncio.CancelledError:
+                    # If we're cancelled while waiting, clean up all tasks
+                    for task in wait_tasks:
+                        task.cancel()
+                    await asyncio.gather(*wait_tasks, return_exceptions=True)
+                    raise
+
+                # Remove completed and pending tasks from tracking set
+                for task in done:
+                    pending_tasks.discard(task)
+                for task in pending:
+                    pending_tasks.discard(task)
+
+                # Cancel all pending tasks and await them to prevent "Task was destroyed" warnings
                 for task in pending:
                     task.cancel()
+
+                # Wait for cancelled tasks to finish (suppress CancelledError)
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
 
                 if self._stop_event.is_set():
                     break
@@ -494,9 +523,23 @@ class TransitionRuntime:
                 logger.debug("[trans] %s has_combinations=%s", self.fqn, has_combinations)
 
                 if has_combinations:
+                    # Record enabled time if not already set and transition has delay
+                    if self.spec.delay > 0 and self._enabled_time is None:
+                        self._enabled_time = self.net.timebase.now()
+                        logger.debug("[trans] %s became enabled at time=%s", self.fqn, self._enabled_time)
+
+                    # Check if delay has elapsed
+                    if not self._is_delay_elapsed():
+                        logger.debug("[trans] %s delay not elapsed, remaining=%s", self.fqn, self._get_remaining_delay())
+                        # Delay not elapsed, continue loop (will sleep for remaining delay)
+                        continue
+
                     to_consume = await self._check_guard(combinations)
                     if to_consume:
                         await self._fire_transition(to_consume)
+
+                        # Clear enabled time after firing (will be reset if still enabled)
+                        self._enabled_time = None
 
                         # Check if there are still tokens to process after firing
                         remaining_combinations = self._generate_token_combinations()
@@ -512,6 +555,8 @@ class TransitionRuntime:
                             for place_fqn, arc in self.input_arcs:
                                 place = self.net.places[place_fqn]
                                 place.token_added_event.clear()
+                            # Also clear enabled time since no longer enabled
+                            self._enabled_time = None
                             # else: there are still tokens, loop again immediately
                 else:
                     # No combinations available (event was set spuriously or tokens consumed by another transition)
@@ -524,6 +569,8 @@ class TransitionRuntime:
                     for place_fqn, arc in self.input_arcs:
                         place = self.net.places[place_fqn]
                         place.token_added_event.clear()
+                    # Clear enabled time since no longer enabled
+                    self._enabled_time = None
 
         except asyncio.CancelledError:
             pass
@@ -531,7 +578,14 @@ class TransitionRuntime:
             raise
         except Exception:
             logger.exception("[%s] Transition error", self.fqn)
-    
+        finally:
+            # Clean up any remaining pending tasks
+            if pending_tasks:
+                for task in pending_tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
+
     async def cancel(self):
         """Cancel this transition's task"""
         self._stop_event.set()
@@ -777,39 +831,40 @@ class NetRuntime:
         for place in self.places.values():
             await place.cancel()
     
-    def add_place(self, fqn: str, place_type: PlaceType = PlaceType.BAG, 
+    def add_place(self, fqn: str,
                   state_factory: Optional[Callable] = None) -> PlaceRuntime:
         """Dynamically add a place to the running net"""
         parts = self._to_parts(fqn)
         if parts in self.places:
             raise ValueError(f"Place {fqn} already exists")
 
-        place_spec = PlaceSpec(fqn, place_type, state_factory=state_factory)
-        place_runtime = PlaceRuntime(place_spec, self.bb, self.timebase, fqn)
+        place_spec = PlaceSpec(fqn, state_factory=state_factory)
+        place_runtime = PlaceRuntime(place_spec, self.bb, self.timebase, fqn, self)
         self.places[parts] = place_runtime
-        
+
         self._add_to_spec(place_spec)
-        
+
         return place_runtime
     
-    def add_transition(self, fqn: str, handler: Callable, 
+    def add_transition(self, fqn: str, handler: Callable,
                       guard: Optional[GuardSpec] = None,
-                      state_factory: Optional[Callable] = None) -> TransitionRuntime:
+                      state_factory: Optional[Callable] = None,
+                      delay: float = 0.0) -> TransitionRuntime:
         """Dynamically add a transition to the running net"""
         parts = self._to_parts(fqn)
         if parts in self.transitions:
             raise ValueError(f"Transition {fqn} already exists")
 
-        trans_spec = TransitionSpec(fqn, handler, guard, state_factory)
+        trans_spec = TransitionSpec(fqn, handler, guard, state_factory, delay)
         trans_runtime = TransitionRuntime(trans_spec, self, fqn)
         self.transitions[parts] = trans_runtime
-        
+
         trans_runtime.task = asyncio.create_task(trans_runtime.run())
-        
+
         self._add_to_spec(trans_spec)
-        
+
         return trans_runtime
-    
+
     def add_arc(self, source_fqn: str, target_fqn: str, weight: int = 1, 
                 name: Optional[str] = None):
         """Dynamically add an arc to the running net"""
@@ -1002,21 +1057,22 @@ class Runner:
         if self.runtime:
             await self.runtime.stop(timeout)
     
-    def add_place(self, fqn: str, place_type: PlaceType = PlaceType.BAG, 
+    def add_place(self, fqn: str,
                   state_factory: Optional[Callable] = None):
         """Add a place to the running net"""
         if not self.runtime:
             raise RuntimeError("Net is not running. Call start() first.")
-        return self.runtime.add_place(fqn, place_type, state_factory)
+        return self.runtime.add_place(fqn, state_factory)
     
-    def add_transition(self, fqn: str, handler: Callable, 
+    def add_transition(self, fqn: str, handler: Callable,
                       guard: Optional[GuardSpec] = None,
-                      state_factory: Optional[Callable] = None):
+                      state_factory: Optional[Callable] = None,
+                      delay: float = 0.0):
         """Add a transition to the running net"""
         if not self.runtime:
             raise RuntimeError("Net is not running. Call start() first.")
-        return self.runtime.add_transition(fqn, handler, guard, state_factory)
-    
+        return self.runtime.add_transition(fqn, handler, guard, state_factory, delay)
+
     def add_arc(self, source_fqn: str, target_fqn: str, weight: int = 1, 
                 name: Optional[str] = None):
         """Add an arc to the running net"""

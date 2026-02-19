@@ -7,21 +7,17 @@ These are built by the decorator API and used to instantiate runtime objects.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, Callable, Dict, List, Any, Tuple
-from enum import Enum, auto
-
-
-class PlaceType(Enum):
-    """Type of place storage mechanism"""
-    BAG = auto()  # Unordered collection
-    QUEUE = auto()  # FIFO ordered collection
+from typing import Optional, Callable, Dict, List, Tuple
 
 
 @dataclass
 class PlaceSpec:
-    """Specification for a place in the Petri net"""
+    """Specification for a place in the Petri net.
+
+    All places are multi-sets (bags) that support token storage with
+    multiplicity. Tokens can be added and removed from places.
+    """
     name: str  # Local name only, e.g. "waiting"
-    place_type: PlaceType
     handler: Optional[Callable] = None  # For IOPlaces
     state_factory: Optional[Callable] = None
     is_io_input: bool = False
@@ -41,6 +37,7 @@ class TransitionSpec:
     handler: Callable  # Signature: async (consumed, bb, timebase, [state]) -> yields
     guard: Optional[GuardSpec] = None
     state_factory: Optional[Callable] = None
+    delay: float = 0.0  # Static delay in seconds before firing after becoming enabled
 
 
 @dataclass
@@ -111,8 +108,6 @@ class NetSpec:
         lines = ["graph TD"]
         
         def add_subnet(spec: NetSpec, indent: str = "    "):
-            spec_fqn = spec.get_fqn()
-            
             if spec.subnets:
                 for subnet_name, subnet_spec in spec.subnets.items():
                     subnet_fqn = subnet_spec.get_fqn()

@@ -1279,7 +1279,12 @@ class NodeSpec:
             case NodeSpecKind.DECORATOR:
                 assert len(self.children) == 1, "Decorator must wrap exactly one child"
                 child_node = self.children[0].to_node(exception_policy)
-                builder = self.payload
+                # Payload may be a builder function or a dict with "builder" key
+                payload = self.payload
+                if isinstance(payload, dict):
+                    builder = payload["builder"]
+                else:
+                    builder = payload
                 return builder(child_node)
 
             case NodeSpecKind.SUBTREE:
@@ -1411,13 +1416,18 @@ class _WrapperChain:
         self,
         builders: Optional[List[Callable[..., Any]]] = None,
         labels: Optional[List[str]] = None,
+        metadata: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         self._builders: List[Callable[..., Any]] = list(builders or [])
         self._labels: List[str] = list(labels or [])
+        self._metadata: List[Dict[str, Any]] = list(metadata or [])
 
-    def _append(self, label: str, builder: Callable[..., Any]) -> "_WrapperChain":
+    def _append(
+        self, label: str, builder: Callable[..., Any], metadata: Optional[Dict[str, Any]] = None
+    ) -> "_WrapperChain":
         self._builders.append(builder)
         self._labels.append(label)
+        self._metadata.append(metadata or {})
         return self
 
     def failer(self) -> "_WrapperChain":
@@ -1458,9 +1468,11 @@ class _WrapperChain:
         self, condition_spec_or_fn: Union["NodeSpec", Callable[[Any], Any]]
     ) -> "_WrapperChain":
         cond_spec = bt.as_spec(condition_spec_or_fn)
+        # Store condition spec in metadata for compiler access
         return self._append(
             f"Gate(cond={_name_of(cond_spec)})",
             lambda ch: Gate(cond_spec.to_node(), ch),
+            metadata={"condition": cond_spec},
         )
 
     def when(
@@ -1483,9 +1495,11 @@ class _WrapperChain:
             # If is_enabled is False, returns SUCCESS and sequence continues
         """
         cond_spec = bt.as_spec(condition_spec_or_fn)
+        # Store condition spec in metadata for compiler access
         return self._append(
             f"When(cond={_name_of(cond_spec)})",
             lambda ch: When(cond_spec.to_node(), ch),
+            metadata={"condition": cond_spec},
         )
 
     def __call__(self, inner: Union["NodeSpec", Callable[[Any], Any]]) -> "NodeSpec":
@@ -1495,11 +1509,16 @@ class _WrapperChain:
         """
         spec = bt.as_spec(inner)
         result = spec
-        for label, builder in reversed(list(zip(self._labels, self._builders))):
+        for label, builder, metadata in reversed(list(zip(self._labels, self._builders, self._metadata))):
+            payload = builder
+            # Include metadata (like condition spec) in payload for compiler access
+            # Only wrap in dict if there's metadata to store
+            if metadata:
+                payload = {"builder": builder, **metadata}
             result = NodeSpec(
                 kind=NodeSpecKind.DECORATOR,
                 name=f"{label}({_name_of(result)})",
-                payload=builder,
+                payload=payload,
                 children=[result],
             )
         return result

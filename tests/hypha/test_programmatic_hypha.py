@@ -8,7 +8,7 @@ import pytest
 import asyncio
 from pydantic import BaseModel
 
-from mycorrhizal.hypha.core import Runner, PlaceType
+from mycorrhizal.hypha.core import Runner
 from mycorrhizal.hypha.core.builder import NetBuilder
 from mycorrhizal.common.timebase import MonotonicClock
 
@@ -31,8 +31,8 @@ def test_build_simple_net_programmatically():
     builder = NetBuilder("SimpleNet")
 
     # Create places
-    input_place = builder.place("input", type=PlaceType.QUEUE)
-    output_place = builder.place("output", type=PlaceType.BAG)
+    input_place = builder.place("input")
+    output_place = builder.place("output")
 
     # Create transition
     async def process(consumed, bb, timebase):
@@ -76,8 +76,8 @@ def test_build_net_with_io_places():
     input_place = builder.io_input_place()(source)
 
     # Create regular places
-    queue = builder.place("queue", type=PlaceType.QUEUE)
-    output = builder.place("output", type=PlaceType.BAG)
+    queue = builder.place("queue")
+    output = builder.place("output")
 
     # Create IO output place
     async def sink(bb, timebase, tokens):
@@ -109,9 +109,9 @@ def test_build_net_with_multiple_transitions():
     builder = NetBuilder("MultiTransNet")
 
     # Create places
-    input1 = builder.place("input1", type=PlaceType.QUEUE)
-    input2 = builder.place("input2", type=PlaceType.QUEUE)
-    output = builder.place("output", type=PlaceType.BAG)
+    input1 = builder.place("input1")
+    input2 = builder.place("input2")
+    output = builder.place("output")
 
     # Create transitions
     async def process1(consumed, bb, timebase):
@@ -139,12 +139,12 @@ def test_build_complex_net_with_all_place_types():
     builder = NetBuilder("MixedTypesNet")
 
     # Create different place types
-    queue_place = builder.place("queue", type=PlaceType.QUEUE)
-    bag_place = builder.place("bag", type=PlaceType.BAG)
+    queue_place = builder.place("queue")
+    bag_place = builder.place("bag")
 
-    # Verify types
-    assert builder.spec.places["queue"].place_type == PlaceType.QUEUE
-    assert builder.spec.places["bag"].place_type == PlaceType.BAG
+    # Verify places were created
+    assert "queue" in builder.spec.places
+    assert "bag" in builder.spec.places
 
 
 # ============================================================================
@@ -188,11 +188,7 @@ def test_build_net_from_config():
 
     places = {}
     for place_config in config["places"]:
-        place_type = PlaceType.QUEUE if place_config["type"] == "queue" else PlaceType.BAG
-        places[place_config["name"]] = builder.place(
-            place_config["name"],
-            type=place_type
-        )
+        places[place_config["name"]] = builder.place(place_config["name"])
 
     transitions = {}
     for trans_config in config["transitions"]:
@@ -234,8 +230,8 @@ def test_conditional_net_construction():
     """Test building different net structures based on conditions"""
     # Fast path net
     builder_fast = NetBuilder("FastNet")
-    input_p = builder_fast.place("input", type=PlaceType.QUEUE)
-    output_p = builder_fast.place("output", type=PlaceType.BAG)
+    input_p = builder_fast.place("input")
+    output_p = builder_fast.place("output")
 
     async def fast_process(consumed, bb, timebase):
         for token in consumed:
@@ -246,9 +242,9 @@ def test_conditional_net_construction():
 
     # Slow path net
     builder_slow = NetBuilder("SlowNet")
-    input_p2 = builder_slow.place("input", type=PlaceType.QUEUE)
-    valid_p = builder_slow.place("validation", type=PlaceType.BAG)
-    output_p2 = builder_slow.place("output", type=PlaceType.BAG)
+    input_p2 = builder_slow.place("input")
+    valid_p = builder_slow.place("validation")
+    output_p2 = builder_slow.place("output")
 
     async def validate(consumed, bb, timebase):
         for token in consumed:
@@ -279,8 +275,8 @@ def test_forward_convenience_method():
     """Test using the forward() convenience method"""
     builder = NetBuilder("ForwardNet")
 
-    input_place = builder.place("input", type=PlaceType.QUEUE)
-    output_place = builder.place("output", type=PlaceType.BAG)
+    input_place = builder.place("input")
+    output_place = builder.place("output")
 
     # Use forward to create pass-through transition
     builder.forward(input_place, output_place, name="pass_through")
@@ -294,9 +290,9 @@ def test_arc_chaining():
     """Test fluent arc chaining with ArcChain"""
     builder = NetBuilder("ChainNet")
 
-    place1 = builder.place("place1", type=PlaceType.QUEUE)
-    place2 = builder.place("place2", type=PlaceType.QUEUE)
-    place3 = builder.place("place3", type=PlaceType.BAG)
+    place1 = builder.place("place1")
+    place2 = builder.place("place2")
+    place3 = builder.place("place3")
 
     async def trans1(consumed, bb, timebase):
         for token in consumed:
@@ -332,7 +328,7 @@ async def test_run_programmatic_net():
             yield f"token{i}"
 
     input_place = builder.io_input_place()(source)
-    output_place = builder.place("output", type=PlaceType.BAG)
+    output_place = builder.place("output")
 
     # Create transition
     async def process(consumed, bb, timebase):
@@ -376,7 +372,7 @@ async def test_programmatic_and_decorator_nets_produce_same_results():
         async def source(bb, timebase):
             yield "test"
 
-        output = builder.place("output", type=PlaceType.BAG)
+        output = builder.place("output")
 
         @builder.transition()
         async def process(consumed, bb, timebase):
@@ -393,7 +389,7 @@ async def test_programmatic_and_decorator_nets_produce_same_results():
         yield "test"
 
     input2 = builder2.io_input_place()(source2)
-    output2 = builder2.place("output", type=PlaceType.BAG)
+    output2 = builder2.place("output")
 
     async def process2(consumed, bb, timebase):
         for token in consumed:
@@ -448,8 +444,8 @@ def test_net_with_only_places():
     """Test building a net with places but no transitions"""
     builder = NetBuilder("PlacesOnlyNet")
 
-    builder.place("place1", type=PlaceType.QUEUE)
-    builder.place("place2", type=PlaceType.BAG)
+    builder.place("place1")
+    builder.place("place2")
 
     # Verify places exist
     assert len(builder.spec.places) == 2
@@ -460,8 +456,8 @@ def test_net_with_single_transition():
     """Test building a net with a single transition"""
     builder = NetBuilder("SingleTransNet")
 
-    input_p = builder.place("input", type=PlaceType.QUEUE)
-    output_p = builder.place("output", type=PlaceType.BAG)
+    input_p = builder.place("input")
+    output_p = builder.place("output")
 
     async def trans(consumed, bb, timebase):
         for token in consumed:
@@ -479,8 +475,8 @@ def test_invalid_arc_connection_place_to_place():
     """Test that connecting place to place raises an error"""
     builder = NetBuilder("InvalidNet")
 
-    place1 = builder.place("place1", type=PlaceType.QUEUE)
-    place2 = builder.place("place2", type=PlaceType.BAG)
+    place1 = builder.place("place1")
+    place2 = builder.place("place2")
 
     # Should raise error when trying to connect place to place
     with pytest.raises(ValueError, match="Cannot connect PlaceRef to PlaceRef"):

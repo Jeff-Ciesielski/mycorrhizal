@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
-from mycorrhizal.hypha.core import pn, PlaceType, Runner
+from mycorrhizal.hypha.core import pn, Runner
 from mycorrhizal.hypha.core.builder import NetBuilder
 from mycorrhizal.common.timebase import CycleClock, MonotonicClock
 from dataclasses import dataclass
@@ -103,10 +103,10 @@ def TaskGenerator(builder: NetBuilder):
 def TaskProcessor(builder: NetBuilder):
     """Processor subnet that consumes tasks and emits completed or failed tokens"""
     # places
-    input = builder.place("input", type=PlaceType.QUEUE)
-    processing = builder.place("processing", type=PlaceType.BAG)
-    completed = builder.place("completed", type=PlaceType.QUEUE)
-    failed = builder.place("failed", type=PlaceType.QUEUE)
+    input = builder.place("input")
+    processing = builder.place("processing")
+    completed = builder.place("completed")
+    failed = builder.place("failed")
 
     @builder.transition()
     async def take_to_processing(consumed, bb, timebase):
@@ -151,7 +151,7 @@ def TaskProcessor(builder: NetBuilder):
 def Notification(builder: NetBuilder):
     """Notification interface: forks notifications to email/sms/log"""
 
-    notification_input = builder.place("input", type=PlaceType.QUEUE)
+    notification_input = builder.place("input")
 
     @builder.io_output_place()
     async def email_sink(token, bb, timebase):
@@ -186,7 +186,7 @@ def Notification(builder: NetBuilder):
 
 @pn.net
 def ErrorHandler(builder: NetBuilder):
-    err_in = builder.place("input", type=PlaceType.QUEUE)
+    err_in = builder.place("input")
 
     @builder.io_output_place()
     async def error_log(token, bb, timebase):

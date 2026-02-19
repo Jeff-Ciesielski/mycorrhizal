@@ -45,11 +45,11 @@ Colored Petri Net framework for workflow modeling with places, transitions, and 
 **Best for**: Workflow orchestration, parallel processing, resource management
 
 ```python
-from mycorrhizal.hypha.core import pn, PlaceType, Runner
+from mycorrhizal.hypha.core import pn, Runner
 
 @pn.net
 def ProcessingNet(builder: pn.NetBuilder):
-    @builder.place(type=PlaceType.QUEUE)
+    @builder.place
     def tasks(bb): ...
 
     @builder.transition()

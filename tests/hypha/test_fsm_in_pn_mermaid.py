@@ -7,7 +7,7 @@ import pytest
 from enum import Enum, auto
 from pydantic import BaseModel
 
-from mycorrhizal.mycelium import pn, PNRunner, PlaceType
+from mycorrhizal.mycelium import pn, PNRunner
 from mycorrhizal.mycelium.core import state, events, on_state, transitions, LabeledTransition
 
 
@@ -72,9 +72,9 @@ def test_fsm_in_pn_mermaid_diagram():
 
     @pn.net
     def SimpleFSMNet(builder):
-        input_q = builder.place("input_q", type=PlaceType.QUEUE)
-        success_q = builder.place("success_q", type=PlaceType.QUEUE)
-        failure_q = builder.place("failure_q", type=PlaceType.QUEUE)
+        input_q = builder.place("input_q")
+        success_q = builder.place("success_q")
+        failure_q = builder.place("failure_q")
 
         # Transition with FSM integration
         @builder.transition(fsm=ClosedState, outputs=[success_q, failure_q])
@@ -135,8 +135,8 @@ def test_mixed_bt_and_fsm_in_pn_mermaid():
 
     @pn.net
     def MixedNet(builder):
-        input_q = builder.place("input_q", type=PlaceType.QUEUE)
-        output_q = builder.place("output_q", type=PlaceType.QUEUE)
+        input_q = builder.place("input_q")
+        output_q = builder.place("output_q")
 
         # Transition with BT integration
         @builder.transition(bt=SimpleBT, bt_mode="token", outputs=[output_q])
@@ -187,8 +187,8 @@ def test_vanilla_pn_mermaid_still_works():
 
     @pn.net
     def VanillaNet(builder):
-        input_q = builder.place("input_q", type=PlaceType.QUEUE)
-        output_q = builder.place("output_q", type=PlaceType.QUEUE)
+        input_q = builder.place("input_q")
+        output_q = builder.place("output_q")
 
         @builder.transition()
         async def process(consumed, bb, timebase):
@@ -315,9 +315,9 @@ def test_fsm_subgraph_is_connected_to_pn():
 
     @pn.net
     def ConnectedFSMNet(builder):
-        input_q = builder.place("input_q", type=PlaceType.QUEUE)
-        success_q = builder.place("success_q", type=PlaceType.QUEUE)
-        failure_q = builder.place("failure_q", type=PlaceType.QUEUE)
+        input_q = builder.place("input_q")
+        success_q = builder.place("success_q")
+        failure_q = builder.place("failure_q")
 
         # Transition with FSM integration
         @builder.transition(fsm=Validating, outputs=[success_q, failure_q])

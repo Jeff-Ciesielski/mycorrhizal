@@ -13,7 +13,7 @@ sys.path.insert(0, "src")
 from pydantic import BaseModel
 from typing import Annotated
 
-from mycorrhizal.hypha.core import pn, PlaceType, Runner as PNRunner
+from mycorrhizal.hypha.core import pn, Runner as PNRunner
 from mycorrhizal.common.timebase import MonotonicClock
 from mycorrhizal.spores import configure, spore, EventAttr, ObjectRef, ObjectScope
 from mycorrhizal.spores.dsl import HyphaAdapter
@@ -98,7 +98,7 @@ def ProcessingNet(builder):
     adapter = mycorrhizal.spores.dsl.hypha.HyphaAdapter()
 
     # Places
-    processed = builder.place("processed", type=PlaceType.QUEUE)
+    processed = builder.place("processed")
 
     # IO input source
     @builder.io_input_place()

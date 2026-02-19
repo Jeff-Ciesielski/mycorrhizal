@@ -165,7 +165,7 @@ class ProcessingState:
 
 ```python
 # Use QUEUE for ordered items
-@pn.place(type=PlaceType.QUEUE)
+@pn.place()
 def work_queue(bb):
     return []
 

@@ -29,7 +29,7 @@ import logging
 from enum import Enum
 from pydantic import BaseModel, ConfigDict
 
-from mycorrhizal.mycelium import pn, PNRunner, PlaceType
+from mycorrhizal.mycelium import pn, PNRunner
 from mycorrhizal.rhizomorph.core import bt, Status
 from mycorrhizal.common.timebase import MonotonicClock
 
@@ -225,12 +225,12 @@ def JobQueueProcessor(builder):
     """
 
     # Places
-    input_queue = builder.place("input_queue", type=PlaceType.QUEUE)
-    critical_pending = builder.place("critical_pending", type=PlaceType.QUEUE)
-    fast_pending = builder.place("fast_pending", type=PlaceType.QUEUE)
-    normal_pending = builder.place("normal_pending", type=PlaceType.QUEUE)
-    validated_queue = builder.place("validated_queue", type=PlaceType.QUEUE)
-    rejected_queue = builder.place("rejected_queue", type=PlaceType.QUEUE)
+    input_queue = builder.place("input_queue")
+    critical_pending = builder.place("critical_pending")
+    fast_pending = builder.place("fast_pending")
+    normal_pending = builder.place("normal_pending")
+    validated_queue = builder.place("validated_queue")
+    rejected_queue = builder.place("rejected_queue")
 
     # Transition 1: Priority Router (BT-in-PN, token mode)
     @builder.transition(bt=PriorityRouter, bt_mode="token", outputs=[critical_pending, fast_pending, normal_pending])

@@ -64,13 +64,13 @@ await runner.tick_until_complete()
 Model workflows with colored Petri nets:
 
 ```python
-from mycorrhizal.hypha.core import pn, Runner, PlaceType
+from mycorrhizal.hypha.core import pn, Runner
 
 @pn.net
 def ProcessingNet(builder):
-    # Define places
-    pending = builder.place("pending", type=PlaceType.QUEUE)
-    processed = builder.place("processed", type=PlaceType.QUEUE)
+    # Define places (all are multi-sets/bags)
+    pending = builder.place("pending")
+    processed = builder.place("processed")
 
     # Define transitions
     @builder.transition()

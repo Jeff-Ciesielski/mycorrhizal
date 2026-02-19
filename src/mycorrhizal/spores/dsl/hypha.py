@@ -65,7 +65,7 @@ class HyphaAdapter:
                 # - relationships to consumed tokens
                 yield {output: consumed[0]}
 
-            @builder.place(type=PlaceType.QUEUE)
+            @builder.place()
             @adapter.log_place(event_type="item_arrived")
             def input_place(bb):
                 return None

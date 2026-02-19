@@ -13,7 +13,6 @@ from .specs import (
     TransitionSpec,
     GuardSpec,
     ArcSpec,
-    PlaceType,
     PlaceRef,
     TransitionRef,
     SubnetRef,
@@ -55,19 +54,21 @@ class NetBuilder:
     def place(
         self,
         name_or_func: Union[str, Callable, None] = None,
-        type: PlaceType = PlaceType.BAG,
         state_factory: Optional[Callable] = None,
     ) -> Union[PlaceRef, Callable]:
         """Declare a regular place.
 
+        All places are multi-sets (bags) that support token storage with
+        multiplicity. Tokens can be added and removed from places.
+
         Can be used in three ways:
 
         1. As a method call (returns PlaceRef for use in arcs):
-           queue = builder.place("queue", type=PlaceType.QUEUE)
+           place = builder.place("my_place")
 
         2. As a decorator without parens (infers name from function):
            @builder.place
-           def queue(bb):
+           def my_place(bb):
                return bb.tokens
 
         3. As a decorator with custom name:
@@ -79,7 +80,7 @@ class NetBuilder:
         if callable(name_or_func):
             func = name_or_func
             place_name = func.__name__
-            place_spec = PlaceSpec(place_name, type, handler=func, state_factory=state_factory)
+            place_spec = PlaceSpec(place_name, handler=func, state_factory=state_factory)
             self.spec.places[place_name] = place_spec
             return PlaceRef(place_name, self.spec)
 
@@ -87,7 +88,7 @@ class NetBuilder:
         # or called without any args (need to return decorator)
         if isinstance(name_or_func, str):
             name = name_or_func
-            place_spec = PlaceSpec(name, type, state_factory=state_factory)
+            place_spec = PlaceSpec(name, state_factory=state_factory)
             self.spec.places[name] = place_spec
             # Return PlaceRef - it's callable via __call__ for decorator use
             return PlaceRef(name, self.spec)
@@ -96,7 +97,7 @@ class NetBuilder:
         # This would be like @builder.place() with empty parens
         def decorator(func: Callable) -> PlaceRef:
             place_name = func.__name__
-            place_spec = PlaceSpec(place_name, type, handler=func, state_factory=state_factory)
+            place_spec = PlaceSpec(place_name, handler=func, state_factory=state_factory)
             self.spec.places[place_name] = place_spec
             return PlaceRef(place_name, self.spec)
         return decorator
@@ -107,7 +108,7 @@ class NetBuilder:
         def decorator(func: Callable) -> PlaceRef:
             name = func.__name__
             place_spec = PlaceSpec(
-                name, PlaceType.QUEUE, handler=func, is_io_input=True
+                name, handler=func, is_io_input=True
             )
             self.spec.places[name] = place_spec
             return PlaceRef(name, self.spec)
@@ -120,7 +121,7 @@ class NetBuilder:
         def decorator(func: Callable) -> PlaceRef:
             name = func.__name__
             place_spec = PlaceSpec(
-                name, PlaceType.QUEUE, handler=func, is_io_output=True
+                name, handler=func, is_io_output=True
             )
             self.spec.places[name] = place_spec
             return PlaceRef(name, self.spec)
@@ -135,22 +136,28 @@ class NetBuilder:
         self,
         guard: Optional[GuardSpec] = None,
         state_factory: Optional[Callable] = None,
+        delay: float = 0.0,
     ):
         """Decorator for transition function.
 
         Args:
             guard: Optional guard specification
             state_factory: Optional state factory for transition state
+            delay: Static delay in seconds before firing after becoming enabled (default: 0.0)
 
         Usage:
             @builder.transition()
             async def my_transition(consumed, bb, timebase):
                 yield {output: token}
+
+            @builder.transition(delay=0.1)  # 100ms delay
+            async def delayed_transition(consumed, bb, timebase):
+                yield {output: token}
         """
 
         def decorator(func: Callable) -> TransitionRef:
             name = func.__name__
-            trans_spec = TransitionSpec(name, func, guard, state_factory)
+            trans_spec = TransitionSpec(name, func, guard, state_factory, delay)
             self.spec.transitions[name] = trans_spec
             return TransitionRef(name, self.spec)
 
