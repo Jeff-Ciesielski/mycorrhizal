@@ -431,39 +431,5 @@ async def main():
     await demo_conditional_net()
     await demo_convenience_methods()
 
-    print("\n" + "="*70)
-    print("Key Takeaways")
-    print("="*70)
-    print("""
-1. Decorator DSL (@pn.net):
-   - Clean, declarative syntax
-   - Best for static net structures
-   - Easier to read and maintain
-
-2. Programmatic API (NetBuilder):
-   - Build nets at runtime
-   - Dynamic structures from config/data
-   - Conditional workflow paths
-   - Alternative to decorator syntax
-
-3. When to use programmatic:
-   - Configuration-driven workflows
-   - Runtime net generation
-   - External workflow definitions
-   - Dynamic topology changes
-
-4. NetBuilder API methods:
-   - place() - Create regular places
-   - io_input_place() - Create IO input (decorator)
-   - io_output_place() - Create IO output (decorator)
-   - transition() - Create transitions (decorator)
-   - arc() - Connect places/transitions
-   - forward() - Simple pass-through
-   - fork() - Split to multiple outputs
-   - join() - Merge from multiple inputs
-   - subnet() - Instantiate subnets
-    """)
-
-
 if __name__ == "__main__":
     asyncio.run(main())

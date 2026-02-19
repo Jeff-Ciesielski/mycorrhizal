@@ -30,7 +30,6 @@ from mycorrhizal.hypha.core.specs import (
     SubnetRef,
 )
 from mycorrhizal.hypha.core.builder import NetBuilder, ArcChain
-from mycorrhizal.hypha.core.runtime import PlaceRuntime, TransitionRuntime, NetRuntime
 from mycorrhizal.common.timebase import Timebase, MonotonicClock
 
 
@@ -105,24 +104,25 @@ def mono_tb():
 # =============================================================================
 
 
-def assert_token_count(place: PlaceRuntime, expected: int):
-    """Assert place has expected number of tokens."""
-    actual = len(place.tokens)
-    assert actual == expected, f"Expected {expected} tokens, got {actual}"
-
-
-def assert_no_tokens(place: PlaceRuntime):
-    """Assert place has no tokens."""
-    assert_token_count(place, 0)
-
-
-async def await_tokens(place: PlaceRuntime, count: int, timeout: float = 1.0):
-    """Wait for place to have at least count tokens."""
-    start = MockTimebase().now()
-    while len(place.tokens) < count:
-        await asyncio.sleep(0.01)
-        if MockTimebase().now() - start > timeout:
-            raise TimeoutError(f"Timeout waiting for {count} tokens")
+# TODO: These helpers need to be updated for MatrixRuntime
+# def assert_token_count(place: PlaceRuntime, expected: int):
+#     """Assert place has expected number of tokens."""
+#     actual = len(place.tokens)
+#     assert actual == expected, f"Expected {expected} tokens, got {actual}"
+#
+#
+# def assert_no_tokens(place: PlaceRuntime):
+#     """Assert place has no tokens."""
+#     assert_token_count(place, 0)
+#
+#
+# async def await_tokens(place: PlaceRuntime, count: int, timeout: float = 1.0):
+#     """Wait for place to have at least count tokens."""
+#     start = MockTimebase().now()
+#     while len(place.tokens) < count:
+#         await asyncio.sleep(0.01)
+#         if MockTimebase().now() - start > timeout:
+#             raise TimeoutError(f"Timeout waiting for {count} tokens")
 
 
 # =============================================================================
@@ -854,128 +854,133 @@ def test_nested_subnets():
 # PlaceRuntime Tests
 # =============================================================================
 
+# TODO: These tests need to be updated for MatrixRuntime
+# The old PlaceRuntime, TransitionRuntime, NetRuntime classes no longer exist.
+# Tests should use the Runner API instead.
 
-def test_place_runtime_bag():
-    """Test PlaceRuntime with BAG type creates list."""
-    spec = PlaceSpec("test")
-    place = PlaceRuntime(spec, None, None, "test")
-
-    assert isinstance(place.tokens, list)
-    assert len(place.tokens) == 0
-
-
-def test_place_runtime_all_are_bags():
-    """Test that all PlaceRuntime instances use list storage (multi-set semantics)."""
-    spec = PlaceSpec("test")
-    place = PlaceRuntime(spec, None, None, "test")
-
-    # All places are now bags (lists)
-    assert isinstance(place.tokens, list)
-
-
-def test_place_runtime_add_token():
-    """Test PlaceRuntime.add_token()."""
-    spec = PlaceSpec("test")
-    place = PlaceRuntime(spec, None, None, "test")
-
-    place.add_token(Token(1))
-    place.add_token(Token(2))
-
-    assert len(place.tokens) == 2
-    assert Token(1) in place.tokens
-    assert Token(2) in place.tokens
-
-
-def test_place_runtime_remove_tokens():
-    """Test PlaceRuntime.remove_tokens()."""
-    spec = PlaceSpec("test")
-    place = PlaceRuntime(spec, None, None, "test")
-
-    token1 = Token(1)
-    token2 = Token(2)
-    place.add_token(token1)
-    place.add_token(token2)
-
-    place.remove_tokens([token1])
-
-    assert len(place.tokens) == 1
-    assert token1 not in place.tokens
-    assert token2 in place.tokens
-
-
-def test_place_runtime_peek_tokens():
-    """Test PlaceRuntime.peek_tokens()."""
-    spec = PlaceSpec("test")
-    place = PlaceRuntime(spec, None, None, "test")
-
-    place.add_token(Token(1))
-    place.add_token(Token(2))
-    place.add_token(Token(3))
-
-    # Peek 2 tokens
-    tokens = place.peek_tokens(2)
-    assert len(tokens) == 2
-    assert tokens[0].data == 1
-    assert tokens[1].data == 2
-
-    # Original tokens should remain
-    assert len(place.tokens) == 3
-
-
-def test_place_runtime_state_factory():
-    """Test PlaceRuntime calls state_factory."""
-    def factory():
-        return {"count": 0}
-
-    spec = PlaceSpec("counter", state_factory=factory)
-    place = PlaceRuntime(spec, None, None, "counter")
-
-    assert place.state == {"count": 0}
+# def test_place_runtime_bag():
+#     """Test PlaceRuntime with BAG type creates list."""
+#     spec = PlaceSpec("test")
+#     place = PlaceRuntime(spec, None, None, "test")
+#
+#     assert isinstance(place.tokens, list)
+#     assert len(place.tokens) == 0
+#
+#
+# def test_place_runtime_all_are_bags():
+#     """Test that all PlaceRuntime instances use list storage (multi-set semantics)."""
+#     spec = PlaceSpec("test")
+#     place = PlaceRuntime(spec, None, None, "test")
+#
+#     # All places are now bags (lists)
+#     assert isinstance(place.tokens, list)
+#
+#
+# def test_place_runtime_add_token():
+#     """Test PlaceRuntime.add_token()."""
+#     spec = PlaceSpec("test")
+#     place = PlaceRuntime(spec, None, None, "test")
+#
+#     place.add_token(Token(1))
+#     place.add_token(Token(2))
+#
+#     assert len(place.tokens) == 2
+#     assert Token(1) in place.tokens
+#     assert Token(2) in place.tokens
+#
+#
+# def test_place_runtime_remove_tokens():
+#     """Test PlaceRuntime.remove_tokens()."""
+#     spec = PlaceSpec("test")
+#     place = PlaceRuntime(spec, None, None, "test")
+#
+#     token1 = Token(1)
+#     token2 = Token(2)
+#     place.add_token(token1)
+#     place.add_token(token2)
+#
+#     place.remove_tokens([token1])
+#
+#     assert len(place.tokens) == 1
+#     assert token1 not in place.tokens
+#     assert token2 in place.tokens
+#
+#
+# def test_place_runtime_peek_tokens():
+#     """Test PlaceRuntime.peek_tokens()."""
+#     spec = PlaceSpec("test")
+#     place = PlaceRuntime(spec, None, None, "test")
+#
+#     place.add_token(Token(1))
+#     place.add_token(Token(2))
+#     place.add_token(Token(3))
+#
+#     # Peek 2 tokens
+#     tokens = place.peek_tokens(2)
+#     assert len(tokens) == 2
+#     assert tokens[0].data == 1
+#     assert tokens[1].data == 2
+#
+#     # Original tokens should remain
+#     assert len(place.tokens) == 3
+#
+#
+# def test_place_runtime_state_factory():
+#     """Test PlaceRuntime calls state_factory."""
+#     def factory():
+#         return {"count": 0}
+#
+#     spec = PlaceSpec("counter", state_factory=factory)
+#     place = PlaceRuntime(spec, None, None, "counter")
+#
+#     assert place.state == {"count": 0}
 
 
 # =============================================================================
 # NetRuntime Tests
 # =============================================================================
 
+# TODO: These tests need to be updated for MatrixRuntime
+# The old NetRuntime class no longer exists.
 
-def test_netruntime_flatten_simple(simple_bb, mock_tb):
-    """Test NetRuntime._flatten_spec() with simple net."""
-    @pn.net
-    def SimpleNet(builder):
-        builder.place("input")
-        builder.place("output")
-
-    runtime = NetRuntime(SimpleNet._spec, simple_bb, mock_tb)
-
-    # Check places
-    assert ("SimpleNet", "input") in runtime.places
-    assert ("SimpleNet", "output") in runtime.places
-
-
-def test_netruntime_build(simple_bb, mock_tb):
-    """Test NetRuntime._build_runtime() creates runtime objects."""
-    @pn.net
-    def SimpleNet(builder):
-        input_place = builder.place("input")
-        output_place = builder.place("output")
-
-        @builder.transition()
-        async def process(consumed, bb, timebase):
-            yield {}
-
-        builder.arc(input_place, process).arc(output_place)
-
-    runtime = NetRuntime(SimpleNet._spec, simple_bb, mock_tb)
-
-    # Check place runtimes
-    input_runtime = runtime.places[("SimpleNet", "input")]
-    assert isinstance(input_runtime, PlaceRuntime)
-    assert input_runtime.fqn == "SimpleNet.input"
-
-    # Check transition runtimes
-    trans_runtime = runtime.transitions[("SimpleNet", "process")]
-    assert isinstance(trans_runtime, TransitionRuntime)
-    assert trans_runtime.fqn == "SimpleNet.process"
+# def test_netruntime_flatten_simple(simple_bb, mock_tb):
+#     """Test NetRuntime._flatten_spec() with simple net."""
+#     @pn.net
+#     def SimpleNet(builder):
+#         builder.place("input")
+#         builder.place("output")
+#
+#     runtime = NetRuntime(SimpleNet._spec, simple_bb, mock_tb)
+#
+#     # Check places
+#     assert ("SimpleNet", "input") in runtime.places
+#     assert ("SimpleNet", "output") in runtime.places
+#
+#
+# def test_netruntime_build(simple_bb, mock_tb):
+#     """Test NetRuntime._build_runtime() creates runtime objects."""
+#     @pn.net
+#     def SimpleNet(builder):
+#         input_place = builder.place("input")
+#         output_place = builder.place("output")
+#
+#         @builder.transition()
+#         async def process(consumed, bb, timebase):
+#             yield {}
+#
+#         builder.arc(input_place, process).arc(output_place)
+#
+#     runtime = NetRuntime(SimpleNet._spec, simple_bb, mock_tb)
+#
+#     # Check place runtimes
+#     input_runtime = runtime.places[("SimpleNet", "input")]
+#     assert isinstance(input_runtime, PlaceRuntime)
+#     assert input_runtime.fqn == "SimpleNet.input"
+#
+#     # Check transition runtimes
+#     trans_runtime = runtime.transitions[("SimpleNet", "process")]
+#     assert isinstance(trans_runtime, TransitionRuntime)
+#     assert trans_runtime.fqn == "SimpleNet.process"
 
 
 # =============================================================================
@@ -1079,9 +1084,8 @@ async def test_subnet_integration(simple_bb, mono_tb):
         worker1 = builder.subnet(Worker, "worker1")
         worker2 = builder.subnet(Worker, "worker2")
 
-        # forward() broadcasts tokens to both workers
-        builder.forward(input_place, worker1.input)
-        builder.forward(input_place, worker2.input)
+        # Use fork() to broadcast tokens to both workers
+        builder.fork(input_place, [worker1.input, worker2.input])
         builder.merge([worker1.output, worker2.output], output_place)
 
     runner = PNRunner(Main, simple_bb)
@@ -1095,7 +1099,7 @@ async def test_subnet_integration(simple_bb, mono_tb):
 
     await asyncio.sleep(1.0)
 
-    # With bag semantics and forward(), each job goes to BOTH workers
+    # With fork(), each job goes to BOTH workers
     # So we get 4 tokens: job1_worked (from worker1), job1_worked (from worker2),
     #                   job2_worked (from worker1), job2_worked (from worker2)
     output = runtime.places[("Main", "output")]

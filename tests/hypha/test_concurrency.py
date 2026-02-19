@@ -354,18 +354,23 @@ class TestRaceConditions:
 
         assert total_output == 5, f"Expected 5 tokens, got {total_output}"
 
-        # Verify no transition had excessive spurious wakeups
+        # With unique naming, transitions are named consumer_0, consumer_1, etc.
+        # Verify all transitions were created
         for i in range(10):
-            trans = runner.runtime.transitions[('ManyCompetingNet', f'consumer')]
-            # Note: This will access the same transition 10 times - in real test we'd access each one
-            if hasattr(trans, 'get_spurious_wakeup_count'):
-                count = trans.get_spurious_wakeup_count()
-                assert count < 100, f"Too many spurious wakeups: {count}"
+            trans_name = f'consumer_{i}' if i > 0 else 'consumer'
+            assert ('ManyCompetingNet', trans_name) in runner.runtime.transitions, (
+                f"Transition {trans_name} not found"
+            )
 
         await runner.stop()
 
     async def test_spurious_wakeup_handling(self, test_bb, cycle_tb):
-        """Verify transitions handle spurious wakeups correctly"""
+        """Verify transitions handle spurious wakeups correctly
+
+        Note: MatrixRuntime doesn't have per-transition tasks, so spurious wakeups
+        as a concept don't apply. This test verifies that the runtime handles
+        empty places gracefully and continues processing when tokens arrive.
+        """
 
         @pn.net
         def SpuriousWakeupNet(builder):
@@ -381,23 +386,23 @@ class TestRaceConditions:
         runner = PNRunner(SpuriousWakeupNet, test_bb)
         await runner.start(cycle_tb)
 
-        # Manually trigger event without adding tokens (simulate spurious wakeup)
-        input_place = runner.runtime.places[('SpuriousWakeupNet', 'input')]
-        input_place.token_added_event.set()
-
+        # Verify the runtime starts correctly even with empty input
         await asyncio.sleep(0.1)
 
-        # Transition should handle spurious wakeup gracefully
-        trans = runner.runtime.transitions[('SpuriousWakeupNet', 'processor')]
-        spurious_count = trans.get_spurious_wakeup_count()
-        assert spurious_count > 0, "Should have detected at least one spurious wakeup"
-
-        # Now add actual token - should process normally
+        # Add actual token - should process normally
+        input_place = runner.runtime.places[('SpuriousWakeupNet', 'input')]
         input_place.add_token("test")
         await asyncio.sleep(0.1)
 
         output_tokens = runner.runtime.places[('SpuriousWakeupNet', 'output')].tokens
         assert len(output_tokens) == 1, "Token should have been processed"
+
+        # Add another token to verify continued operation
+        input_place.add_token("test2")
+        await asyncio.sleep(0.1)
+
+        output_tokens = list(runner.runtime.places[('SpuriousWakeupNet', 'output')].tokens)
+        assert len(output_tokens) == 2, f"Both tokens should have been processed, got {len(output_tokens)}"
 
         await runner.stop()
 

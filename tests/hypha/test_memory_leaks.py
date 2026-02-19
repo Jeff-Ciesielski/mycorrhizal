@@ -534,7 +534,11 @@ class TestTaskMemory:
     """Tests for asyncio Task object memory management"""
 
     async def test_transition_tasks_cleanup(self, mem_bb, cycle_tb):
-        """Verify transition tasks don't leak"""
+        """Verify runtime resources don't leak
+
+        Note: MatrixRuntime doesn't use per-transition tasks, so this test
+        verifies that the runtime itself cleans up properly.
+        """
 
         @pn.net
         def TaskNet(builder):
@@ -547,24 +551,29 @@ class TestTaskMemory:
 
             builder.arc(input_p, worker)
 
-        # Create many transitions (tasks)
+        # Create runner
         runner = PNRunner(TaskNet, mem_bb)
         await runner.start(cycle_tb)
 
-        # Add tokens to trigger task activity
+        # Add tokens to trigger processing
         input_place = runner.runtime.places[('TaskNet', 'input')]
         for i in range(50):
             input_place.add_token(f"token{i}")
 
         await asyncio.sleep(0.3)
 
-        # Stop runner (should cancel all tasks)
+        # Verify tokens were processed
+        output_tokens = runner.runtime.places[('TaskNet', 'output')].tokens
+        assert len(output_tokens) == 50, f"Expected 50 tokens, got {len(output_tokens)}"
+
+        # Stop runner (should clean up all resources)
         await runner.stop()
 
-        # All tasks should be cancelled
-        for trans in runner.runtime.transitions.values():
-            assert trans.task is not None
-            assert trans.task.cancelled() or trans.task.done()
+        # Verify runtime stopped cleanly
+        assert runner.runtime._stop_event.is_set(), "Stop event should be set"
+        assert runner.runtime._run_task is None or runner.runtime._run_task.done(), (
+            "Run task should be done or None"
+        )
 
         del runner
         gc.collect()

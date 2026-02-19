@@ -577,7 +577,7 @@ class PNRunner:
         """
         from ..hypha.core import Runner
 
-        # Create the original runner
+        # Create the original runner using matrix runtime
         self._runner = Runner(net_func, blackboard)
         self._blackboard = blackboard
         self._timebase = None

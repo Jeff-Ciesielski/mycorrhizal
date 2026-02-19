@@ -50,6 +50,9 @@ class NetBuilder:
 
     def __init__(self, name: str, parent: Optional[NetSpec] = None):
         self.spec = NetSpec(name, parent=parent)
+        # Track name counters for generating unique names when there are collisions
+        self._transition_name_counters: Dict[str, int] = {}
+        self._place_name_counters: Dict[str, int] = {}
 
     def place(
         self,
@@ -153,10 +156,21 @@ class NetBuilder:
             @builder.transition(delay=0.1)  # 100ms delay
             async def delayed_transition(consumed, bb, timebase):
                 yield {output: token}
+
+        Note: When creating multiple transitions in a loop with the same function name,
+        the builder automatically generates unique names by appending a counter suffix.
         """
 
         def decorator(func: Callable) -> TransitionRef:
-            name = func.__name__
+            base_name = func.__name__
+            # Generate unique name to handle collisions (e.g., when creating transitions in loops)
+            if base_name in self._transition_name_counters:
+                self._transition_name_counters[base_name] += 1
+                name = f"{base_name}_{self._transition_name_counters[base_name]}"
+            else:
+                self._transition_name_counters[base_name] = 0
+                name = base_name
+
             trans_spec = TransitionSpec(name, func, guard, state_factory, delay)
             self.spec.transitions[name] = trans_spec
             return TransitionRef(name, self.spec)

@@ -11,7 +11,7 @@ from typing import Any, List, Optional, TYPE_CHECKING
 from dataclasses import dataclass
 
 if TYPE_CHECKING:
-    from ..hypha.core.runtime import NetRuntime
+    from ..hypha.core.runtime import MatrixRuntime
 
 
 @dataclass
@@ -63,7 +63,7 @@ class PNContext:
 
     def __init__(
         self,
-        net_runtime: "NetRuntime",
+        net_runtime: "MatrixRuntime",
         output_places: List[Any],
         tokens: List[Any],
         timebase: Any,
@@ -73,7 +73,7 @@ class PNContext:
         Initialize PNContext.
 
         Args:
-            net_runtime: The PN net runtime instance
+            net_runtime: The PN net runtime instance (MatrixRuntime)
             output_places: List of output PlaceRef objects for this transition
             tokens: Tokens being processed (single token for token mode, all for batch mode)
             timebase: The timebase for timing operations

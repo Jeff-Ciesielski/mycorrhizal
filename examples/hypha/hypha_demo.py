@@ -33,7 +33,7 @@ class Blackboard(BaseModel):
     # optional configuration for generator
     task_types: List[str] = ["analysis", "computation", "validation", "reporting"]
     max_tasks: int = 8
-    interval: float = 0.8
+    interval: float = 0.5
     finished_event: Event = Event()
 
 
@@ -127,13 +127,13 @@ def TaskProcessor(builder: NetBuilder):
             if str(t.task_id).endswith("6") or str(t.task_id).endswith("9"):
                 err = ErrorToken("processing_failed", f"Task {t.task_id} failed", t)
                 out_failed.append(err)
-                print(f"❌ Failed: {t}")
+                print(f"Failed: {t}")
             else:
                 processed = ProcessedTaskToken(
                     t.task_id, f"processed_{t.task_type}", processing_time
                 )
                 out_completed.append(processed)
-                print(f"✅ Completed: {t}")
+                print(f"Completed: {t}")
 
         if out_completed:
             yield {completed: out_completed}
@@ -159,7 +159,7 @@ def Notification(builder: NetBuilder):
             await timebase.sleep(0.1)
             if "error" in token.message.lower():
                 err = ErrorToken("email_failed", f"Failed to send to {token.recipient}")
-                print(f"❌ EMAIL FAILED: {token.recipient}")
+                print(f"EMAIL FAILED: {token.recipient}")
                 return err
             print(f"📧 EMAIL: {token.recipient} - {token.message}")
         return None
@@ -168,14 +168,14 @@ def Notification(builder: NetBuilder):
     async def sms_sink(token, bb, timebase):
         if isinstance(token, NotificationToken) and token.urgent:
             await timebase.sleep(0.05)
-            print(f"📱 SMS: {token.recipient} - {token.message}")
+            print(f"SMS: {token.recipient} - {token.message}")
         return None
 
     @builder.io_output_place()
     async def log_sink(token, bb, timebase):
         if isinstance(token, NotificationToken):
             ts = time.strftime("%H:%M:%S")
-            print(f"📋 LOG [{ts}]: {token.recipient} - {token.message}")
+            print(f"LOG [{ts}]: {token.recipient} - {token.message}")
         return None
 
     # wiring: fork from input to outputs
@@ -192,7 +192,7 @@ def ErrorHandler(builder: NetBuilder):
     async def error_log(token, bb, timebase):
         if isinstance(token, ErrorToken):
             ts = time.strftime("%H:%M:%S")
-            print(f"❌ ERROR [{ts}]: {token.error_type} - {token.message}")
+            print(f"ERROR [{ts}]: {token.error_type} - {token.message}")
         return None
 
     builder.forward(err_in, error_log, name="ErrorForward")
@@ -215,10 +215,10 @@ def TaskProcessingSystem(builder: NetBuilder):
         if bb is not None and hasattr(bb, "tasks_completed"):
             bb.tasks_completed += 1
             print(
-                f"📊 Progress: {bb.tasks_completed}/{bb.total_tasks_to_process} tasks completed"
+                f"Progress: {bb.tasks_completed}/{bb.total_tasks_to_process} tasks completed"
             )
             if bb.tasks_completed >= bb.total_tasks_to_process:
-                print("🎉 All tasks completed! Signaling shutdown...")
+                print("All tasks completed! Signaling shutdown...")
                 # If the blackboard exposes an Event, set it
                 if hasattr(bb, "finished_event") and isinstance(
                     bb.finished_event, Event
@@ -260,7 +260,8 @@ async def demonstrate_comprehensive_system():
         start_time = timebase.now()
         while not bb.finished_event.is_set():
             timebase.advance()
-            await asyncio.sleep(0) # let other tasks run
+            await asyncio.sleep(0.001) # Give runtime time to process tokens
+            print(f"Time: {timebase.now():.1f}s, Tasks Completed: {bb.tasks_completed}/{bb.total_tasks_to_process}")
             if timebase.now() - start_time > 10:
                 print("Timeout waiting for all tasks to complete.")
                 break
