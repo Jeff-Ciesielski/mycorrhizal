@@ -249,6 +249,7 @@ Start with vanilla modules when:
 
 - **Tutorial:** [Your First Mycelium Tree](../getting-started/your-first-mycelium.md) - Step-by-step guide
 - **Patterns:** Explore the three integration patterns (FSM-in-BT, BT-in-FSM, BT-in-PN)
+- **BT-to-PN Compiler:** Learn about [compiling behavior trees to Petri nets](bt-to-pn-compiler.md)
 - **Advanced:** Learn about [deep nesting strategies](advanced-patterns.md)
 - **Visualizations:** See [seamless diagram examples](visualizations.md)
 - **Spores:** Configure [event logging across nested systems](spores-integration.md)

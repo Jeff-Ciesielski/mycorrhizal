@@ -121,6 +121,14 @@ from .pn_context import PNContext
 # Spores integration
 from .spores_integration import TreeSporesAdapter, log_tree_event
 
+# BT-to-PN compiler
+from .bt_compiler import (
+    compile_bt_to_pn,
+    BTtoPNCompiler,
+    StatusToken,
+    MatchToken,
+)
+
 __all__ = [
     # Core decorators
     "tree",
@@ -166,6 +174,12 @@ __all__ = [
     # Spores integration
     "TreeSporesAdapter",
     "log_tree_event",
+
+    # BT-to-PN compiler
+    "compile_bt_to_pn",
+    "BTtoPNCompiler",
+    "StatusToken",
+    "MatchToken",
 ]
 
 # Version info
