@@ -300,18 +300,6 @@ async def run_circuit_breaker(runner: LoggedTreeRunner):
 async def main():
     """Run the circuit breaker with state snapshots."""
 
-    print("=" * 70)
-    print("Mycelium + Spores: State Snapshots and Tree-Level Events")
-    print("=" * 70)
-    print()
-    print("This demo shows:")
-    print("  - State snapshots at key points")
-    print("  - Tree-level event logging")
-    print("  - FSM state transition tracking")
-    print("  - Blackboard evolution over time")
-    print("  - Object-type logs (snapshots)")
-    print()
-
     # Create temporary file for spores output
     with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
         log_file = f.name
@@ -385,20 +373,6 @@ async def main():
 
         if len(lines) > 5:
             print(f"... ({len(lines) - 5} more records)")
-
-    print()
-    print("=" * 70)
-    print("What was logged:")
-    print("  - Events:")
-    print("    - circuit_breaker_started (tree-level)")
-    print("    - circuit_breaker_tick (per action)")
-    print("  - Objects (State Snapshots):")
-    print("    - CircuitBreaker_state_change (on FSM transition)")
-    print("    - CircuitBreaker_periodic (every N ticks)")
-    print("  - Event attributes:")
-    print("    - FSM state, failure/success counts")
-    print("    - Blackboard snapshot in state snapshots")
-    print()
 
     # Clean up
     Path(log_file).unlink()

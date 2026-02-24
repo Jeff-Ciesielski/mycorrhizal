@@ -224,16 +224,6 @@ def SimpleFSMNet(builder):
 async def main():
     """Run the FSM-in-PN demo."""
 
-    print("=" * 80)
-    print("Simple FSM-in-PN Example with Mermaid Diagram Generation")
-    print("=" * 80)
-    print()
-    print("This demo shows:")
-    print("  - FSM-in-PN integration: FSMs embedded in Petri net transitions")
-    print("  - Mermaid diagram generation: Full FSM state diagram embedded in transition")
-    print("  - Clear visualization: All FSM states and transitions shown as subgraph")
-    print()
-
     # Create blackboard
     bb = Blackboard()
     timebase = MonotonicClock()
@@ -248,12 +238,6 @@ async def main():
     mermaid = runner.to_mermaid()
     print(mermaid)
     print("=" * 80)
-    print()
-    print("Note that the FSM is embedded as a subgraph within the transition!")
-    print("The subgraph shows all 5 FSM states and their transitions:")
-    print("  - Validating → Processing → Completed (success path)")
-    print("  - Validating → Rejected (validation failure)")
-    print("  - Processing → Failed (processing failure)")
     print()
 
     # Start the runner
@@ -324,25 +308,6 @@ async def main():
     print()
     print("Stopping...")
     await runner.stop(timeout=1)
-
-    print()
-    print("=" * 80)
-    print("Demo complete!")
-    print("=" * 80)
-    print()
-    print("Key takeaways:")
-    print("  1. FSM-in-PN integration allows embedding FSMs in Petri net transitions")
-    print("  2. Mermaid diagrams show the complete FSM state machine as a subgraph")
-    print("  3. All FSM states and transitions are visible within the transition node")
-    print("  4. This makes it easy to visualize complex systems with nested state machines")
-    print()
-    print("The Mermaid diagram shows:")
-    print("  - Petri net structure (places and transitions)")
-    print("  - FSM embedded in the 'process_with_fsm' transition")
-    print("  - All 5 FSM states: Validating, Processing, Completed, Failed, Rejected")
-    print("  - State transitions: VALID, INVALID, SUCCESS, FAILURE")
-    print("  - Start node pointing to initial state (Validating)")
-    print()
 
 
 if __name__ == "__main__":

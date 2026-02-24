@@ -95,8 +95,6 @@ def DoneState():
 # ============================================================================
 
 async def main():
-    print("=== Basic Septum Decorator Example ===\n")
-
     # Create state machine
     fsm = StateMachine(
         initial_state=IdleState,

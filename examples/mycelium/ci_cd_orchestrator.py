@@ -662,34 +662,6 @@ async def run_deployment(scenario_name: str, bb: DeploymentBlackboard):
 async def main():
     """Run the CI/CD orchestrator demo."""
 
-    print("=" * 80)
-    print("Mycelium BT-in-FSM Demo: CI/CD Deployment Orchestrator")
-    print("=" * 80)
-    print()
-    print("This demo shows a CI/CD pipeline using FSM for workflow management")
-    print("and BT subtrees for intelligent error recovery decisions:")
-    print()
-    print("FSM States:")
-    print("  - BuildingState: Compiles the application")
-    print("  - TestingState: Runs test suite")
-    print("  - DeployingState: Deploys to environment")
-    print("  - MonitoringState: Monitors deployment health")
-    print("  - RollingBackState: Rolls back if needed")
-    print("  - CleanupState: Cleanup and reporting")
-    print()
-    print("BT Decision Trees:")
-    print("  - DecideBuildRecovery: Handle build failures (cache, deps, retry, alert)")
-    print("  - DecideTestRecovery: Handle test failures (flaky, env, ignore, review)")
-    print("  - DecideDeployRecovery: Handle deploy failures (timeout, scale, rollback)")
-    print("  - DecideMonitorAction: Monitor health (healthy, degraded, rollback)")
-    print()
-    print("Key Features:")
-    print("  - FSM manages overall deployment workflow")
-    print("  - BTs make intelligent recovery decisions based on context")
-    print("  - Each failure scenario uses different recovery strategies")
-    print("  - Demonstrates real-world automation patterns")
-    print()
-
     # Scenario 1: Successful deployment
     bb = DeploymentBlackboard(
         new_version="v2.0.0",
@@ -744,16 +716,6 @@ async def main():
     )
     await run_deployment("Deployment Failure - Rollback", bb)
 
-    print()
-    print("=" * 80)
-    print("Demo complete!")
-    print("=" * 80)
-    print()
-    print("The CI/CD orchestrator demonstrates:")
-    print("  1. FSM provides clear workflow structure (Build -> Test -> Deploy -> Monitor)")
-    print("  2. BTs enable context-aware decision making for error recovery")
-    print("  3. Each state can have different BT strategies based on its needs")
-    print("  4. Complex automation with minimal boilerplate code")
     print()
 
 

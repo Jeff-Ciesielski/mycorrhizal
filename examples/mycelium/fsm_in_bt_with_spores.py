@@ -238,18 +238,6 @@ def RobotController():
 async def main():
     """Run the robot controller with Spores logging."""
 
-    print("=" * 70)
-    print("Mycelium + Spores: FSM-in-BT with Event Logging")
-    print("=" * 70)
-    print()
-    print("This demo shows:")
-    print("  - FSM-in-BT pattern with Mycelium")
-    print("  - Automatic event logging via MyceliumAdapter")
-    print("  - FSM state tracking in events")
-    print("  - Object lifecycle logging (robot)")
-    print("  - Event-object relationships")
-    print()
-
     # Create temporary file for spores output
     with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
         log_file = f.name
@@ -316,15 +304,6 @@ async def main():
     with open(log_file, 'r') as f:
         for i, line in enumerate(f, 1):
             print(f"Record {i}: {line.rstrip()}")
-
-    print()
-    print("=" * 70)
-    print("What was logged:")
-    print("  - Events: robot_control_tick (per action execution)")
-    print("  - Objects: Robot (with battery attribute)")
-    print("  - Relationships: event --[actor]--> robot-1")
-    print("  - Event attributes: task_count, current_task, fsm_state, status")
-    print()
 
     # Clean up
     Path(log_file).unlink()

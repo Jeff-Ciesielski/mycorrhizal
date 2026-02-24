@@ -18,10 +18,6 @@ from mycorrhizal.common.wrappers import create_view_from_protocol, AccessControl
 # Example 1: Basic Interface Definition
 # ============================================================================
 
-print("="*60)
-print("Example 1: Basic Interface Definition")
-print("="*60)
-
 class SensorData(BaseModel):
     """Blackboard with sensor data"""
     temperature: float = 20.0
@@ -79,10 +75,6 @@ except (AccessControlError, AttributeError) as e:
 # Example 2: ReadWrite Fields
 # ============================================================================
 
-print("\n" + "="*60)
-print("Example 2: ReadWrite Fields")
-print("="*60)
-
 class TaskState(BaseModel):
     """Task tracking state"""
     max_tasks: int = 10
@@ -129,10 +121,6 @@ except (AccessControlError, AttributeError) as e:
 # Example 3: Type Safety and Introspection
 # ============================================================================
 
-print("\n" + "="*60)
-print("Example 3: Type Safety and Introspection")
-print("="*60)
-
 print(f"\nInterface metadata:")
 print(f"  ReadOnlySensor._readonly_fields: {ReadOnlySensor._readonly_fields}")
 print(f"  ReadOnlySensor._readwrite_fields: {ReadOnlySensor._readwrite_fields}")
@@ -149,10 +137,6 @@ print(f"Does SensorData have interface metadata? {hasattr(SensorData, '_readonly
 # ============================================================================
 # Example 4: Multiple Interfaces for Different Access Levels
 # ============================================================================
-
-print("\n" + "="*60)
-print("Example 4: Multiple Interfaces for Different Access Levels")
-print("="*60)
 
 class RobotState(BaseModel):
     """Robot state with multiple access levels"""
@@ -211,23 +195,3 @@ except (AccessControlError, AttributeError) as e:
 maintenance_view = create_view_from_protocol(robot, MaintenanceInterface)
 maintenance_view.service_count += 1
 print(f"✓ Maintenance incremented service count to: {maintenance_view.service_count}")
-
-
-# ============================================================================
-# Summary
-# ============================================================================
-
-print("\n" + "="*60)
-print("SUMMARY")
-print("="*60)
-print("\nThe @blackboard_interface decorator provides:")
-print("  1. ✓ Declaration of readonly vs readwrite fields")
-print("  2. ✓ Runtime enforcement of access constraints")
-print("  3. ✓ Hiding of internal/private fields")
-print("  4. ✓ Type-safe interface definitions")
-print("  5. ✓ Multiple interfaces per blackboard for different access levels")
-print("\nThis enables safe composition across the three DSLs:")
-print("  - Rhizomorph (behavior trees)")
-print("  - Hypha (Petri nets)")
-print("  - Septum (state machines)")
-print()

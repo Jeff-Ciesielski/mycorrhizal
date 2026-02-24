@@ -672,12 +672,6 @@ async def main():
     total = len(results)
     print(f"Tests passed: {passed}/{total}")
 
-    if passed == total:
-        print("✓ All parallel examples behaved as expected!")
-    else:
-        print("✗ Some parallel examples did not behave as expected.")
-        print("  This may indicate issues with parallel execution.")
-
     # Generate Mermaid diagram for one example
     print("\n--- Mermaid Diagram for Example 5 (Complex Parallel) ---\n")
     print(ComplexParallel.to_mermaid())

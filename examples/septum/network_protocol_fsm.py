@@ -474,16 +474,6 @@ async def demo_mermaid_diagram():
 # ============================================================================
 
 async def main():
-    print("="*70)
-    print("Network Protocol State Machine Demo")
-    print("="*70)
-    print("\nThis demo shows a realistic network protocol FSM with:")
-    print("  - Connection establishment with timeout and retry")
-    print("  - Authentication (pushed state)")
-    print("  - Data transfer (pushed state)")
-    print("  - Error handling and recovery")
-    print("  - Graceful shutdown")
-
     # Show the diagram first
     await demo_mermaid_diagram()
 
@@ -493,10 +483,6 @@ async def main():
     await demo_successful_connection()
     # await demo_connection_timeout()
     # await demo_data_transfer_error()
-
-    print("\n" + "="*70)
-    print("All demos complete!")
-    print("="*70)
 
 
 if __name__ == "__main__":

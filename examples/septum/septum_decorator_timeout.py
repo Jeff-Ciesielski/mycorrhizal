@@ -119,7 +119,6 @@ def FailureState():
 
 async def demo_with_response():
     """Demo where response arrives in time"""
-    print("\n=== Demo 1: Response arrives in time ===\n")
 
     fsm = StateMachine(
         initial_state=AwaitingResponseState,
@@ -141,7 +140,6 @@ async def demo_with_response():
 
 async def demo_timeout_once():
     """Demo where timeout occurs once, then response arrives"""
-    print("\n=== Demo 2: Timeout once, then response ===\n")
 
     fsm = StateMachine(
         initial_state=AwaitingResponseState,
@@ -163,7 +161,6 @@ async def demo_timeout_once():
 
 async def demo_max_retries():
     """Demo where timeout occurs multiple times"""
-    print("\n=== Demo 3: Multiple timeouts (max retries) ===\n")
 
     fsm = StateMachine(
         initial_state=AwaitingResponseState,
@@ -181,9 +178,6 @@ async def demo_max_retries():
 
 
 async def main():
-    print("=== Septum Timeout Example ===")
-    print("States have timeouts to prevent infinite waiting\n")
-
     # Demo 1: Response arrives in time
     await demo_with_response()
 
@@ -192,8 +186,6 @@ async def main():
 
     # Demo 3: Multiple timeouts
     await demo_max_retries()
-
-    print("\n=== All demos complete ===")
 
 
 if __name__ == "__main__":

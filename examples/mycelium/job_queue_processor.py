@@ -296,17 +296,6 @@ def JobQueueProcessor(builder):
 async def main():
     """Run the job queue processor demo."""
 
-    print("=" * 80)
-    print("Job Queue Processor - BT-in-PN Integration Demo")
-    print("=" * 80)
-    print()
-    print("This demo shows a production job queue system with:")
-    print("  - Priority-based routing (CRITICAL > HIGH > MEDIUM > LOW)")
-    print("  - Job validation and enrichment")
-    print("  - Graceful rejection of invalid jobs")
-    print("  - Behavior Trees making intelligent routing decisions")
-    print()
-
     bb = Blackboard()
     timebase = MonotonicClock()
 
@@ -319,11 +308,6 @@ async def main():
     mermaid = runner.to_mermaid()
     print(mermaid)
     print("=" * 80)
-    print()
-    print("BTs are embedded as subgraphs within transitions.")
-    print("Subgraphs show BT structure:")
-    print("  - PriorityRouter: Selector with 4 routing actions")
-    print("  - JobValidator: Selector with validation sequence and pass-through")
     print()
 
     await runner.start(timebase)
@@ -396,18 +380,6 @@ async def main():
     print()
     print("Stopping job queue...")
     await runner.stop(timeout=1)
-
-    print()
-    print("=" * 80)
-    print("Demo complete!")
-    print("=" * 80)
-    print()
-    print("Key takeaways:")
-    print("  1. Behavior Trees handle complex routing logic outside the PN structure")
-    print("  2. Jobs are validated and enriched during processing")
-    print("  3. Invalid jobs are rejected and can be retried later")
-    print("  4. System is easy to extend: add new job types, priorities, or validators")
-    print()
 
 
 if __name__ == "__main__":

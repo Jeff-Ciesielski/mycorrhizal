@@ -229,19 +229,6 @@ def JobQueueNet(builder):
 async def main():
     """Run the job queue processor with Spores logging."""
 
-    print("=" * 70)
-    print("Mycelium + Spores: BT-in-PN with Event Logging")
-    print("=" * 70)
-    print()
-    print("This demo shows:")
-    print("  - Petri net (Hypha) with BT-in-transition")
-    print("  - Spores logging for both PN and BT")
-    print("  - HyphaAdapter for transition logging")
-    print("  - RhizomorphAdapter for node logging")
-    print("  - Object lifecycle tracking (queue, jobs)")
-    print("  - Event-object relationships")
-    print()
-
     # Create temporary file for spores output
     with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
         log_file = f.name
@@ -302,21 +289,6 @@ async def main():
     with open(log_file, 'r') as f:
         for i, line in enumerate(f, 1):
             print(f"Record {i}: {line.rstrip()}")
-
-    print()
-    print("=" * 70)
-    print("What was logged:")
-    print("  - Events:")
-    print("    - dispatch_job (PN transition)")
-    print("    - execute_processing (PN transition)")
-    print("    - validate_job, process_job, complete_job (BT nodes)")
-    print("  - Objects:")
-    print("    - JobQueue (GLOBAL scope)")
-    print("    - Jobs (EVENT scope)")
-    print("  - Relationships:")
-    print("    - event --[queue]--> queue-1")
-    print("    - event --[target]--> job-N")
-    print()
 
     # Clean up
     Path(log_file).unlink()

@@ -203,17 +203,6 @@ def RobotController():
 async def main():
     """Run the robot controller demo."""
 
-    print("=" * 70)
-    print("Mycelium FSM-in-BT Demo: Robot Controller")
-    print("=" * 70)
-    print()
-    print("This demo shows a robot that:")
-    print("  - Processes tasks (uses 20% battery per task)")
-    print("  - Goes to charging when battery <= 20%")
-    print("  - Charges to 100% before resuming work")
-    print("  - Uses FSM-integrated action with @Action(fsm=IdleState)")
-    print()
-
     # Create blackboard
     bb = RobotBlackboard(task_count=10, battery=100)
     tb = MonotonicClock()

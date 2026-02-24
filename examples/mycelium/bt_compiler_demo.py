@@ -223,10 +223,6 @@ async def main():
         await run_bt()
         await run_compiled_pn()
         await test_different_battery_levels()
-
-        print("\n" + "=" * 60)
-        print("Demo Complete")
-        print("=" * 60)
     except Exception as e:
         print(f"\nError: {e}")
         import traceback

@@ -135,11 +135,6 @@ class OrderProcessingSystem:
 async def main():
     """Run the order processing demo."""
 
-    print("=" * 70)
-    print("Standalone Spores Demo - ASYNC VERSION")
-    print("=" * 70)
-    print()
-
     # Create sample data
     customer = Customer(
         id="cust_001",
@@ -172,11 +167,6 @@ async def main():
 
     # Wait for async logging to complete
     await asyncio.sleep(0.1)
-
-    print("=" * 70)
-    print("Demo complete! Check 'logs/async_ocel.jsonl' for OCEL output")
-    print("=" * 70)
-    print()
 
 
 if __name__ == "__main__":

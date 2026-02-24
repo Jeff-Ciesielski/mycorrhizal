@@ -375,10 +375,6 @@ async def main():
     await demo_config_driven_tree()
     await demo_policy_modification()
 
-    print("\n" + "=" * 60)
-    print("All demos complete!")
-    print("=" * 60)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
