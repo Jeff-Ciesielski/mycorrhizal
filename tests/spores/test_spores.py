@@ -794,5 +794,84 @@ def test_sync_relationships_with_return_value(mock_sync_transport):
     assert obj_record["object"]["id"] == "ord-456"
 
 
+# ============================================================================
+# Regression: SyncEventLogger dispatch-thread timestamp race
+# ============================================================================
+
+def test_sync_event_logger_stamps_timestamp_at_call_site_not_dispatch(monkeypatch, mock_sync_transport):
+    """
+    Regression test for a race in SyncEventLogger: .event() used to compute
+    `datetime.now()` inside the daemon thread's body, i.e. at dispatch time
+    rather than at the call site. Since daemon threads have no relative
+    ordering guarantee, two sequentially-emitted events (e.g. an enter/exit
+    pair) could end up with INVERTED timestamps if the second call's thread
+    happened to run before the first call's thread - corrupting the
+    canonical (time, id) order every downstream OCEL consumer sorts by.
+
+    This test forces exactly that: it replaces threading.Thread with a
+    stand-in that queues the thread body instead of running it immediately,
+    calls .event() twice in sequence ("Work_start" then "Work_stop"), and
+    then deliberately runs the queued bodies in REVERSE order - the worst
+    case for a dispatch-time-stamped implementation. With the fix
+    (timestamp captured synchronously at the call site, before the thread
+    is even spawned), the recorded timestamps must still be non-decreasing
+    in call order even though dispatch/delivery order was inverted.
+    """
+    configure(enabled=True, transport=mock_sync_transport)
+
+    import mycorrhizal.spores.core as core
+
+    pending: list = []
+
+    class DeferredThread:
+        """Stand-in for threading.Thread: queues the target instead of
+        running it, so the test controls exactly when each daemon thread's
+        body executes."""
+
+        def __init__(self, target=None, daemon=None, **kwargs):
+            self._target = target
+
+        def start(self):
+            pending.append(self._target)
+
+    monkeypatch.setattr(core.threading, "Thread", DeferredThread)
+
+    sync_logger = get_spore_sync(__name__)
+
+    sync_logger.event("Work_start")
+    sync_logger.event("Work_stop")
+
+    assert len(pending) == 2, "both .event() calls should have queued a daemon-thread body"
+    assert len(mock_sync_transport.records) == 0, "nothing should be sent until the queued bodies run"
+
+    # Force delayed/inverted dispatch: the "stop" call's thread body runs
+    # (and, pre-fix, would have stamped its timestamp) BEFORE the "start"
+    # call's thread body.
+    pending[1]()  # dispatches "Work_stop" first
+    pending[0]()  # dispatches "Work_start" second
+
+    assert len(mock_sync_transport.records) == 2
+
+    # Delivery order itself is inverted - confirming this test actually
+    # exercises the race rather than being a no-op. Delivery-order
+    # inversion alone is a documented, accepted limitation of this logger;
+    # what must NOT invert is the recorded timestamp.
+    assert [r["event"]["type"] for r in mock_sync_transport.records] == ["Work_stop", "Work_start"]
+
+    start_record = next(r for r in mock_sync_transport.records if r["event"]["type"] == "Work_start")
+    stop_record = next(r for r in mock_sync_transport.records if r["event"]["type"] == "Work_stop")
+
+    # JSONEncoder encodes Event.time as a Unix float64 timestamp.
+    start_time = start_record["event"]["time"]
+    stop_time = stop_record["event"]["time"]
+
+    assert isinstance(start_time, float)
+    assert isinstance(stop_time, float)
+    assert start_time <= stop_time, (
+        "event timestamps must reflect call order (call-site stamping), "
+        "not daemon-thread dispatch order"
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -703,8 +703,21 @@ class SyncEventLogger(EventLogger):
     """
     Sync event logger for use in synchronous contexts.
 
-    Uses daemon threads for fire-and-forget logging - business logic never blocks.
-    Logs are written via sync transport's blocking send() (no event loop needed).
+    Uses daemon threads for fire-and-forget logging - business logic never
+    blocks. Logs are written via sync transport's blocking send() (no event
+    loop needed).
+
+    Timestamps reflect the instrumented call site, not dispatch time: each
+    daemon thread is scheduled independently by the OS, so two events fired
+    in quick succession (e.g. an enter/exit pair) have no ordering guarantee
+    on when their threads actually run or on when their transport.send()
+    calls land. `event()` and `log_object()` therefore capture
+    `datetime.now()` synchronously, before the daemon thread is spawned, and
+    carry that timestamp into the thread body. This guarantees the recorded
+    time reflects call order even when thread scheduling delivers or
+    executes the underlying sends out of order - callers that need delivery
+    order (not just timestamp order) still cannot assume it from this
+    logger.
     """
 
     def __init__(self, name: str):
@@ -713,6 +726,9 @@ class SyncEventLogger(EventLogger):
     def event(self, event_type: str, relationships: Dict[str, Relationship] | None = None, **kwargs) -> None:
         """
         Log an event in background daemon thread (fire-and-forget).
+
+        The timestamp is captured here, at the call site, before the daemon
+        thread is spawned - see the class docstring for why.
 
         Args:
             event_type: The type of event
@@ -723,9 +739,9 @@ class SyncEventLogger(EventLogger):
         if not config.enabled:
             return
 
-        def log_in_thread():
-            timestamp = datetime.now()
+        timestamp = datetime.now()
 
+        def log_in_thread():
             attr_values = {}
             for key, value in kwargs.items():
                 attr_values[key] = attribute_value_from_python(value)
@@ -746,14 +762,19 @@ class SyncEventLogger(EventLogger):
         thread.start()
 
     def log_object(self, obj_type: str, obj_id: str, **kwargs) -> None:
-        """Log an object in background daemon thread (fire-and-forget)."""
+        """
+        Log an object in background daemon thread (fire-and-forget).
+
+        The timestamp is captured here, at the call site, before the daemon
+        thread is spawned - see the class docstring for why.
+        """
         config = get_config()
         if not config.enabled:
             return
 
-        def log_in_thread():
-            timestamp = datetime.now()
+        timestamp = datetime.now()
 
+        def log_in_thread():
             attr_values = {}
             for key, value in kwargs.items():
                 attr_values[key] = object_attribute_from_python(value, time=timestamp)
