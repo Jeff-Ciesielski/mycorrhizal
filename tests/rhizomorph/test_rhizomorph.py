@@ -611,6 +611,62 @@ class TestParallel:
 
         assert status == Status.FAILURE
 
+    @pytest.mark.asyncio
+    async def test_parallel_children_do_not_share_a_contextvar(self, simple_bb, mock_tb):
+        """Pins the isolation `Parallel.tick()` relies on: `asyncio.create_task`
+        copies the current context once, at task-creation time, so mutating a
+        `contextvars.ContextVar` inside one child's task must never become
+        visible to a sibling's task or to the caller outside the tick - even
+        while the setting child holds the value open across a real await, so
+        the other children run concurrently with it for real wall-clock time.
+
+        This is the exact structure a fleet-side leak was once suspected to
+        come from (rhizomorph's own task-creation timing in `Parallel.tick()`)
+        before root-causing it to the fleet's own instrumentation instead: this
+        test is what would have caught it here, in the library, had the
+        suspicion been correct.
+        """
+        import contextvars
+
+        marker: contextvars.ContextVar[str] = contextvars.ContextVar(
+            "test_marker", default="unset"
+        )
+
+        @bt.tree
+        def Tree():
+            @bt.action
+            async def sets_marker(bb: SimpleBlackboard):
+                token = marker.set("A")
+                try:
+                    await asyncio.sleep(0.05)  # real wall-clock time, real yield
+                finally:
+                    marker.reset(token)
+                return Status.SUCCESS
+
+            @bt.action
+            async def samples_marker(bb: SimpleBlackboard):
+                for _ in range(5):
+                    bb.log.append(marker.get())
+                    await asyncio.sleep(0.01)
+                return Status.SUCCESS
+
+            @bt.root
+            @bt.parallel(success_threshold=2)
+            def root():
+                yield sets_marker
+                yield samples_marker
+
+        assert marker.get() == "unset"
+        runner = Runner(Tree, simple_bb, tb=mock_tb)
+        status = await runner.tick()
+
+        assert status == Status.SUCCESS
+        # The sibling never observed "A", not even during the real 50ms
+        # window the setting task held it open for.
+        assert simple_bb.log == ["unset"] * 5
+        # And the value never leaked back out into the caller's own context.
+        assert marker.get() == "unset"
+
 
 # =============================================================================
 # Test: Decorator Nodes
