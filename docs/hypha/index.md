@@ -103,6 +103,63 @@ builder.arc(input_place, my_transition)
 builder.arc(my_transition, output_place)
 ```
 
+### Guards
+
+A guard chooses the tokens a transition takes. The runtime calls it with the
+candidate bindings of the transition, which are all the ways to take tokens from
+its input places. A binding holds one tuple per input place, in the order the
+arcs were added, and each tuple holds as many tokens as the arc weight. The
+guard yields the bindings it accepts. The transition fires with the first one
+and consumes exactly its tokens. If the guard yields nothing, or returns
+`None`, the transition does not fire.
+
+This net ships an order only from a bin that holds the same SKU:
+
+```python
+@pn.net
+def Fulfil(builder):
+    orders = builder.place("orders")
+    stock = builder.place("stock")
+    shipped = builder.place("shipped")
+
+    def same_sku(bindings, bb, timebase):
+        for b in bindings:
+            (order,), (item,) = b
+            if order["sku"] == item["sku"]:
+                yield b
+
+    @builder.transition(guard=builder.guard(same_sku))
+    async def ship(consumed, bb, timebase):
+        order, item = consumed
+        yield {shipped: (order["id"], item["bin"])}
+
+    builder.arc(orders, ship)
+    builder.arc(stock, ship)
+    builder.arc(ship, shipped)
+```
+
+With one order `{"id": 1, "sku": "bolt"}` and the stock tokens
+`{"sku": "nut", "bin": "A3"}` and `{"sku": "bolt", "bin": "C7"}`, the guard
+sees two bindings and accepts the second. After the run, `shipped` holds
+`(1, 'C7')` and `stock` still holds the nut.
+
+Rules for guards:
+
+- Yield the binding objects you were given. A binding carries the identity of
+  its tokens, so two tokens with equal values stay distinct. A guard that
+  yields a new tuple raises `TypeError`.
+- The bindings arrive one at a time and can be read once. A guard that accepts
+  early stops the search early, so a large place costs little when a match
+  is near the front.
+- Places are multisets. The candidates follow the order the tokens arrived,
+  but that order is not part of the contract.
+- The runtime evaluates a guard again only after a token is added or a
+  transition delay ends. A guard may read the blackboard and the timebase, but
+  a change to them alone does not wake the transition. To wait on time, give
+  the transition a `delay`.
+- Two transitions that fire in the same cycle never take the same token.
+- A guard may be an async generator.
+
 ## Subnets
 
 Compose nets hierarchically:

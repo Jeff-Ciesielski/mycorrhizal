@@ -8,8 +8,8 @@ Manages token flow, transition firing, and asyncio task coordination.
 
 import asyncio
 from asyncio import Event, Task
-from typing import Any, List, Dict, Optional, Tuple, Callable
-from itertools import product, combinations
+from typing import Any, List, Dict, Iterator, Optional, Set, Tuple, Callable
+from itertools import combinations
 import inspect
 import logging
 import time
@@ -119,10 +119,6 @@ class IncidenceMatrix:
     # output_destinations[trans_idx] = {place_idx: produced_tokens}
     output_destinations: Dict[int, Dict[int, int]] = field(default_factory=dict)
 
-    # Cache token slots for each transition (computed once, reused)
-    # _token_slots_cache[trans_idx] = list of (place_idx, slot_idx) tuples
-    _token_slots_cache: Dict[int, List[Tuple[int, int]]] = field(default_factory=dict, init=False)
-
     def get(self, place_idx: int, trans_idx: int) -> int:
         """Get matrix entry at (place_idx, trans_idx)"""
         return self.matrix.get(place_idx, {}).get(trans_idx, 0)
@@ -157,27 +153,6 @@ class IncidenceMatrix:
             self.output_destinations[trans_idx][place_idx] = 0
         self.output_destinations[trans_idx][place_idx] += weight
 
-    def compute_state_change(self, firing_vector: List[int]) -> Dict[int, int]:
-        """Compute state change: delta = A @ F
-
-        Args:
-            firing_vector: List of length num_transitions with 0/1 values
-
-        Returns:
-            Dict mapping place_idx -> net_token_change
-        """
-        state_change: Dict[int, int] = {}
-
-        for place_idx, trans_entries in self.matrix.items():
-            delta = 0
-            for trans_idx, value in trans_entries.items():
-                delta += value * firing_vector[trans_idx]
-
-            if delta != 0:
-                state_change[place_idx] = delta
-
-        return state_change
-
     def is_enabled(self, trans_idx: int, marking: Dict[int, int]) -> bool:
         """Check if transition is enabled (has sufficient input tokens).
 
@@ -206,31 +181,6 @@ class IncidenceMatrix:
                 return False
 
         return True
-
-    def get_token_slots(self, trans_idx: int) -> List[Tuple[int, int]]:
-        """Get token consumption slots for a transition (cached for performance).
-
-        When multiple arcs connect the same place to a transition,
-        we need to consume separate tokens (or the same token multiple times for bag semantics).
-
-        Returns:
-            List of (place_idx, slot_index) tuples representing token consumption slots
-        """
-        # Return cached slots if available
-        if trans_idx in self._token_slots_cache:
-            return self._token_slots_cache[trans_idx]
-
-        if trans_idx not in self.input_requirements:
-            return []
-
-        slots = []
-        for place_idx, count in self.input_requirements[trans_idx].items():
-            for i in range(count):
-                slots.append((place_idx, i))
-
-        # Cache for future use
-        self._token_slots_cache[trans_idx] = slots
-        return slots
 
 
 def build_incidence_matrix(spec: NetSpec) -> IncidenceMatrix:
@@ -335,6 +285,10 @@ class TokenRegistry:
         if token_id in self._tokens:
             del self._tokens[token_id]
 
+    def pop(self, token_id: int) -> Any:
+        """Remove a token from the registry and return its data."""
+        return self._tokens.pop(token_id)
+
 
 @dataclass
 class Marking:
@@ -406,11 +360,6 @@ class Marking:
 
         self._invalidate_cache()
 
-    def peek_tokens(self, place_idx: int, count: int) -> List[Any]:
-        """Peek at tokens without removing."""
-        place_tokens = self.tokens.get(place_idx, [])
-        return place_tokens[:count]
-
     def has_tokens(self, place_idx: int, count: int) -> bool:
         """Check if place has at least count tokens."""
         return self.get_count(place_idx) >= count
@@ -457,79 +406,98 @@ class GuardMatrix:
         """Check if transition has a guard."""
         return self.guards.get(trans_idx, GuardInfo()).has_guard
 
-    def evaluate(
-        self,
-        trans_idx: int,
-        marking: Marking,
-        incidence_matrix: IncidenceMatrix,
-        bb: Any,
-        timebase: Any,
-        token_registry: TokenRegistry,
-    ) -> bool | Any:
-        """Evaluate guard for a transition.
-
-        Args:
-            trans_idx: Transition index
-            marking: Current marking
-            incidence_matrix: Incidence matrix for net structure
-            bb: Blackboard
-            timebase: Timebase
-            token_registry: Token registry for data lookups
-
-        Returns:
-            True if guard passes (or no guard), False otherwise
-            Can also return async generator for async guards (handled by caller)
-        """
+    def guard_func(self, trans_idx: int) -> Optional[Callable]:
+        """Return the guard function of a transition, or None if it has no guard."""
         guard_info = self.guards.get(trans_idx)
-        if not guard_info or not guard_info.has_guard:
-            return True
+        if guard_info is None or guard_info.guard_spec is None:
+            return None
+        return guard_info.guard_spec.func
 
-        guard_spec = guard_info.guard_spec
-        if guard_spec is None:
-            return True
 
-        # Get input places for this transition
-        input_places = incidence_matrix.input_requirements.get(trans_idx, {})
+class Binding(tuple):
+    """One candidate binding of a transition.
 
-        if not input_places:
-            # Generator transition - no tokens to evaluate
-            combinations = [[]]
-        else:
-            # Generate token combinations
-            arc_tokens = []
-            for place_idx, required_count in input_places.items():
-                tokens = marking.peek_tokens(place_idx, required_count)
-                if len(tokens) < required_count:
-                    return False  # Not enough tokens
+    The tuple holds one tuple of token values for each input place, in arc
+    order. A guard reads these values. `token_ids` holds the matching token
+    IDs, so that the runtime consumes the exact tokens of the binding even
+    when two tokens have equal values.
+    """
 
-                if required_count == 1:
-                    arc_tokens.append([(t,) for t in tokens])
-                else:
-                    arc_tokens.append(list(combinations(tokens, required_count)))
+    token_ids: Tuple[Tuple[int, ...], ...]
 
-            if not arc_tokens:
-                return False
+    def __new__(cls, values: Tuple[Tuple[Any, ...], ...], token_ids: Tuple[Tuple[int, ...], ...]):
+        binding = super().__new__(cls, values)
+        binding.token_ids = token_ids
+        return binding
 
-            combinations = list(product(*arc_tokens))
 
-        if not combinations:
-            return False
+def _id_choices(
+    pools: List[Tuple[int, ...]], counts: List[int]
+) -> Iterator[Tuple[Tuple[int, ...], ...]]:
+    """Yield each way to choose counts[i] token IDs from pools[i], for every i.
 
-        # Evaluate guard
-        guard_func = guard_spec.func
-        guard_result = guard_func(combinations, bb, timebase)
+    itertools.product reads all of its inputs before it yields, which for a
+    large place means building every combination first. This generator
+    builds one choice at a time, so a guard that accepts an early binding
+    stops the enumeration early.
+    """
+    if not pools:
+        yield ()
+        return
+    for head in combinations(pools[0], counts[0]):
+        for rest in _id_choices(pools[1:], counts[1:]):
+            yield (head,) + rest
 
-        # Check if guard passed any combination
-        if inspect.isgenerator(guard_result):
-            for result in guard_result:
-                if result is not None:
-                    return True
-            return False
-        elif inspect.isasyncgen(guard_result):
-            # Need to handle async guard - return coroutine for caller to await
-            return guard_result
-        else:
-            return guard_result is not None
+
+_NO_BINDING = object()
+
+
+def _yielded_binding(item: Any, trans_fqn: Tuple[str, ...]) -> Optional[Binding]:
+    """Parse the first item a guard generator yielded."""
+    if item is _NO_BINDING:
+        return None
+    if isinstance(item, Binding):
+        return item
+    raise TypeError(
+        f"guard of {'.'.join(trans_fqn)} yielded {item!r}: a guard must yield "
+        f"one of the binding objects it was given"
+    )
+
+
+def _returned_binding(result: Any, trans_fqn: Tuple[str, ...]) -> Optional[Binding]:
+    """Parse the return value of a guard that is not a generator."""
+    if result is None or isinstance(result, Binding):
+        return result
+    raise TypeError(
+        f"guard of {'.'.join(trans_fqn)} returned {result!r}: a guard must "
+        f"return None or one of the binding objects it was given"
+    )
+
+
+def _sync_guard_choice(result: Any, trans_fqn: Tuple[str, ...]) -> Optional[Binding]:
+    """Get the binding from the result of a guard call, for a guard that does not await."""
+    if inspect.isgenerator(result):
+        try:
+            return _yielded_binding(next(result, _NO_BINDING), trans_fqn)
+        finally:
+            result.close()
+    return _returned_binding(result, trans_fqn)
+
+
+@dataclass
+class FiringPlan:
+    """The transitions that fire in one cycle, each with its binding.
+
+    No two bindings share a token. `next_delay` is the time on the timebase
+    until the earliest pending transition delay ends, or None if no delay
+    is pending.
+    """
+    bindings: List[Tuple[int, Binding]] = field(default_factory=list)
+    next_delay: Optional[float] = None
+
+    def note_delay(self, remaining: float):
+        if self.next_delay is None or remaining < self.next_delay:
+            self.next_delay = remaining
 
 
 def build_guard_matrix(spec: NetSpec, incidence_matrix: IncidenceMatrix) -> GuardMatrix:
@@ -573,10 +541,16 @@ class MatrixRuntime:
     per-transition asyncio overhead.
 
     Execution model:
-    1. Build firing vector F by evaluating enabled transitions
-    2. Fire via M_new = M + (A @ F)
-    3. Process token data flow for fired transitions
-    4. Repeat
+    1. Build a firing plan: for each enabled transition, choose a binding
+       whose tokens no earlier transition in the plan has taken
+    2. Fire each planned transition: remove the tokens of its binding and
+       run its handler with their values
+    3. If nothing fired, wait until the marking changes or a transition
+       delay ends, then repeat
+
+    A guard is a function of its candidate bindings. It may read the
+    blackboard and the timebase, but the runtime evaluates it again only
+    after the marking changes or a delay ends.
     """
 
     def __init__(self, spec: NetSpec, bb: Any, timebase: Any):
@@ -597,6 +571,8 @@ class MatrixRuntime:
         self.token_registry = TokenRegistry()
         self._stop_event = asyncio.Event()
         self._stop_event_sync = False  # Synchronous stop flag
+        # Set each time a token is added. The run loop waits on it when idle.
+        self._marking_changed = asyncio.Event()
 
         # Transition specs for execution
         self._transition_specs: Dict[int, TransitionSpec] = {}
@@ -666,7 +642,10 @@ class MatrixRuntime:
                 return True
 
             # Check if guard is async
-            if trans_spec.guard and inspect.isasyncgenfunction(trans_spec.guard.func):
+            if trans_spec.guard and (
+                inspect.isasyncgenfunction(trans_spec.guard.func)
+                or inspect.iscoroutinefunction(trans_spec.guard.func)
+            ):
                 return True
 
         return False
@@ -796,8 +775,7 @@ class MatrixRuntime:
                 gen = handler()  # type: ignore[call-arg]
 
             async for token in gen:
-                token_id = self.token_registry.register(token)
-                self.marking.add_tokens(place_idx, [token_id])
+                self.add_token(place_idx, token)
         except asyncio.CancelledError:
             pass
 
@@ -814,13 +792,10 @@ class MatrixRuntime:
                 await place_spec.handler(token)
 
     def add_token(self, place_idx: int, token: Any):
-        """Add a token to a place."""
-        if isinstance(token, int) and token in self.token_registry._tokens:
-            # Already a token ID
-            token_id = token
-        else:
-            token_id = self.token_registry.register(token)
+        """Add a token to a place. Each call adds a new token, whatever its value."""
+        token_id = self.token_registry.register(token)
         self.marking.add_tokens(place_idx, [token_id])
+        self._marking_changed.set()
 
     def add_token_by_fqn(self, place_fqn: Tuple[str, ...], token: Any):
         """Add a token by place FQN."""
@@ -835,66 +810,100 @@ class MatrixRuntime:
             return self.marking.get_count(place_idx)
         return 0
 
-    async def _build_firing_vector(self) -> List[int]:
-        """Build firing vector F by evaluating enabled transitions.
+    def _candidate_bindings(self, trans_idx: int, reserved: Set[int]) -> Iterator[Binding]:
+        """Return the candidate bindings of a transition, one at a time.
 
-        Returns:
-            List of 0/1 values indicating which transitions fire
+        Each input place with arc weight k offers every k-combination of its
+        tokens that are not in `reserved`. A transition with no input places
+        has one candidate: the empty binding.
         """
-        firing_vector = [0] * self.incidence_matrix.num_transitions
+        inputs = self.incidence_matrix.input_requirements.get(trans_idx, {})
+        pools = [
+            tuple(t for t in self.marking.tokens.get(place_idx, ()) if t not in reserved)
+            for place_idx in inputs
+        ]
+        counts = list(inputs.values())
+        registry = self.token_registry
+        return (
+            Binding(tuple(tuple(registry.get(t) for t in ids) for ids in choice), choice)
+            for choice in _id_choices(pools, counts)
+        )
 
-        # Get count dict once per cycle (cached in Marking)
+    def _delay_remaining(self, trans_idx: int) -> float:
+        """Return the time a token-enabled transition must still wait before it fires."""
+        trans_spec = self._transition_specs.get(trans_idx)
+        if not trans_spec or trans_spec.delay <= 0:
+            return 0.0
+        now = self.timebase.now()
+        enabled_time = self._enabled_times.setdefault(trans_idx, now)
+        return max(0.0, enabled_time + trans_spec.delay - now)
+
+    def _ready_transitions(self, plan: FiringPlan) -> Iterator[int]:
+        """Yield the transitions that have enough tokens and no pending delay.
+
+        Record each pending delay in the plan.
+        """
         count_dict = self.marking.get_count_dict()
-
         for trans_idx in range(self.incidence_matrix.num_transitions):
-            # Check if enabled (has sufficient tokens)
             if not self.incidence_matrix.is_enabled(trans_idx, count_dict):
                 self._enabled_times.pop(trans_idx, None)
                 continue
+            remaining = self._delay_remaining(trans_idx)
+            if remaining > 0:
+                plan.note_delay(remaining)
+                continue
+            yield trans_idx
 
-            # Track enabled time for delay support
-            trans_spec = self._transition_specs.get(trans_idx)
-            if trans_spec and trans_spec.delay > 0:
-                if trans_idx not in self._enabled_times:
-                    self._enabled_times[trans_idx] = self.timebase.now()
+    async def _choose_binding(self, trans_idx: int, candidates: Iterator[Binding]) -> Optional[Binding]:
+        """Return the binding that the guard accepts first, or None."""
+        guard = self.guard_matrix.guard_func(trans_idx)
+        if guard is None:
+            return next(candidates, None)
+        trans_fqn = self.incidence_matrix.idx_to_transition[trans_idx]
+        result = guard(candidates, self.bb, self.timebase)
+        if inspect.isasyncgen(result):
+            try:
+                return _yielded_binding(await anext(result, _NO_BINDING), trans_fqn)
+            finally:
+                await result.aclose()
+        if inspect.iscoroutine(result):
+            return _returned_binding(await result, trans_fqn)
+        return _sync_guard_choice(result, trans_fqn)
 
-                # Check if delay has elapsed
-                enabled_time = self._enabled_times.get(trans_idx)
-                if enabled_time is None:
-                    continue
+    def _choose_binding_sync(self, trans_idx: int, candidates: Iterator[Binding]) -> Optional[Binding]:
+        """Return the binding that the guard accepts first, or None (synchronous)."""
+        guard = self.guard_matrix.guard_func(trans_idx)
+        if guard is None:
+            return next(candidates, None)
+        trans_fqn = self.incidence_matrix.idx_to_transition[trans_idx]
+        return _sync_guard_choice(guard(candidates, self.bb, self.timebase), trans_fqn)
 
-                elapsed = self.timebase.now() - enabled_time
-                if elapsed < trans_spec.delay:
-                    continue
+    def _take_binding(self, trans_idx: int, binding: Binding) -> List[Any]:
+        """Remove the tokens of a binding from the marking and return their values."""
+        inputs = self.incidence_matrix.input_requirements.get(trans_idx, {})
+        for place_idx, ids in zip(inputs, binding.token_ids):
+            self.marking.remove_tokens_fast(place_idx, list(ids))
+        return [self.token_registry.pop(t) for ids in binding.token_ids for t in ids]
 
-            # Evaluate guard
-            guard_result = self.guard_matrix.evaluate(
-                trans_idx,
-                self.marking,
-                self.incidence_matrix,
-                self.bb,
-                self.timebase,
-                self.token_registry,
+    async def _build_firing_plan(self) -> FiringPlan:
+        """Choose the transitions that fire in this cycle and their bindings."""
+        plan = FiringPlan()
+        reserved: Set[int] = set()
+        for trans_idx in self._ready_transitions(plan):
+            binding = await self._choose_binding(
+                trans_idx, self._candidate_bindings(trans_idx, reserved)
             )
+            if binding is not None:
+                plan.bindings.append((trans_idx, binding))
+                reserved.update(t for ids in binding.token_ids for t in ids)
+        return plan
 
-            # Handle async guard
-            if inspect.isasyncgen(guard_result):
-                guard_passed = False
-                async for result in guard_result:
-                    if result is not None:
-                        guard_passed = True
-                        break
-                if not guard_passed:
-                    continue
-            elif isinstance(guard_result, bool) and not guard_result:
-                continue
-            elif not guard_result:
-                continue
-
-            # Transition fires!
-            firing_vector[trans_idx] = 1
-
-        return firing_vector
+    async def _fire_plan(self, plan: FiringPlan):
+        """Fire each planned transition with the tokens of its binding."""
+        for trans_idx, binding in plan.bindings:
+            consumed = self._take_binding(trans_idx, binding)
+            await self._execute_transition(trans_idx, consumed)
+            self._enabled_times.pop(trans_idx, None)
 
     async def _execute_transition(self, trans_idx: int, input_tokens: List[Any]):
         """Execute a transition with input tokens.
@@ -1033,96 +1042,26 @@ class MatrixRuntime:
             if place_idx not in explicit_targets:
                 await self._add_token_to_place(trans_idx, place_idx, wildcard_token)
 
-    async def _fire_transitions(self, firing_vector: List[int]):
-        """Fire transitions using matrix multiplication and process data flow.
+    async def run_cycle(self) -> bool:
+        """Run a single execution cycle. Return True if any transition fired."""
+        plan = await self._build_firing_plan()
+        await self._fire_plan(plan)
+        return bool(plan.bindings)
 
-        This is the CRITICAL method: state transformation is ALWAYS via matmul.
-
-        CRITICAL: When multiple transitions compete for the same input place, we must
-        fire them sequentially (each consumes its tokens before the next fires) to ensure
-        each token is consumed by exactly one transition per cycle.
-
-        Args:
-            firing_vector: Binary vector indicating which transitions fire
-        """
-        # Step 1: Compute state change via matrix multiplication
-        # M_new = M + (A @ F)
-        # Note: We compute this for theoretical completeness, but actual state
-        # changes happen through token data flow in Step 2
-        _state_change = self.incidence_matrix.compute_state_change(firing_vector)
-
-        # Step 2: Fire transitions one at a time, removing tokens immediately
-        # This prevents multiple transitions from consuming the same token
-        for trans_idx in range(len(firing_vector)):
-            if firing_vector[trans_idx] == 0:
-                continue
-
-            # Get token consumption slots (handles multiple arcs from same place)
-            token_slots = self.incidence_matrix.get_token_slots(trans_idx)
-            if not token_slots:
-                # No input requirements (generator transition)
-                consumed_data = []
-                await self._execute_transition(trans_idx, consumed_data)
-                self._enabled_times.pop(trans_idx, None)
-                continue
-
-            # Collect input tokens by peeking (not removing yet)
-            # Group by place to avoid duplicates when multiple slots from same place
-            consumed_by_place: Dict[int, List[int]] = {}
-            for place_idx, slot_idx in token_slots:
-                if place_idx not in consumed_by_place:
-                    # Peek at tokens from this place
-                    count = self.incidence_matrix.input_requirements[trans_idx][place_idx]
-                    tokens = self.marking.peek_tokens(place_idx, count)
-                    if len(tokens) < count:
-                        # Not enough tokens - skip this transition
-                        # (can happen when another transition in same cycle consumed them)
-                        consumed_by_place = {}
-                        break
-                    consumed_by_place[place_idx] = tokens
-
-            # Check if we got all required tokens
-            if not consumed_by_place:
-                self._enabled_times.pop(trans_idx, None)
-                continue
-
-            # Flatten consumed tokens (including duplicates for multiple arcs from same place)
-            consumed = []
-            for place_idx, slot_idx in token_slots:
-                if place_idx in consumed_by_place and consumed_by_place[place_idx]:
-                    # Take the next token from this place (repeating if needed for multiple slots)
-                    token_idx = slot_idx % len(consumed_by_place[place_idx])
-                    consumed.append(consumed_by_place[place_idx][token_idx])
-
-            # Remove consumed tokens IMMEDIATELY before executing
-            # This ensures subsequent transitions don't see these tokens
-            # Use fast removal for each place
-            for place_idx, count in self.incidence_matrix.input_requirements.get(trans_idx, {}).items():
-                if place_idx in consumed_by_place:
-                    # Get the tokens from this place (consumed_by_place has the original order)
-                    place_tokens_to_remove = consumed_by_place[place_idx][:count]
-                    # Use optimized removal
-                    self.marking.remove_tokens_fast(place_idx, place_tokens_to_remove)
-
-            # Convert token IDs to data
-            consumed_data = [self.token_registry.get(tid) for tid in consumed]
-
-            # Execute transition
-            await self._execute_transition(trans_idx, consumed_data)
-
-            # Clear enabled time after firing
-            self._enabled_times.pop(trans_idx, None)
-
-    async def run_cycle(self):
-        """Run a single execution cycle."""
-        # Build firing vector
-        firing_vector = await self._build_firing_vector()
-
-        # Fire transitions (matmul + data flow)
-        await self._fire_transitions(firing_vector)
-
-        # Return whether any transitions fired
-        return any(firing_vector)
+    async def _wait_for_change(self, next_delay: Optional[float]):
+        """Wait until a token is added, the runtime stops, or a delay ends."""
+        waits = [
+            asyncio.ensure_future(self._marking_changed.wait()),
+            asyncio.ensure_future(self._stop_event.wait()),
+        ]
+        if next_delay is not None:
+            waits.append(asyncio.ensure_future(self.timebase.sleep(next_delay)))
+        try:
+            await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for w in waits:
+                w.cancel()
+            await asyncio.gather(*waits, return_exceptions=True)
 
     async def run(self):
         """Main execution loop."""
@@ -1131,14 +1070,16 @@ class MatrixRuntime:
         try:
             cycle_timeout = 30.0  # Safety timeout for single cycle (seconds)
 
-            # For pure computational nets (no async features), use minimal sleeps
-            use_fast_loop = not self._has_async_features
-
             while not self._stop_event.is_set():
+                # Clear before the cycle, so that a token added during the
+                # cycle wakes the wait below.
+                self._marking_changed.clear()
+
                 # Record cycle start time BEFORE running the cycle
                 cycle_start = time.perf_counter()
 
-                fired = await self.run_cycle()
+                plan = await self._build_firing_plan()
+                await self._fire_plan(plan)
 
                 # Check for hard loop (single cycle taking too long)
                 cycle_elapsed = time.perf_counter() - cycle_start
@@ -1146,7 +1087,14 @@ class MatrixRuntime:
                     logger.warning(" Cycle timeout detected (%.2fs), stopping to prevent hard loop",
                                  cycle_elapsed)
                     break
-                await asyncio.sleep(1e-10)
+
+                if plan.bindings:
+                    # Let other tasks run before the next cycle
+                    await asyncio.sleep(0)
+                else:
+                    # Nothing is enabled. Only a new token or the end of a
+                    # delay can change that.
+                    await self._wait_for_change(plan.next_delay)
 
         except asyncio.CancelledError:
             logger.debug(" Execution cancelled")
@@ -1213,60 +1161,25 @@ class MatrixRuntime:
     # Synchronous Execution Mode
     # =============================================================================
 
-    def _build_firing_vector_sync(self) -> List[int]:
-        """Build firing vector F by evaluating enabled transitions (synchronous).
-
-        Returns:
-            List of 0/1 values indicating which transitions fire
-        """
-        firing_vector = [0] * self.incidence_matrix.num_transitions
-
-        # Get count dict once per cycle (cached in Marking)
-        count_dict = self.marking.get_count_dict()
-
-        for trans_idx in range(self.incidence_matrix.num_transitions):
-            # Check if enabled (has sufficient tokens)
-            if not self.incidence_matrix.is_enabled(trans_idx, count_dict):
-                self._enabled_times.pop(trans_idx, None)
-                continue
-
-            # Track enabled time for delay support
-            trans_spec = self._transition_specs.get(trans_idx)
-            if trans_spec and trans_spec.delay > 0:
-                if trans_idx not in self._enabled_times:
-                    self._enabled_times[trans_idx] = self.timebase.now()
-
-                # Check if delay has elapsed
-                enabled_time = self._enabled_times.get(trans_idx)
-                if enabled_time is None:
-                    continue
-
-                elapsed = self.timebase.now() - enabled_time
-                if elapsed < trans_spec.delay:
-                    continue
-
-            # Evaluate guard (synchronous only - async guards not supported in sync mode)
-            guard_result = self.guard_matrix.evaluate(
-                trans_idx,
-                self.marking,
-                self.incidence_matrix,
-                self.bb,
-                self.timebase,
-                self.token_registry,
+    def _build_firing_plan_sync(self) -> FiringPlan:
+        """Choose the transitions that fire in this cycle and their bindings (synchronous)."""
+        plan = FiringPlan()
+        reserved: Set[int] = set()
+        for trans_idx in self._ready_transitions(plan):
+            binding = self._choose_binding_sync(
+                trans_idx, self._candidate_bindings(trans_idx, reserved)
             )
+            if binding is not None:
+                plan.bindings.append((trans_idx, binding))
+                reserved.update(t for ids in binding.token_ids for t in ids)
+        return plan
 
-            # Skip async guards in sync mode
-            if inspect.isasyncgen(guard_result):
-                continue
-            elif isinstance(guard_result, bool) and not guard_result:
-                continue
-            elif not guard_result:
-                continue
-
-            # Transition fires!
-            firing_vector[trans_idx] = 1
-
-        return firing_vector
+    def _fire_plan_sync(self, plan: FiringPlan):
+        """Fire each planned transition with the tokens of its binding (synchronous)."""
+        for trans_idx, binding in plan.bindings:
+            consumed = self._take_binding(trans_idx, binding)
+            self._execute_transition_sync(trans_idx, consumed)
+            self._enabled_times.pop(trans_idx, None)
 
     def _execute_transition_sync(self, trans_idx: int, input_tokens: List[Any]):
         """Execute a transition with input tokens (synchronous).
@@ -1357,98 +1270,15 @@ class MatrixRuntime:
             if place_idx not in explicit_targets:
                 self._add_token_to_place_sync(trans_idx, place_idx, wildcard_token)
 
-    def _fire_transitions_sync(self, firing_vector: List[int]):
-        """Fire transitions using matrix multiplication and process data flow (synchronous).
-
-        This is the synchronous version of _fire_transitions for pure computational nets.
-
-        CRITICAL: When multiple transitions compete for the same input place, we must
-        fire them sequentially (each consumes its tokens before the next fires) to ensure
-        each token is consumed by exactly one transition per cycle.
-
-        Args:
-            firing_vector: Binary vector indicating which transitions fire
-        """
-        # Step 1: Compute state change via matrix multiplication
-        # M_new = M + (A @ F)
-        _state_change = self.incidence_matrix.compute_state_change(firing_vector)
-
-        # Step 2: Fire transitions one at a time, removing tokens immediately
-        # This prevents multiple transitions from consuming the same token
-        for trans_idx in range(len(firing_vector)):
-            if firing_vector[trans_idx] == 0:
-                continue
-
-            # Get token consumption slots (handles multiple arcs from same place)
-            token_slots = self.incidence_matrix.get_token_slots(trans_idx)
-            if not token_slots:
-                # No input requirements (generator transition)
-                consumed_data = []
-                self._execute_transition_sync(trans_idx, consumed_data)
-                self._enabled_times.pop(trans_idx, None)
-                continue
-
-            # Collect input tokens by peeking (not removing yet)
-            # Group by place to avoid duplicates when multiple slots from same place
-            consumed_by_place: Dict[int, List[int]] = {}
-            for place_idx, slot_idx in token_slots:
-                if place_idx not in consumed_by_place:
-                    # Peek at tokens from this place
-                    count = self.incidence_matrix.input_requirements[trans_idx][place_idx]
-                    tokens = self.marking.peek_tokens(place_idx, count)
-                    if len(tokens) < count:
-                        # Not enough tokens - skip this transition
-                        # (can happen when another transition in same cycle consumed them)
-                        consumed_by_place = {}
-                        break
-                    consumed_by_place[place_idx] = tokens
-
-            # Check if we got all required tokens
-            if not consumed_by_place:
-                self._enabled_times.pop(trans_idx, None)
-                continue
-
-            # Flatten consumed tokens (including duplicates for multiple arcs from same place)
-            consumed = []
-            for place_idx, slot_idx in token_slots:
-                if place_idx in consumed_by_place and consumed_by_place[place_idx]:
-                    # Take the next token from this place (repeating if needed for multiple slots)
-                    token_idx = slot_idx % len(consumed_by_place[place_idx])
-                    consumed.append(consumed_by_place[place_idx][token_idx])
-
-            # Remove consumed tokens IMMEDIATELY before executing
-            # This ensures subsequent transitions don't see these tokens
-            # Use fast removal for each place
-            for place_idx, count in self.incidence_matrix.input_requirements.get(trans_idx, {}).items():
-                if place_idx in consumed_by_place:
-                    # Get the tokens from this place (consumed_by_place has the original order)
-                    place_tokens_to_remove = consumed_by_place[place_idx][:count]
-                    # Use optimized removal
-                    self.marking.remove_tokens_fast(place_idx, place_tokens_to_remove)
-
-            # Convert token IDs to data
-            consumed_data = [self.token_registry.get(tid) for tid in consumed]
-
-            # Execute transition
-            self._execute_transition_sync(trans_idx, consumed_data)
-
-            # Clear enabled time after firing
-            self._enabled_times.pop(trans_idx, None)
-
     def run_cycle_sync(self) -> bool:
         """Run a single execution cycle (synchronous).
 
         Returns:
             True if any transitions fired, False otherwise
         """
-        # Build firing vector
-        firing_vector = self._build_firing_vector_sync()
-
-        # Fire transitions (matmul + data flow)
-        self._fire_transitions_sync(firing_vector)
-
-        # Return whether any transitions fired
-        return any(firing_vector)
+        plan = self._build_firing_plan_sync()
+        self._fire_plan_sync(plan)
+        return bool(plan.bindings)
 
     def run_sync(self, max_cycles: int = 100000):
         """Run the net to completion or max cycles (synchronous execution).

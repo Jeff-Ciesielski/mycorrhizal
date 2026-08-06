@@ -41,8 +41,10 @@ Transitions:
     They are async functions that yield dictionaries mapping place references to tokens.
 
 Guards:
-    Guards are conditions that must be satisfied for a transition to fire.
-    They can check token values, blackboard state, or external conditions.
+    A guard receives the candidate bindings of a transition and yields the
+    ones it accepts. The transition consumes the tokens of the first accepted
+    binding. The runtime evaluates a guard again only when a token is added
+    or a transition delay ends.
 """
 
 from .specs import (

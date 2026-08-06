@@ -132,7 +132,11 @@ class NetBuilder:
         return decorator
 
     def guard(self, func: Callable) -> GuardSpec:
-        """Create a guard specification from a function"""
+        """Create a guard specification from a function.
+
+        The function receives the candidate bindings of the transition and
+        yields the ones it accepts. See GuardSpec.
+        """
         return GuardSpec(func)
 
     def transition(

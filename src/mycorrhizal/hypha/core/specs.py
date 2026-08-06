@@ -26,8 +26,16 @@ class PlaceSpec:
 
 @dataclass
 class GuardSpec:
-    """Specification for a guard function"""
-    func: Callable  # Signature: (tokens, bb, timebase) -> Iterator[tuple]
+    """Specification for a guard function.
+
+    Signature: (bindings, bb, timebase) -> yields the accepted bindings.
+    `bindings` is an iterator over the candidate bindings of the transition.
+    Each binding holds one tuple of token values per input place, in arc
+    order. The transition consumes the tokens of the first binding the guard
+    yields. A guard that yields nothing, or returns None, does not fire.
+    See docs/hypha/index.md, section "Guards".
+    """
+    func: Callable
 
 
 @dataclass
