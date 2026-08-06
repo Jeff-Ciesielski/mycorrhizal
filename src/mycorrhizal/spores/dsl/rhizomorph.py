@@ -13,6 +13,7 @@ import functools
 import inspect
 import logging
 import threading
+import weakref
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -58,41 +59,80 @@ class _RunRegistry:
     and including a condition returning a bool). Ticks in between are counted and
     not logged.
 
-    State is keyed by (node, case identity), never by node alone. One node function
-    is ticked against many blackboards when a tree serves several entities
-    concurrently, and a key of node alone would let one entity's run suppress
-    another entity's start.
+    State is keyed by the blackboard's identity and evicted when the blackboard is
+    collected. One node function is ticked against many blackboards when a tree
+    serves several entities concurrently, and per-node state alone would let one
+    entity's open run suppress another entity's start.
+
+    The eviction matters for correctness, not just for memory. id() is unique only
+    among SIMULTANEOUSLY existing objects, so a bare id key would let a run left
+    open by a blackboard that has since been freed sit on the address a later
+    blackboard is allocated at, and that later entity would be read as a
+    continuation of the dead one. Holding a weakref with a callback removes the
+    entry exactly when the object dies, so the address cannot be reused while the
+    entry exists.
+
+    A WeakKeyDictionary cannot be used here: it needs keys that are hashable as
+    well as weak-referenceable, and a pydantic BaseModel defines __eq__ and so has
+    __hash__ set to None. Blackboards are routinely pydantic models.
+
+    A blackboard that cannot be weak-referenced at all is not tracked, and its
+    nodes log per tick as before. Telemetry degrades rather than raising into the
+    tree.
     """
 
     def __init__(self):
-        self._open: Dict[Any, int] = {}
-        self._lock = threading.Lock()
+        self._runs: Dict[int, Dict[str, int]] = {}
+        self._refs: Dict[int, "weakref.ref[Any]"] = {}
+        # Reentrant: a weakref callback can fire during an allocation made while
+        # this lock is held, on the same thread.
+        self._lock = threading.RLock()
+        self._warned_untrackable = False
 
     @staticmethod
-    def key(func: Callable, bb: Any) -> Any:
-        try:
-            objects = extract_objects_from_blackboard(bb)
-            identity = tuple(sorted(obj.id for obj in objects))
-        except Exception:
-            identity = ()
-        if not identity:
-            # No global-scope object on the blackboard. Fall back to the
-            # blackboard's own identity so concurrent blackboards still do not
-            # share run state.
-            identity = (id(bb),)
-        return (getattr(func, "__qualname__", func.__name__), identity)
+    def node_key(func: Callable) -> str:
+        return getattr(func, "__qualname__", func.__name__)
 
-    def tick(self, key: Any) -> int:
-        """Count this tick against the run. A return of 1 opened the run."""
+    def _forget(self, key: int) -> None:
         with self._lock:
-            count = self._open.get(key, 0) + 1
-            self._open[key] = count
+            self._runs.pop(key, None)
+            self._refs.pop(key, None)
+
+    def tick(self, bb: Any, node: str) -> Optional[int]:
+        """Count this tick against the run. 1 opened the run; None means the
+        blackboard cannot be tracked, so the caller logs per tick."""
+        with self._lock:
+            key = id(bb)
+            if key not in self._runs:
+                try:
+                    self._refs[key] = weakref.ref(bb, lambda _ref, k=key: self._forget(k))
+                except TypeError:
+                    if not self._warned_untrackable:
+                        self._warned_untrackable = True
+                        logger.warning(
+                            "blackboard type %s cannot be weak-referenced; its nodes "
+                            "are logged per tick rather than per run",
+                            type(bb).__name__,
+                        )
+                    return None
+                self._runs[key] = {}
+            runs = self._runs[key]
+            count = runs.get(node, 0) + 1
+            runs[node] = count
             return count
 
-    def close(self, key: Any) -> int:
+    def close(self, bb: Any, node: str) -> int:
         """End the run and return how many ticks it lasted."""
         with self._lock:
-            return self._open.pop(key, 0)
+            runs = self._runs.get(id(bb))
+            if runs is None:
+                return 0
+            return runs.pop(node, 0)
+
+    def open_carriers(self) -> int:
+        """Blackboards with at least one open run. For tests."""
+        with self._lock:
+            return sum(1 for runs in self._runs.values() if runs)
 
 
 def _is_running(result: Any) -> bool:
@@ -211,24 +251,37 @@ class RhizomorphAdapter:
                 # One run may span many ticks. `opening` is true only on the
                 # tick that started it, and the run closes on the first tick
                 # that does not return RUNNING.
-                run_key = _RunRegistry.key(func, bb)
-                opening = _RUNS.tick(run_key) == 1
+                node = _RunRegistry.node_key(func)
+                ticks = _RUNS.tick(bb, node)
+                opening = ticks is None or ticks == 1
 
                 if not resolved_enter_exit:
-                    # Call original node function
-                    if _supports_timebase(func):
-                        result = await func(bb=bb, tb=tb)
-                    else:
-                        result = await func(bb=bb)
+                    # A raise ends the run as surely as a terminal status does, so
+                    # the close sits in a finally. Without it the entry outlives
+                    # the failure and the next run of this node on this blackboard
+                    # is read as a continuation.
+                    settled = False
+                    try:
+                        # Call original node function
+                        if _supports_timebase(func):
+                            result = await func(bb=bb, tb=tb)
+                        else:
+                            result = await func(bb=bb)
+                    except BaseException:
+                        settled = True
+                        raise
+                    finally:
+                        if settled:
+                            _RUNS.close(bb, node)
 
-                    if _is_running(result):
+                    if ticks is not None and _is_running(result):
                         # The run continues. One activity, so no second event.
                         return result
 
                     # Log event
                     await _log_node_event(
                         func, bb, tb, event_type, attributes, log_status, result,
-                        _RUNS.close(run_key)
+                        _RUNS.close(bb, node) or 1
                     )
 
                     return result
@@ -258,13 +311,13 @@ class RhizomorphAdapter:
                 else:
                     if isinstance(result, Status):
                         status_name = result.name
-                    still_running = _is_running(result)
+                    still_running = ticks is not None and _is_running(result)
                     return result
                 finally:
                     if not still_running:
                         await _log_node_lifecycle_event(
                             func, bb, tb, event_type, log_status, "stop",
-                            status_name, _RUNS.close(run_key)
+                            status_name, _RUNS.close(bb, node) or 1
                         )
 
             @functools.wraps(func)
@@ -273,24 +326,35 @@ class RhizomorphAdapter:
                     self._enter_exit if enter_exit is None else enter_exit
                 )
 
-                run_key = _RunRegistry.key(func, bb)
-                opening = _RUNS.tick(run_key) == 1
+                node = _RunRegistry.node_key(func)
+                ticks = _RUNS.tick(bb, node)
+                opening = ticks is None or ticks == 1
 
                 if not resolved_enter_exit:
-                    # Call original node function
-                    if _supports_timebase(func):
-                        result = func(bb=bb, tb=tb)
-                    else:
-                        result = func(bb=bb)
+                    # See the async wrapper: a raise ends the run, so the close
+                    # sits in a finally.
+                    settled = False
+                    try:
+                        # Call original node function
+                        if _supports_timebase(func):
+                            result = func(bb=bb, tb=tb)
+                        else:
+                            result = func(bb=bb)
+                    except BaseException:
+                        settled = True
+                        raise
+                    finally:
+                        if settled:
+                            _RUNS.close(bb, node)
 
-                    if _is_running(result):
+                    if ticks is not None and _is_running(result):
                         # The run continues. One activity, so no second event.
                         return result
 
                     # Schedule logging
                     asyncio.create_task(_log_node_event(
                         func, bb, tb, event_type, attributes, log_status, result,
-                        _RUNS.close(run_key)
+                        _RUNS.close(bb, node) or 1
                     ))
 
                     return result
@@ -315,13 +379,13 @@ class RhizomorphAdapter:
                 else:
                     if isinstance(result, Status):
                         status_name = result.name
-                    still_running = _is_running(result)
+                    still_running = ticks is not None and _is_running(result)
                     return result
                 finally:
                     if not still_running:
                         asyncio.create_task(_log_node_lifecycle_event(
                             func, bb, tb, event_type, log_status, "stop",
-                            status_name, _RUNS.close(run_key)
+                            status_name, _RUNS.close(bb, node) or 1
                         ))
 
             # Return appropriate wrapper

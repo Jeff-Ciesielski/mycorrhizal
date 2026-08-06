@@ -1355,3 +1355,53 @@ async def test_rhizomorph_log_node_runs_are_per_blackboard(spore_config, mock_tr
     assert sorted(missions) == ["mission-first", "mission-second"]
     assert all(e["type"] == "shared_node" for e in events)
     assert all(get_attr_value(e["attributes"], "status") == "SUCCESS" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_rhizomorph_log_node_run_state_dies_with_the_blackboard(spore_config, mock_transport):
+    """Run state must not outlive the blackboard it belongs to.
+
+    id() is unique only among simultaneously existing objects. A run left open by
+    a blackboard that has since been freed, whether abandoned mid-RUNNING or ended
+    by a raise, would otherwise sit on the address a later blackboard is allocated
+    at, and that later entity would be read as a continuation of the dead one.
+    """
+    import gc
+
+    from mycorrhizal.spores.dsl.rhizomorph import _RUNS
+
+    adapter = RhizomorphAdapter()
+    tb = WallClock()
+
+    def blackboard() -> MissionBlackboard:
+        return MissionBlackboard(
+            mission_id="mission-transient",
+            current_item=WorkItem(id="item-transient", status="pending"),
+            robot=Robot(id="robot-transient", name="Robo-Transient"),
+            value=1,
+        )
+
+    @adapter.log_node(event_type="never_settles")
+    async def never_settles(bb: MissionBlackboard, tb: WallClock) -> Status:
+        return Status.RUNNING
+
+    @adapter.log_node(event_type="raises")
+    async def raises(bb: MissionBlackboard, tb: WallClock) -> Status:
+        raise RuntimeError("node failed")
+
+    before = _RUNS.open_carriers()
+
+    for _ in range(50):
+        await never_settles(blackboard(), tb)   # opens a run, then the bb dies
+    for _ in range(10):
+        with pytest.raises(RuntimeError):
+            await raises(blackboard(), tb)
+    gc.collect()
+
+    assert _RUNS.open_carriers() == before
+
+    # A blackboard that is still alive keeps its run across ticks.
+    live = blackboard()
+    for _ in range(3):
+        await never_settles(live, tb)
+    assert _RUNS.open_carriers() == before + 1
