@@ -548,6 +548,13 @@ class MatrixRuntime:
     3. If nothing fired, wait until the marking changes or a transition
        delay ends, then repeat
 
+    Step 1 looks only at the transitions on the agenda, the set of
+    transitions that could be enabled now. A new token in a place puts the
+    readers of that place on the agenda. A transition that fires, or that
+    waits for its delay, stays on it. Every other transition leaves it,
+    because no binding exists for it until a token arrives in one of its
+    input places.
+
     A guard is a function of its candidate bindings. It may read the
     blackboard and the timebase, but the runtime evaluates it again only
     after the marking changes or a delay ends.
@@ -573,6 +580,16 @@ class MatrixRuntime:
         self._stop_event_sync = False  # Synchronous stop flag
         # Set each time a token is added. The run loop waits on it when idle.
         self._marking_changed = asyncio.Event()
+
+        # place_idx -> the transitions that take tokens from that place
+        self._readers: Dict[int, Set[int]] = {}
+        for trans_idx, inputs in self.incidence_matrix.input_requirements.items():
+            for place_idx in inputs:
+                self._readers.setdefault(place_idx, set()).add(trans_idx)
+
+        # The transitions the next cycle examines. Nothing has fired yet, so
+        # any transition could be enabled.
+        self._agenda: Set[int] = set(range(self.incidence_matrix.num_transitions))
 
         # Transition specs for execution
         self._transition_specs: Dict[int, TransitionSpec] = {}
@@ -795,6 +812,7 @@ class MatrixRuntime:
         """Add a token to a place. Each call adds a new token, whatever its value."""
         token_id = self.token_registry.register(token)
         self.marking.add_tokens(place_idx, [token_id])
+        self._agenda.update(self._readers.get(place_idx, ()))
         self._marking_changed.set()
 
     def add_token_by_fqn(self, place_fqn: Tuple[str, ...], token: Any):
@@ -839,18 +857,25 @@ class MatrixRuntime:
         return max(0.0, enabled_time + trans_spec.delay - now)
 
     def _ready_transitions(self, plan: FiringPlan) -> Iterator[int]:
-        """Yield the transitions that have enough tokens and no pending delay.
+        """Take the agenda and yield its transitions that have enough tokens and no pending delay.
 
-        Record each pending delay in the plan.
+        A transition that waits for its delay goes back on the agenda, and
+        the plan records the delay. The caller puts back each transition
+        that fires. A transition that does not fire has no binding among
+        the tokens that no other transition claimed. Those tokens stay in
+        their places, so it has no binding next cycle either, until a new
+        token puts it back on the agenda.
         """
+        agenda, self._agenda = self._agenda, set()
         count_dict = self.marking.get_count_dict()
-        for trans_idx in range(self.incidence_matrix.num_transitions):
+        for trans_idx in sorted(agenda):
             if not self.incidence_matrix.is_enabled(trans_idx, count_dict):
                 self._enabled_times.pop(trans_idx, None)
                 continue
             remaining = self._delay_remaining(trans_idx)
             if remaining > 0:
                 plan.note_delay(remaining)
+                self._agenda.add(trans_idx)
                 continue
             yield trans_idx
 
@@ -902,6 +927,7 @@ class MatrixRuntime:
         """Fire each planned transition with the tokens of its binding."""
         for trans_idx, binding in plan.bindings:
             consumed = self._take_binding(trans_idx, binding)
+            self._agenda.add(trans_idx)
             await self._execute_transition(trans_idx, consumed)
             self._enabled_times.pop(trans_idx, None)
 
@@ -1178,6 +1204,7 @@ class MatrixRuntime:
         """Fire each planned transition with the tokens of its binding (synchronous)."""
         for trans_idx, binding in plan.bindings:
             consumed = self._take_binding(trans_idx, binding)
+            self._agenda.add(trans_idx)
             self._execute_transition_sync(trans_idx, consumed)
             self._enabled_times.pop(trans_idx, None)
 

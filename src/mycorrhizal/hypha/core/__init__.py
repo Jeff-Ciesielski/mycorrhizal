@@ -43,8 +43,8 @@ Transitions:
 Guards:
     A guard receives the candidate bindings of a transition and yields the
     ones it accepts. The transition consumes the tokens of the first accepted
-    binding. The runtime evaluates a guard again only when a token is added
-    or a transition delay ends.
+    binding. The runtime evaluates a guard again only when a token arrives
+    in one of the input places of its transition, or a transition delay ends.
 """
 
 from .specs import (

@@ -416,3 +416,40 @@ class TestIdleRunner:
         await asyncio.sleep(0.05)
         assert tokens(runner, "DelayNet", "out") == ["t"]
         await runner.stop()
+
+    async def test_rejecting_guard_is_not_called_when_other_places_change(self):
+        calls = 0
+
+        @pn.net
+        def BusyNet(b):
+            never = b.place("never")
+            sink = b.place("sink")
+            a = b.place("a")
+            z = b.place("z")
+
+            def reject_all(combos, bb, tb):
+                nonlocal calls
+                calls += 1
+
+            @b.transition(guard=b.guard(reject_all))
+            async def never_fires(consumed, bb, tb):
+                yield {sink: consumed[0]}
+
+            @b.transition()
+            async def move(consumed, bb, tb):
+                yield {z: consumed[0]}
+
+            b.arc(never, never_fires).arc(sink)
+            b.arc(a, move).arc(z)
+
+        runner = Runner(BusyNet, None)
+        await runner.start(None)
+        place(runner, "BusyNet", "never").add_token("x")
+        await asyncio.sleep(0.05)
+        for i in range(50):
+            place(runner, "BusyNet", "a").add_token(i)
+        await asyncio.sleep(0.2)
+
+        assert len(tokens(runner, "BusyNet", "z")) == 50
+        assert calls == 1
+        await runner.stop()

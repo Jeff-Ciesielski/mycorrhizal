@@ -153,10 +153,11 @@ Rules for guards:
   is near the front.
 - Places are multisets. The candidates follow the order the tokens arrived,
   but that order is not part of the contract.
-- The runtime evaluates a guard again only after a token is added or a
-  transition delay ends. A guard may read the blackboard and the timebase, but
-  a change to them alone does not wake the transition. To wait on time, give
-  the transition a `delay`.
+- The runtime evaluates a guard again only after a token arrives in one of
+  the input places of its transition, or after a transition delay ends. A
+  guard may read the blackboard and the timebase, but a change to them alone
+  does not wake the transition. To wait on time, give the transition a
+  `delay`.
 - Two transitions that fire in the same cycle never take the same token.
 - A guard may be an async generator.
 
